@@ -1,0 +1,84 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: zapcall
+      POSTGRES_USER: zapcall
+      POSTGRES_PASSWORD: zapcall
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U zapcall -d zapcall"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  waxum:
+    image: ${WAXUM_IMAGE:-fdciabdul/waxum:latest}
+    restart: unless-stopped
+    ports:
+      - "3451:3451"
+    environment:
+      PORT: 3451
+      RUST_LOG: info
+      WHATSAPP_STORAGE_PATH: /app/whatsapp_sessions
+      SUPERADMIN_TOKEN: ${WAXUM_API_KEY:-zapcall-local-waxum-token}
+      JWT_SECRET: ${WAXUM_JWT_SECRET:-zapcall-local-jwt-secret-change-me}
+    volumes:
+      - waxum_data:/app/whatsapp_sessions
+
+  api:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    environment:
+      PORT: 3000
+      DATABASE_URL: postgres://zapcall:zapcall@postgres:5432/zapcall
+      REDIS_URL: redis://redis:6379
+      WAXUM_URL: http://waxum:3451
+      WAXUM_API_KEY: ${WAXUM_API_KEY:-zapcall-local-waxum-token}
+      WEB_ORIGIN: http://localhost:5173
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      waxum:
+        condition: service_started
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://localhost:3000/health').then((r) => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    ports:
+      - "3000:3000"
+
+  web:
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+    depends_on:
+      - api
+    restart: unless-stopped
+    ports:
+      - "5173:80"
+
+volumes:
+  postgres_data:
+  redis_data:
+  waxum_data:
