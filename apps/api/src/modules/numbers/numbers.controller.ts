@@ -66,11 +66,24 @@ export class NumbersController {
 
   private async loadQr(id: string) {
     let number = await this.find(id);
-    try { return await this.waitForQr(number.waxum_session_id); }
+    try { return await this.loadQrFromSession(number.waxum_session_id); }
     catch (error) {
       if ((error as Error & { statusCode?: number }).statusCode !== 404) throw error;
       number = await this.replaceMissingSession(number);
-      return this.waitForQr(number.waxum_session_id);
+      return this.loadQrFromSession(number.waxum_session_id);
+    }
+  }
+
+  private async loadQrFromSession(sessionId: string) {
+    try {
+      return await this.waitForQr(sessionId);
+    } catch (error) {
+      const typedError = error as Error & { statusCode?: number };
+      // Newly-created sessions need /connect before Waxum can expose a QR.
+      // Opening the QR in the panel should perform that transition for the operator.
+      if (typedError.statusCode !== 503) throw error;
+      await this.waxum.reconnect(sessionId);
+      return this.waitForQr(sessionId);
     }
   }
 
