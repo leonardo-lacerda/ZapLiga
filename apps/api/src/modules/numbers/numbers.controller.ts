@@ -1,7 +1,8 @@
-import { BadRequestException, Body, Controller, Get, Param, Patch, Post, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Body, Controller, Delete, Get, Param, Patch, Post, NotFoundException } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
 import { DatabaseService } from '../../database/database.service';
 import { WaxumClient } from '../../infrastructure/waxum/waxum.client';
+import { normalizeWaxumStatus } from '../../infrastructure/waxum/waxum-status';
 
 const digits = (value: unknown) => String(value ?? '').replace(/\D/g, '');
 
@@ -23,7 +24,24 @@ export class NumbersController {
   }
 
   @Get('/api/numbers')
-  list() { return this.db.query('SELECT * FROM whatsapp_numbers ORDER BY created_at DESC').then((result) => result.rows); }
+  list() { return this.db.query("SELECT * FROM whatsapp_numbers WHERE status <> 'removed' ORDER BY created_at DESC").then((result) => result.rows); }
+
+  @Delete('/api/numbers/:id')
+  async remove(@Param('id') id: string) {
+    const number = await this.find(id);
+    const active = await this.db.query("SELECT 1 FROM calls WHERE number_id = $1 AND status IN ('reserved', 'dialing', 'media_active') LIMIT 1", [id]);
+    if (active.rows[0]) throw new BadRequestException('Nao e possivel remover um numero durante uma chamada');
+
+    try {
+      await this.waxum.deleteSession(number.waxum_session_id);
+    } catch (error) {
+      const statusCode = (error as Error & { statusCode?: number }).statusCode;
+      if (statusCode !== 404) throw new BadRequestException(`Nao foi possivel remover a sessao Waxum: ${String(error)}`);
+    }
+
+    await this.db.query("UPDATE whatsapp_numbers SET status = 'removed' WHERE id = $1", [id]);
+    return { ok: true, id, archived: true };
+  }
 
   @Get('/api/numbers/:id/qr')
   async qr(@Param('id') id: string) {
@@ -47,7 +65,7 @@ export class NumbersController {
 
   @Patch('/api/numbers/:id/settings')
   async settings(@Param('id') id: string, @Body() body: any) {
-    const result = await this.db.query(`UPDATE whatsapp_numbers SET max_concurrent_calls = COALESCE($1,max_concurrent_calls), cooldown_seconds = COALESCE($2,cooldown_seconds), label = COALESCE($3,label) WHERE id = $4 RETURNING *`, [body.maxConcurrentCalls == null ? null : Number(body.maxConcurrentCalls), body.cooldownSeconds == null ? null : Number(body.cooldownSeconds), body.label ? String(body.label) : null, id]);
+    const result = await this.db.query(`UPDATE whatsapp_numbers SET max_concurrent_calls = COALESCE($1,max_concurrent_calls), cooldown_seconds = COALESCE($2,cooldown_seconds), label = COALESCE($3,label) WHERE id = $4 AND status <> 'removed' RETURNING *`, [body.maxConcurrentCalls == null ? null : Number(body.maxConcurrentCalls), body.cooldownSeconds == null ? null : Number(body.cooldownSeconds), body.label ? String(body.label) : null, id]);
     if (!result.rows[0]) throw new NotFoundException('Número não encontrado');
     return result.rows[0];
   }
@@ -66,12 +84,21 @@ export class NumbersController {
 
   private async loadQr(id: string) {
     let number = await this.find(id);
-    try { return await this.loadQrFromSession(number.waxum_session_id); }
+    let payload: any;
+    try { payload = await this.loadQrFromSession(number.waxum_session_id); }
     catch (error) {
       if ((error as Error & { statusCode?: number }).statusCode !== 404) throw error;
       number = await this.replaceMissingSession(number);
-      return this.loadQrFromSession(number.waxum_session_id);
+      payload = await this.loadQrFromSession(number.waxum_session_id);
     }
+    const status = await this.refreshNumberStatus(number);
+    return status.connected ? { ...payload, status: 'connected', phone_number: status.phone } : payload;
+  }
+
+  private async refreshNumberStatus(number: any) {
+    const status = normalizeWaxumStatus(await this.waxum.getStatus(number.waxum_session_id));
+    await this.db.query('UPDATE whatsapp_numbers SET status = $1, phone = COALESCE($2, phone) WHERE id = $3', [status.status, status.phone, number.id]);
+    return status;
   }
 
   private async loadQrFromSession(sessionId: string) {

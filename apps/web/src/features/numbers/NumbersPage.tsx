@@ -5,7 +5,7 @@ import { labelStatus } from '../../shared/format';
 
 const connectedStatuses = ['connected', 'online', 'ready', 'authenticated', 'logged_in'];
 
-export function NumbersPage({ numbers, numberForm, setNumberForm, createNumber, showQr, reconnectNumber, qrLoading, qr, closeQr }: AnyRow) {
+export function NumbersPage({ numbers, numberForm, setNumberForm, createNumber, showQr, reconnectNumber, removeNumber, qrLoading, qr, closeQr }: AnyRow) {
   return <>
     <div className="page-heading">
       <div><span className="eyebrow">WHATSAPP</span><h1>Numeros</h1><p>Gerencie as sessoes conectadas a sua operacao.</p></div>
@@ -24,7 +24,7 @@ export function NumbersPage({ numbers, numberForm, setNumberForm, createNumber, 
         <div className="resource-card-header"><div className="resource-icon blue"><Icon name="phone" size={18} /></div><Badge tone={connectedStatuses.includes(String(number.status).toLowerCase()) ? 'success' : 'neutral'}>{labelStatus(number.status)}</Badge></div>
         <h3>{number.label}</h3><p>{number.phone || 'Telefone nao informado'}</p>
         <div className="resource-meta"><span>Limite de chamadas</span><strong>{number.max_concurrent_calls}</strong></div>
-        <div className="card-actions">{!connectedStatuses.includes(String(number.status).toLowerCase()) && <Button variant="secondary" icon="qr" disabled={qrLoading} onClick={() => void showQr(number.id)}>Abrir QR</Button>}<Button variant="ghost" icon="refresh" disabled={qrLoading} onClick={() => void reconnectNumber(number.id)}>Reconectar</Button></div>
+        <div className="card-actions">{!connectedStatuses.includes(String(number.status).toLowerCase()) && <Button variant="secondary" icon="qr" disabled={qrLoading} onClick={() => void showQr(number.id)}>Abrir QR</Button>}<Button variant="ghost" icon="refresh" disabled={qrLoading} onClick={() => void reconnectNumber(number.id)}>Reconectar</Button><Button variant="danger" icon="close" disabled={qrLoading} onClick={() => void removeNumber(number.id, number.label)}>Remover</Button></div>
       </div>)}
       {!numbers.length && <div className="full-span"><EmptyState title="Nenhum numero cadastrado" description="Adicione uma sessao para conectar seu WhatsApp." /></div>}
     </div>

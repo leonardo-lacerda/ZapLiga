@@ -16,6 +16,32 @@ export const statusNames: Record<string, string> = {
 
 export const labelStatus = (value: unknown) => statusNames[String(value)] ?? String(value ?? '—');
 
+const callReasonNames: Record<string, string> = {
+  ring_timeout: 'Tempo de toque esgotado',
+  waxum_closed: 'Waxum encerrou a conexão antes do atendimento',
+  remote_hangup: 'Cliente encerrou a chamada',
+  sdr_hangup: 'SDR encerrou a chamada',
+  browser_disconnected: 'Navegador do SDR desconectou',
+  sdr_disconnected: 'SDR desconectou',
+  browser_error: 'Erro no navegador do SDR',
+  microphone_denied: 'Permissão do microfone negada',
+  api_restarted: 'API reiniciou durante a chamada',
+  waxum_rate_limited: 'Waxum temporariamente ocupado; tentativa devolvida à fila',
+  waxum_closed_before_answer: 'Waxum encerrou antes do atendimento',
+};
+
+export const formatCallReason = (value: unknown) => {
+  const reason = String(value ?? '').trim();
+  if (!reason) return '—';
+  if (reason.startsWith('waxum_error:')) return `Erro no Waxum: ${reason.slice('waxum_error:'.length)}`;
+  if (reason.startsWith('waxum_http_error:')) return `Waxum recusou a conexão (HTTP ${reason.slice('waxum_http_error:'.length)})`;
+  if (reason.startsWith('waxum_closed:')) {
+    const [, code, detail] = reason.split(':', 3);
+    return `Waxum encerrou antes do atendimento${code ? ` (código ${code}${detail ? `: ${detail}` : ''})` : ''}`;
+  }
+  return callReasonNames[reason] ?? reason.replaceAll('_', ' ');
+};
+
 export const formatSeconds = (value: unknown) => {
   const seconds = Math.max(0, Number(value) || 0);
   if (seconds <= 0) return 'Livre';
@@ -31,4 +57,3 @@ export const formatNextAttempt = (value: unknown) => {
   if (date.getTime() <= Date.now()) return 'agora';
   return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 };
-

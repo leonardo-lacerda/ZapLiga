@@ -4,6 +4,7 @@ import WebSocket from 'ws';
 import { DatabaseService } from '../../database/database.service';
 import { RedisService } from '../../infrastructure/redis/redis.service';
 import { WaxumClient } from '../../infrastructure/waxum/waxum.client';
+import { normalizeWaxumStatus } from '../../infrastructure/waxum/waxum-status';
 import { SdrGateway } from '../sdrs/sdr.gateway';
 
 type CallResource = {
@@ -14,6 +15,9 @@ type CallResource = {
   media?: WebSocket;
   browser?: WebSocket;
   mediaActive: boolean;
+  answerSignalReceived?: boolean;
+  answerAbort?: AbortController;
+  answerEventLogged?: boolean;
   browserAudioLogged?: boolean;
   finishing?: boolean;
 };
@@ -25,6 +29,7 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
   private ticking = false;
   private lastStatusSyncAt = 0;
   private readonly active = new Map<string, CallResource>();
+  private readonly finishingCalls = new Set<string>();
   private readonly logs: any[] = [];
 
   constructor(
@@ -41,7 +46,10 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
 
   onModuleDestroy() {
     if (this.timer) clearInterval(this.timer);
-    for (const resource of this.active.values()) resource.media?.close();
+    for (const resource of this.active.values()) {
+      resource.answerAbort?.abort();
+      resource.media?.close();
+    }
   }
 
   async getSettings() {
@@ -93,7 +101,15 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
   async manualCall(leadId: string) {
     const settings = await this.getSettings();
     const [sdrs, numbers, leads] = await Promise.all([
-      this.db.query(`SELECT * FROM sdrs WHERE available = true ORDER BY last_assigned_at NULLS FIRST, last_assigned_at ASC`),
+      this.db.query(`
+        SELECT s.* FROM sdrs s
+        WHERE s.available = true
+          AND NOT EXISTS (
+            SELECT 1 FROM calls c
+            WHERE c.sdr_id = s.id AND c.status IN ('reserved', 'dialing', 'media_active')
+          )
+        ORDER BY s.last_assigned_at NULLS FIRST, s.last_assigned_at ASC
+      `),
       // Manual calls intentionally bypass the number cooldown for the MVP.
       // Redis still enforces the global and per-number concurrent limits.
       this.db.query(`SELECT * FROM whatsapp_numbers WHERE status IN ('connected', 'online', 'ready', 'authenticated') ORDER BY last_call_ended_at NULLS FIRST, last_call_ended_at ASC`),
@@ -102,9 +118,9 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
     const sdr = sdrs.rows.find((row: any) => this.gateway.isConnected(row.id));
     const number = numbers.rows[0];
     const lead = leads.rows[0];
-    if (!lead) throw new Error('Este lead nÃ£o estÃ¡ elegÃ­vel para uma chamada manual');
-    if (!sdr) throw new Error('Nenhum SDR conectado e disponÃ­vel');
-    if (!number) throw new Error('Nenhum nÃºmero WhatsApp conectado e fora do cooldown');
+    if (!lead) throw new Error('Este lead não está elegível para uma chamada manual');
+    if (!sdr) throw new Error('Nenhum SDR conectado e disponível');
+    if (!number) throw new Error('Nenhum número WhatsApp conectado e fora do cooldown');
 
     const token = randomUUID();
     const reserved = await this.redis.reserve({
@@ -113,7 +129,7 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
       leadId: lead.id, sdrId: sdr.id,
       ttlMs: (Number(settings.ring_timeout_seconds) + 60) * 1000,
     });
-    if (!reserved) throw new Error('Os limites de chamadas estÃ£o ocupados; tente novamente em instantes');
+    if (!reserved) throw new Error('Os limites de chamadas estão ocupados; tente novamente em instantes');
     return this.startReservedCall(sdr, number, lead, settings, token, 'manual');
   }
 
@@ -128,7 +144,14 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
       FROM calls WHERE created_at > now() - interval '24 hours'
     `);
     const [available, leads, numberDetails, queueSummary, queuePreview, activeCalls] = await Promise.all([
-      this.db.query('SELECT count(*)::int AS count FROM sdrs WHERE available = true'),
+      this.db.query(`
+        SELECT count(*)::int AS count FROM sdrs s
+        WHERE s.available = true
+          AND NOT EXISTS (
+            SELECT 1 FROM calls c
+            WHERE c.sdr_id = s.id AND c.status IN ('reserved', 'dialing', 'media_active')
+          )
+      `),
       this.db.query(`SELECT status, count(*)::int AS count FROM leads GROUP BY status`),
       this.db.query(`
         SELECT n.id, n.label, n.status, n.max_concurrent_calls, n.cooldown_seconds,
@@ -139,6 +162,7 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
           END AS cooldown_remaining_seconds
         FROM whatsapp_numbers n
         LEFT JOIN calls c ON c.number_id = n.id AND c.status IN ('reserved', 'dialing', 'media_active')
+        WHERE n.status <> 'removed'
         GROUP BY n.id
         ORDER BY n.created_at DESC
       `),
@@ -176,10 +200,10 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
     let nextAction = 'Pronto para discar';
     if (!settings.running) nextAction = 'Discador pausado';
     else if (!Number(queue.total)) nextAction = 'Fila vazia';
-    else if (!Number(available.rows[0].count)) nextAction = 'Aguardando SDR disponÃ­vel';
-    else if (!connectedNumbers.length) nextAction = 'Aguardando nÃºmero WhatsApp conectado';
-    else if (!readyNumbers.length) nextAction = 'Aguardando cooldown dos nÃºmeros';
-    else if (!Number(queue.ready)) nextAction = 'Aguardando horÃ¡rio da prÃ³xima tentativa';
+    else if (!Number(available.rows[0].count)) nextAction = 'Aguardando SDR disponível';
+    else if (!connectedNumbers.length) nextAction = 'Aguardando número WhatsApp conectado';
+    else if (!readyNumbers.length) nextAction = 'Aguardando cooldown dos números';
+    else if (!Number(queue.ready)) nextAction = 'Aguardando horário da próxima tentativa';
     return {
       running: settings.running,
       settings,
@@ -202,15 +226,22 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
     this.ticking = true;
     try {
       await this.expireReservations();
-      const settings = await this.getSettings();
-      if (!settings?.running) return;
-
-      if (Date.now() - this.lastStatusSyncAt >= 60000) {
+      if (Date.now() - this.lastStatusSyncAt >= 15000) {
         this.lastStatusSyncAt = Date.now();
         await this.syncNumberStatuses();
       }
+      const settings = await this.getSettings();
+      if (!settings?.running) return;
       const [sdrs, numbers, leads] = await Promise.all([
-        this.db.query(`SELECT * FROM sdrs WHERE available = true ORDER BY last_assigned_at NULLS FIRST, last_assigned_at ASC`),
+        this.db.query(`
+          SELECT s.* FROM sdrs s
+          WHERE s.available = true
+            AND NOT EXISTS (
+              SELECT 1 FROM calls c
+              WHERE c.sdr_id = s.id AND c.status IN ('reserved', 'dialing', 'media_active')
+            )
+          ORDER BY s.last_assigned_at NULLS FIRST, s.last_assigned_at ASC
+        `),
         this.db.query(`SELECT * FROM whatsapp_numbers WHERE status IN ('connected', 'online', 'ready', 'authenticated') AND (last_call_ended_at IS NULL OR last_call_ended_at <= now() - (cooldown_seconds * interval '1 second')) ORDER BY last_call_ended_at NULLS FIRST, last_call_ended_at ASC`),
         this.db.query(`SELECT * FROM leads WHERE do_not_call = false AND status IN ('queued', 'retry_wait') AND attempts < $1 AND next_eligible_at <= now() ORDER BY next_eligible_at ASC, created_at ASC LIMIT 25`, [settings.max_attempts_per_lead]),
       ]);
@@ -243,13 +274,11 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
   }
 
   private async syncNumberStatuses() {
-    const result = await this.db.query('SELECT id, waxum_session_id FROM whatsapp_numbers');
+    const result = await this.db.query("SELECT id, waxum_session_id FROM whatsapp_numbers WHERE status <> 'removed'");
     for (const number of result.rows) {
       try {
-        const status = await this.waxum.getStatus(number.waxum_session_id);
-        const value = String(status?.status ?? status?.session?.status ?? '').toLowerCase();
-        const connected = ['connected', 'online', 'ready', 'authenticated', 'logged_in'].includes(value);
-        await this.db.query('UPDATE whatsapp_numbers SET status = $1 WHERE id = $2', [connected ? 'connected' : value || 'disconnected', number.id]);
+        const status = normalizeWaxumStatus(await this.waxum.getStatus(number.waxum_session_id));
+        await this.db.query('UPDATE whatsapp_numbers SET status = $1, phone = COALESCE($2, phone) WHERE id = $3', [status.status, status.phone, number.id]);
       } catch (error) {
         if ((error as Error & { statusCode?: number }).statusCode === 404) {
           await this.db.query(`UPDATE whatsapp_numbers SET status = 'disconnected' WHERE id = $1`, [number.id]);
@@ -270,12 +299,6 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
         await client.query(`UPDATE sdrs SET available = false, last_assigned_at = now() WHERE id = $1`, [sdr.id]);
       });
       this.active.set(callId, { token, numberId: number.id, leadId: lead.id, sdrId: sdr.id, mediaActive: false });
-      this.gateway.sendToSdr(sdr.id, {
-        type: 'call_started', callId,
-        lead: { id: lead.id, name: lead.name, phone: lead.phone },
-        number: { id: number.id, label: number.label },
-        expiresAt: expires.toISOString(),
-      });
       this.log(`Discando ${source} para ${lead.name} via ${number.label}`, 'info', callId);
       const browser = this.gateway.getSocket(sdr.id);
       if (browser) void this.attachMedia(callId, sdr.id, browser);
@@ -312,20 +335,31 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
   async attachMedia(callId: string, sdrId: string, browser: WebSocket) {
     const resource = this.active.get(callId);
     if (!resource || resource.sdrId !== sdrId) return browser.close(1008, 'call not assigned');
-    const call = await this.db.query(`SELECT c.*, n.waxum_session_id, l.phone FROM calls c JOIN whatsapp_numbers n ON n.id = c.number_id JOIN leads l ON l.id = c.lead_id WHERE c.id = $1`, [callId]);
+    const call = await this.db.query(`SELECT c.*, n.waxum_session_id, n.label, l.name, l.phone FROM calls c JOIN whatsapp_numbers n ON n.id = c.number_id JOIN leads l ON l.id = c.lead_id WHERE c.id = $1`, [callId]);
     if (!call.rows[0]) return browser.close(1008, 'call not found');
     resource.browser = browser;
+    resource.answerAbort = new AbortController();
     let timeout: NodeJS.Timeout | undefined;
     try {
+      const settings = await this.getSettings();
+      void this.waxum.waitForOutgoingAnswer(call.rows[0].waxum_session_id, callId, resource.answerAbort.signal)
+        .then((answered) => {
+          if (!answered || resource.finishing || resource.mediaActive) return;
+          resource.answerSignalReceived = true;
+          this.log('Atendimento sinalizado pelo WhatsApp; aguardando mídia pós-atendimento', 'info', callId);
+        })
+        .catch((error) => {
+          if ((error as Error & { name?: string }).name === 'AbortError' || resource.finishing) return;
+          this.log(`Não foi possível confirmar o atendimento: ${String(error)}`, 'warning', callId);
+        });
       const media = this.waxum.openMedia(call.rows[0].waxum_session_id, call.rows[0].phone);
       resource.media = media;
-      const settings = await this.getSettings();
       timeout = setTimeout(() => {
         if (!resource.mediaActive) void this.finishCall(callId, 'no_answer', 'ring_timeout').catch((error) => this.logger.error(`Could not finish timed out call ${callId}: ${String(error)}`));
       }, Number(settings.ring_timeout_seconds) * 1000);
 
       media.on('open', () => {
-        if (browser.readyState === WebSocket.OPEN) {
+        if (resource.mediaActive && browser.readyState === WebSocket.OPEN) {
           try { browser.send(JSON.stringify({ type: 'media_open' })); } catch { /* browser disconnected */ }
         }
       });
@@ -334,25 +368,61 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
         // socket. Keep that internal event away from the SDR control socket;
         // the API already sent the normalized call_started payload above.
         if (!isBinary) return;
-        if (!resource.mediaActive && isBinary && Buffer.byteLength(data as any) > 0) {
-          resource.mediaActive = true;
-          void this.db.query(`UPDATE calls SET status = 'media_active', connected_at = now() WHERE id = $1`, [callId]);
-          this.gateway.sendToSdr(sdrId, { type: 'media_active', callId });
-          this.log('Ãudio bidirecional ativo', 'info', callId);
+        // Um frame de mídia pode chegar enquanto o WhatsApp ainda está tocando.
+        // Ele não confirma atendimento e não deve chegar ao SDR.
+        if (!resource.answerSignalReceived) {
+          if (!resource.answerEventLogged) {
+            resource.answerEventLogged = true;
+            this.log('Áudio recebido durante o toque; aguardando confirmação de atendimento', 'info', callId);
+          }
+          return;
         }
+        resource.mediaActive = true;
+        void this.db.query(`UPDATE calls SET status = 'media_active', started_at = COALESCE(started_at, now()), connected_at = now() WHERE id = $1`, [callId]);
+        this.gateway.sendToSdr(sdrId, {
+          type: 'call_started', callId,
+          lead: { id: call.rows[0].lead_id, name: call.rows[0].name, phone: call.rows[0].phone },
+          number: { id: call.rows[0].number_id, label: call.rows[0].label },
+          expiresAt: call.rows[0].offer_expires_at,
+        });
+        this.gateway.sendToSdr(sdrId, { type: 'media_active', callId });
+        if (resource.media?.readyState === WebSocket.OPEN) this.gateway.sendToSdr(sdrId, { type: 'media_open', callId });
+        this.log('Cliente aceitou a chamada; áudio liberado para o SDR', 'info', callId);
         if (browser.readyState === WebSocket.OPEN) {
           try { browser.send(data, { binary: true }); } catch { /* browser disconnected */ }
         }
       });
       media.on('error', (error) => {
+        if (/unexpected server response:\s*429/i.test(error.message)) {
+          this.log('Waxum temporariamente ocupado (limite 429); tentativa devolvida ao lead', 'warning', callId);
+          void this.finishCall(callId, 'cancelled', 'waxum_rate_limited')
+            .catch((finishError) => this.logger.error(`Could not finish Waxum rate limit for ${callId}: ${String(finishError)}`));
+          return;
+        }
         this.log(`Erro no Waxum: ${error.message}`, 'error', callId);
         void this.finishCall(callId, 'failed', `waxum_error:${error.message}`).catch((finishError) => this.logger.error(`Could not finish Waxum error for ${callId}: ${String(finishError)}`));
       });
-      media.on('close', () => {
-        void this.finishCall(callId, resource.mediaActive ? 'completed' : 'no_answer', resource.mediaActive ? 'remote_hangup' : 'waxum_closed')
+      media.on('unexpected-response', (_request, response) => {
+        const statusCode = response.statusCode;
+        response.resume();
+        if (statusCode === 429) {
+          this.log('Waxum temporariamente ocupado (limite 429); tentativa devolvida ao lead', 'warning', callId);
+          void this.finishCall(callId, 'cancelled', 'waxum_rate_limited')
+            .catch((finishError) => this.logger.error(`Could not finish Waxum rate limit for ${callId}: ${String(finishError)}`));
+          return;
+        }
+        this.log(`Waxum recusou a conexão de mídia (HTTP ${statusCode})`, 'error', callId);
+        void this.finishCall(callId, 'failed', `waxum_http_error:${statusCode}`)
+          .catch((finishError) => this.logger.error(`Could not finish Waxum HTTP error for ${callId}: ${String(finishError)}`));
+      });
+      media.on('close', (code, reason) => {
+        const detail = reason.toString().trim();
+        const closeReason = detail ? `waxum_closed:${code}:${detail}` : `waxum_closed:${code}`;
+        void this.finishCall(callId, resource.mediaActive ? 'completed' : 'no_answer', resource.mediaActive ? 'remote_hangup' : closeReason)
           .catch((error) => this.logger.error(`Could not finish closed call ${callId}: ${String(error)}`));
       });
       browser.on('message', (data, isBinary) => {
+        if (isBinary && !resource.mediaActive) return;
         if (isBinary && !resource.browserAudioLogged && Buffer.byteLength(data as any) > 0) {
           resource.browserAudioLogged = true;
           this.log(`Audio do microfone recebido (${Buffer.byteLength(data as any)} bytes)`, 'info', callId);
@@ -388,34 +458,42 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
   }
 
   private async finishCall(callId: string, status: string, reason?: string, forceNoRetry = false) {
+    if (this.finishingCalls.has(callId)) return;
+    this.finishingCalls.add(callId);
     const resource = this.active.get(callId);
-    if (resource?.finishing) return;
-    if (resource) {
-      resource.finishing = true;
-      this.active.delete(callId);
-      if (resource.media && resource.media.readyState === WebSocket.OPEN) resource.media.close();
-    }
-    const call = await this.db.query(`SELECT c.*, s.id AS sdr_id, n.id AS number_id, l.attempts, ds.max_attempts_per_lead, ds.retry_delay_minutes FROM calls c JOIN sdrs s ON s.id = c.sdr_id JOIN whatsapp_numbers n ON n.id = c.number_id JOIN leads l ON l.id = c.lead_id CROSS JOIN dialer_settings ds WHERE c.id = $1`, [callId]);
-    if (!call.rows[0]) return;
-    const row = call.rows[0];
-    if (['completed', 'no_answer', 'failed', 'cancelled'].includes(row.status)) return;
-    const retryable = ['no_answer', 'failed'].includes(status) && !forceNoRetry && Number(row.attempts) < Number(row.max_attempts_per_lead);
-    const finalCallStatus = retryable ? 'retry_wait' : status;
-    const leadStatus = retryable ? 'retry_wait' : status === 'completed' ? 'completed' : status === 'cancelled' ? 'queued' : status;
-    const outcome = reason ?? status;
-    this.log(`Chamada encerrada: ${finalCallStatus} (${outcome})`, finalCallStatus === 'failed' ? 'error' : 'info', callId);
-    await this.db.transaction(async (client) => {
-      await client.query(`UPDATE calls SET status = $1, ended_at = now(), duration_seconds = CASE WHEN started_at IS NULL THEN 0 ELSE EXTRACT(EPOCH FROM (now() - started_at))::int END, outcome = $2, failure_reason = CASE WHEN $1 IN ('failed','no_answer') THEN $2 ELSE failure_reason END WHERE id = $3 AND status NOT IN ('completed','no_answer','failed','cancelled')`, [finalCallStatus, outcome, callId]);
-      if (retryable) {
-        await client.query(`UPDATE leads SET status = $2, next_eligible_at = now() + ($1::int * interval '1 minute') WHERE id = $3`, [row.retry_delay_minutes, leadStatus, row.lead_id]);
-      } else {
-        await client.query(`UPDATE leads SET status = $1, next_eligible_at = now() WHERE id = $2`, [leadStatus, row.lead_id]);
+    try {
+      if (resource) {
+        resource.finishing = true;
+        resource.answerAbort?.abort();
+        if (resource.media && resource.media.readyState === WebSocket.OPEN) resource.media.close();
       }
-      await client.query(`UPDATE sdrs SET available = true WHERE id = $1`, [row.sdr_id]);
-      await client.query(`UPDATE whatsapp_numbers SET last_call_ended_at = now() WHERE id = $1`, [row.number_id]);
-    });
-    if (resource) await this.redis.release({ token: resource.token, numberId: resource.numberId, leadId: resource.leadId, sdrId: resource.sdrId });
-    this.gateway.sendToSdr(row.sdr_id, { type: 'call_finished', callId, status: finalCallStatus, outcome });
+      const call = await this.db.query(`SELECT c.*, s.id AS sdr_id, n.id AS number_id, l.attempts, ds.max_attempts_per_lead, ds.retry_delay_minutes FROM calls c JOIN sdrs s ON s.id = c.sdr_id JOIN whatsapp_numbers n ON n.id = c.number_id JOIN leads l ON l.id = c.lead_id CROSS JOIN dialer_settings ds WHERE c.id = $1`, [callId]);
+      if (!call.rows[0]) return;
+      const row = call.rows[0];
+      if (['completed', 'no_answer', 'failed', 'cancelled'].includes(row.status)) return;
+      const outcome = reason ?? status;
+      const transientRateLimit = outcome === 'waxum_rate_limited';
+      const retryable = !transientRateLimit && ['no_answer', 'failed'].includes(status) && !forceNoRetry && Number(row.attempts) < Number(row.max_attempts_per_lead);
+      const finalCallStatus = transientRateLimit ? 'cancelled' : retryable ? 'retry_wait' : status;
+      const leadStatus = transientRateLimit ? 'queued' : retryable ? 'retry_wait' : status === 'completed' ? 'completed' : status === 'cancelled' ? 'queued' : status;
+      this.log(`Chamada encerrada: ${finalCallStatus} (${outcome})`, transientRateLimit ? 'warning' : finalCallStatus === 'failed' ? 'error' : 'info', callId);
+      await this.db.transaction(async (client) => {
+        await client.query(`UPDATE calls SET status = $1, ended_at = now(), duration_seconds = CASE WHEN started_at IS NULL THEN 0 ELSE EXTRACT(EPOCH FROM (now() - started_at))::int END, outcome = $2, failure_reason = CASE WHEN $4 IN ('failed','no_answer') OR $2 = 'waxum_rate_limited' THEN $2 ELSE failure_reason END WHERE id = $3 AND status NOT IN ('completed','no_answer','failed','cancelled')`, [finalCallStatus, outcome, callId, status]);
+        if (transientRateLimit) {
+          await client.query(`UPDATE leads SET status = 'queued', attempts = GREATEST(0, attempts - 1), next_eligible_at = now() + interval '10 seconds' WHERE id = $1`, [row.lead_id]);
+        } else if (retryable) {
+          await client.query(`UPDATE leads SET status = $2, next_eligible_at = now() + ($1::int * interval '1 minute') WHERE id = $3`, [row.retry_delay_minutes, leadStatus, row.lead_id]);
+        } else {
+          await client.query(`UPDATE leads SET status = $1, next_eligible_at = now() WHERE id = $2`, [leadStatus, row.lead_id]);
+        }
+        await client.query(`UPDATE sdrs SET available = true WHERE id = $1`, [row.sdr_id]);
+        if (!transientRateLimit) await client.query(`UPDATE whatsapp_numbers SET last_call_ended_at = now() WHERE id = $1`, [row.number_id]);
+      });
+      if (resource) await this.redis.release({ token: resource.token, numberId: resource.numberId, leadId: resource.leadId, sdrId: resource.sdrId });
+      this.gateway.sendToSdr(row.sdr_id, { type: 'call_finished', callId, status: finalCallStatus, outcome });
+    } finally {
+      this.active.delete(callId);
+      this.finishingCalls.delete(callId);
+    }
   }
 }
-
