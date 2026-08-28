@@ -1,0 +1,622 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ZapLiga · Chamadas automáticas 100% pelo WhatsApp para times de SDR</title>
+<meta name="description" content="Todas as chamadas pelo WhatsApp, sem VoIP, sem linha telefônica e sem apps extras. O ZapLiga disca sozinho a fila de leads e conecta o lead atendido ao SDR livre.">
+<link rel="preconnect" href="https://cdn.jsdelivr.net">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource/space-grotesk@5/500.css">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource/space-grotesk@5/700.css">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource/instrument-sans@5/400.css">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource/instrument-sans@5/500.css">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource/instrument-sans@5/600.css">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource/jetbrains-mono@5/400.css">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource/jetbrains-mono@5/700.css">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<div class="noise" aria-hidden="true"></div>
+
+<!-- ============ NAV ============ -->
+<header class="nav" id="nav">
+  <div class="wrap nav-in">
+    <a href="#" class="logo" aria-label="ZapLiga início">
+      <span class="logo-ic" aria-hidden="true">
+        <svg width="19" height="19" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2a10 10 0 0 0-8.5 15.3L2 22l4.9-1.4A10 10 0 1 0 12 2zm5.5 14.2c-.24.66-1.36 1.26-1.9 1.3-.5.06-1.13.09-1.83-.12a16 16 0 0 1-1.66-.61c-2.93-1.26-4.84-4.2-4.99-4.4-.14-.19-1.2-1.6-1.2-3.05s.76-2.16 1.03-2.46c.27-.3.6-.37.8-.37h.57c.18 0 .43-.07.67.51.24.6.83 2.03.9 2.17.07.15.12.32.02.51-.1.2-.15.32-.3.5-.15.19-.31.42-.45.56-.15.15-.3.31-.14.6.17.3.76 1.25 1.63 2.02 1.12 1 2.07 1.3 2.36 1.45.3.15.46.13.63-.07.17-.2.73-.85.93-1.15.2-.3.39-.24.66-.14.27.1 1.7.8 2 .95.29.15.48.22.55.34.07.13.07.73-.18 1.38z"/></svg>
+      </span>
+      Zap<span>Liga</span>
+    </a>
+    <nav class="nav-links" aria-label="Navegação principal">
+      <a href="#whatsapp">Por que WhatsApp</a>
+      <a href="#como-funciona">Como funciona</a>
+      <a href="#recursos">Recursos</a>
+      <a href="#faq">FAQ</a>
+    </nav>
+    <div class="nav-actions"><a href="/app/" class="btn btn-ghost">Entrar</a><a href="#cta" class="btn btn-primary">Agendar demo</a></div>
+    <button class="burger" id="burger" aria-label="Abrir menu" aria-expanded="false"><i></i><i></i><i></i></button>
+  </div>
+</header>
+<nav class="mobile-menu" id="mobileMenu" aria-label="Menu móvel">
+  <a href="#whatsapp">Por que WhatsApp</a>
+  <a href="#como-funciona">Como funciona</a>
+  <a href="#recursos">Recursos</a>
+  <a href="#faq">FAQ</a>
+  <a href="#cta" style="color:var(--green-ink)">Agendar demo →</a>
+</nav>
+
+<!-- ============ HERO ============ -->
+<section class="hero" id="hero">
+  <div class="wrap hero-in">
+    <div>
+      <div class="wa-badge"><span class="live-dot"></span> DISCADOR AUTOMÁTICO · 100% PELO WHATSAPP</div>
+      <h1>Ligações automáticas<br><span class="scramble" data-text="pelo WhatsApp.">pelo WhatsApp.</span><br>Mais leads atendem.</h1>
+      <p class="hero-sub">O ZapLiga disca a sua fila de leads <b>automaticamente</b>, com <span class="wa-strong">chamadas de voz pelo WhatsApp</span>. Como o lead atende no app que já usa o dia inteiro, <b>muito mais gente atende</b> e você perde menos leads. Quando alguém atende, a conversa cai na hora com o <b>primeiro SDR livre</b>.</p>
+      <div class="hero-ctas">
+        <a href="#cta" class="btn btn-primary">Agendar demonstração
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
+        </a>
+        <a href="#como-funciona" class="btn btn-ghost">Ver como funciona</a>
+      </div>
+      <div class="hero-micro">
+        <span><i>✓</i> 100% pelo WhatsApp</span>
+        <span><i>✓</i> discagem automática</span>
+        <span><i>✓</i> 3,2× mais leads atendem</span>
+      </div>
+    </div>
+
+    <div class="console-wrap">
+      <div class="float-chip fc-1">✓ 100% das chamadas <b>via WhatsApp</b></div>
+      <div class="float-chip fc-2">▲ <b>3,2×</b> mais atendimento que ligação comum</div>
+      <div class="console-card" role="img" aria-label="Simulação da central de chamadas pelo WhatsApp ao vivo">
+        <div class="console-top">
+          <div class="ct-left">
+            <span class="ct-avatar" aria-hidden="true">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2a10 10 0 0 0-8.5 15.3L2 22l4.9-1.4A10 10 0 1 0 12 2zm5.5 14.2c-.24.66-1.36 1.26-1.9 1.3-.5.06-1.13.09-1.83-.12a16 16 0 0 1-1.66-.61c-2.93-1.26-4.84-4.2-4.99-4.4-.14-.19-1.2-1.6-1.2-3.05s.76-2.16 1.03-2.46c.27-.3.6-.37.8-.37h.57c.18 0 .43-.07.67.51.24.6.83 2.03.9 2.17.07.15.12.32.02.51-.1.2-.15.32-.3.5-.15.19-.31.42-.45.56-.15.15-.3.31-.14.6.17.3.76 1.25 1.63 2.02 1.12 1 2.07 1.3 2.36 1.45.3.15.46.13.63-.07.17-.2.73-.85.93-1.15.2-.3.39-.24.66-.14.27.1 1.7.8 2 .95.29.15.48.22.55.34.07.13.07.73-.18 1.38z"/></svg>
+            </span>
+            <div>
+              <b class="ct-name">Central de chamadas</b>
+              <small class="ct-sub"><span class="live-dot"></span> via whatsapp · ao vivo</small>
+            </div>
+          </div>
+          <span class="ct-right">operação: ativa</span>
+        </div>
+        <div class="console-stats">
+          <div><span class="cs-num" id="statFila">34</span><span class="cs-lab">na fila</span></div>
+          <div><span class="cs-num" id="statSim">4</span><span class="cs-lab">simultâneas</span></div>
+          <div><span class="cs-num" id="statAtend">412</span><span class="cs-lab">atendidas hoje</span></div>
+        </div>
+        <ul class="call-list" id="callList"></ul>
+        <div class="sdr-strip" id="sdrStrip"></div>
+        <div class="console-bottom" id="consoleMsg">motor ▸ <b>chamadas via WhatsApp</b> · cooldown ok · janela aberta</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ LOGOS ============ -->
+<div class="logos">
+  <p class="logos-cap">Times de vendas que já ligam só pelo WhatsApp</p>
+  <div class="marquee" aria-hidden="true">
+    <div class="marquee-track" id="mqTrack">
+      <span class="mq-brand">NORTECH SaaS</span>
+      <span class="mq-brand">COBRAFÁCIL</span>
+      <span class="mq-brand">EDUPRO</span>
+      <span class="mq-brand">IMOBX</span>
+      <span class="mq-brand">VELOCORP</span>
+      <span class="mq-brand">LUMEN CRM</span>
+      <span class="mq-brand">DATAVOZ</span>
+      <span class="mq-brand">VENDAMAIS</span>
+    </div>
+  </div>
+</div>
+
+<!-- ============ POR QUE WHATSAPP ============ -->
+<section class="wa-band" id="whatsapp">
+  <div class="bubble bb-1">📞 Chamada via WhatsApp…</div>
+  <div class="bubble bb-2">O lead atendeu ✓</div>
+  <div class="bubble bb-3">Taxa de atendimento: 57%</div>
+  <div class="wrap wa-grid">
+    <div>
+      <div class="reveal">
+        <span class="kicker">O grande diferencial</span>
+        <h2 class="h2">Por que ligar pelo WhatsApp, e não por telefone?</h2>
+        <p class="lead">Porque a chamada acontece no único canal que o lead já mantém aberto o dia inteiro. Ele reconhece, atende mais, e você deixa de perder lead para a caixa postal. Sem número estranho, sem robô, sem app para instalar.</p>
+      </div>
+      <div class="wa-claims">
+        <div class="wa-claim reveal">
+          <div class="wa-num">98%</div>
+          <div>
+            <h3>O lead está lá, o dia todo</h3>
+            <p>Quase todos os leads brasileiros têm WhatsApp e abrem o app <b>mais de 20 vezes por dia</b>. Sua chamada chega onde a pessoa já está, não para um número que ela ignora.</p>
+          </div>
+        </div>
+        <div class="wa-claim reveal" style="--d:.1s">
+          <div class="wa-num">3,2×</div>
+          <div>
+            <h3>Mais gente atende, menos lead perdido</h3>
+            <p>Quando o celular mostra <b>“chamada via WhatsApp”</b>, o lead reconhece e atende. Nada de 0800, nada de número desconhecido caindo na caixa postal, nada de lead esfriando na fila.</p>
+          </div>
+        </div>
+        <div class="wa-claim reveal" style="--d:.2s">
+          <div class="wa-num">0</div>
+          <div>
+            <h3>Zero app extra, zero atrito</h3>
+            <p>Nem o seu time nem o lead instalam nada. É a <b>chamada de voz nativa do WhatsApp</b>, a partir de números reais gerenciados pelo motor.</p>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="reveal" style="--d:.15s">
+      <div class="phone-mock" aria-hidden="true">
+        <div class="pm-screen">
+          <div class="pm-head">
+            <span class="pm-back">←</span>
+            <div>
+              <b>Nortech SaaS</b>
+              <small>chamada via whatsapp</small>
+            </div>
+          </div>
+          <div class="pm-body">
+            <div class="pm-avatar">
+              <svg width="38" height="38" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2a10 10 0 0 0-8.5 15.3L2 22l4.9-1.4A10 10 0 1 0 12 2zm5.5 14.2c-.24.66-1.36 1.26-1.9 1.3-.5.06-1.13.09-1.83-.12a16 16 0 0 1-1.66-.61c-2.93-1.26-4.84-4.2-4.99-4.4-.14-.19-1.2-1.6-1.2-3.05s.76-2.16 1.03-2.46c.27-.3.6-.37.8-.37h.57c.18 0 .43-.07.67.51.24.6.83 2.03.9 2.17.07.15.12.32.02.51-.1.2-.15.32-.3.5-.15.19-.31.42-.45.56-.15.15-.3.31-.14.6.17.3.76 1.25 1.63 2.02 1.12 1 2.07 1.3 2.36 1.45.3.15.46.13.63-.07.17-.2.73-.85.93-1.15.2-.3.39-.24.66-.14.27.1 1.7.8 2 .95.29.15.48.22.55.34.07.13.07.73-.18 1.38z"/></svg>
+            </div>
+            <div class="pm-name">Nortech SaaS</div>
+            <div class="pm-status">chamando via WhatsApp…</div>
+            <div class="pm-actions">
+              <span class="pm-btn pm-decline"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M22 16.9v3a2 2 0 0 1-2.2 2A19.8 19.8 0 0 1 2.1 4.2 2 2 0 0 1 4.1 2h3a2 2 0 0 1 2 1.7c.13.96.36 1.9.7 2.8a2 2 0 0 1-.45 2.1L8.1 9.9a16 16 0 0 0 6 6l1.3-1.3a2 2 0 0 1 2.1-.45c.9.34 1.85.57 2.8.7a2 2 0 0 1 1.7 2.05z" transform="rotate(135 12 12)"/></svg></span>
+              <span class="pm-btn pm-accept"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M22 16.9v3a2 2 0 0 1-2.2 2 19.8 19.8 0 0 1-8.6-3 19.5 19.5 0 0 1-6-6 19.8 19.8 0 0 1-3-8.7A2 2 0 0 1 4.1 2h3a2 2 0 0 1 2 1.7c.13.96.36 1.9.7 2.8a2 2 0 0 1-.45 2.1L8.1 9.9a16 16 0 0 0 6 6l1.3-1.3a2 2 0 0 1 2.1-.45c.9.34 1.85.57 2.8.7A2 2 0 0 1 22 16.9z"/></svg></span>
+            </div>
+          </div>
+        </div>
+      </div>
+      <p class="pm-cap">É isso que o lead vê: <b>uma chamada normal de WhatsApp</b>.</p>
+    </div>
+  </div>
+</section>
+
+<!-- ============ PROBLEMA ============ -->
+<section class="problema" id="problema">
+  <div class="wrap">
+    <div class="reveal">
+      <span class="kicker">O problema</span>
+      <h2 class="h2">Ligar por telefone do jeito antigo é pedir para não ser atendido.</h2>
+    </div>
+    <div class="prob-grid">
+      <div class="prob-copy reveal" style="--d:.1s">
+        <p>Na operação manual, o SDR escolhe o lead, disca por linha ou VoIP, ouve chamar, cai na caixa, anota, rediscar depois… e repete. <b>Centenas de vezes por dia.</b></p>
+        <p>E o pior: ligando de um <b>número que o lead não reconhece</b>, a maioria nem atende. O resultado é uma agenda cheia de tempo mudo, enquanto o lead esfria no WhatsApp, que ele acabou de abrir.</p>
+        <div class="prob-stats">
+          <div class="pstat"><b>2h43</b><span>por dia, por SDR, só discando e ouvindo chamar</span></div>
+          <div class="pstat"><b>7×</b><span>tentativas manuais até conseguir um “alô”</span></div>
+          <div class="pstat"><b>61%</b><span>do expediente sem nenhuma conversa real</span></div>
+        </div>
+      </div>
+      <div class="day-visual reveal" style="--d:.2s">
+        <p class="dv-title">Onde vão as 8 horas de trabalho</p>
+        <div class="day-row">
+          <div class="day-lab">SDR tradicional <small>conversa real: 27%</small></div>
+          <div class="stacked">
+            <span class="seg s-dial" style="--w:40%;--sd:.05s">discando 40%</span>
+            <span class="seg s-wait" style="--w:18%;--sd:.25s">espera 18%</span>
+            <span class="seg s-adm" style="--w:15%;--sd:.45s">adm</span>
+            <span class="seg s-talk" style="--w:27%;--sd:.65s">conversa 27%</span>
+          </div>
+        </div>
+        <div class="day-row">
+          <div class="day-lab">SDR com ZapLiga <small>conversa real: 71%</small></div>
+          <div class="stacked">
+            <span class="seg s-talk" style="--w:71%;--sd:.15s">conversa 71%</span>
+            <span class="seg s-prep" style="--w:21%;--sd:.5s">registro 21%</span>
+            <span class="seg s-ready" style="--w:8%;--sd:.7s">fila 8%</span>
+          </div>
+        </div>
+        <div class="legend">
+          <span><i style="background:var(--amber)"></i>discando / chamando</span>
+          <span><i style="background:#e88a68"></i>esperando rediscar</span>
+          <span><i style="background:#b9ccc1"></i>administrativo</span>
+          <span><i style="background:var(--green)"></i>conversando</span>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ COMO FUNCIONA ============ -->
+<section class="como" id="como-funciona">
+  <div class="wrap">
+    <div class="reveal">
+      <span class="kicker">Como funciona</span>
+      <h2 class="h2">Do lead na fila à conversa no WhatsApp, sem ninguém discar.</h2>
+      <p class="lead">O motor percorre o ciclo inteiro sozinho, sempre pelo WhatsApp. O SDR entra em uma única etapa: a conversa.</p>
+    </div>
+    <div class="pipeline reveal" style="--d:.15s">
+      <div class="pipe-line" aria-hidden="true"></div>
+      <div class="pipe-pulse" aria-hidden="true"></div>
+      <div class="pipe-node">
+        <div class="pn-dot"><em>01</em><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/></svg></div>
+        <p class="pn-title">Fila de leads</p>
+        <p class="pn-desc">Leads entram pelo CRM ou planilha e aguardam na ordem certa.</p>
+      </div>
+      <div class="pipe-node">
+        <div class="pn-dot"><em>02</em><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2 2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5M2 12l10 5 10-5"/></svg></div>
+        <p class="pn-title">Pool de números</p>
+        <p class="pn-desc">O motor escolhe o número WhatsApp disponível, respeitando cooldown e limites.</p>
+      </div>
+      <div class="pipe-node">
+        <div class="pn-dot wa-node"><em>03</em><svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2a10 10 0 0 0-8.5 15.3L2 22l4.9-1.4A10 10 0 1 0 12 2zm5.5 14.2c-.24.66-1.36 1.26-1.9 1.3-.5.06-1.13.09-1.83-.12a16 16 0 0 1-1.66-.61c-2.93-1.26-4.84-4.2-4.99-4.4-.14-.19-1.2-1.6-1.2-3.05s.76-2.16 1.03-2.46c.27-.3.6-.37.8-.37h.57c.18 0 .43-.07.67.51.24.6.83 2.03.9 2.17.07.15.12.32.02.51-.1.2-.15.32-.3.5-.15.19-.31.42-.45.56-.15.15-.3.31-.14.6.17.3.76 1.25 1.63 2.02 1.12 1 2.07 1.3 2.36 1.45.3.15.46.13.63-.07.17-.2.73-.85.93-1.15.2-.3.39-.24.66-.14.27.1 1.7.8 2 .95.29.15.48.22.55.34.07.13.07.73-.18 1.38z"/></svg></div>
+        <p class="pn-title">Chamada pelo WhatsApp</p>
+        <p class="pn-desc">Várias chamadas de voz simultâneas, direto no app do lead.</p>
+      </div>
+      <div class="pipe-node">
+        <div class="pn-dot"><em>04</em><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><path d="M22 4 12 14.01l-3-3"/></svg></div>
+        <p class="pn-title">Lead atendeu</p>
+        <p class="pn-desc">O sistema detecta o atendimento em tempo real.</p>
+      </div>
+      <div class="pipe-node">
+        <div class="pn-dot"><em>05</em><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3v12"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="6" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/></svg></div>
+        <p class="pn-title">Rota pro SDR livre</p>
+        <p class="pn-desc">A chamada cai com o SDR disponível há mais tempo.</p>
+      </div>
+      <div class="pipe-node">
+        <div class="pn-dot"><em>06</em><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg></div>
+        <p class="pn-title">Conversa</p>
+        <p class="pn-desc">O SDR só fala. O próximo lead já está sendo chamado.</p>
+      </div>
+    </div>
+    <p class="pipe-note reveal" style="--d:.25s">Se ninguém atender, o motor não insiste à toa: <b>agenda nova tentativa sozinho</b>, na melhor janela de horário.</p>
+    <div class="checks reveal" style="--d:.3s">
+      <span><i>✓</i>Nenhum lead esquecido</span>
+      <span><i>✓</i>Nenhum SDR ocioso</span>
+      <span><i>✓</i>Nenhum número forçado</span>
+    </div>
+  </div>
+</section>
+
+<!-- ============ RECURSOS (sticky) ============ -->
+<section class="recursos" id="recursos">
+  <div class="wrap sticky-wrap">
+    <div class="sticky-left">
+      <span class="kicker">Recursos</span>
+      <h2 class="h2">Um motor de chamadas no WhatsApp com cabeça de operação.</h2>
+      <p>Cada regra que hoje vive em planilha (cooldown, limite diário, janela de contato, retry) passa a ser executada pelo motor, <b>sem depender de ninguém</b>.</p>
+      <nav class="res-nav" aria-label="Recursos">
+        <a class="res-link active" href="#f1"><em>01</em>Pool de números com regras</a>
+        <a class="res-link" href="#f2"><em>02</em>Roteamento para o SDR livre</a>
+        <a class="res-link" href="#f3"><em>03</em>Novas tentativas automáticas</a>
+        <a class="res-link" href="#f4"><em>04</em>Simultaneidade sob medida</a>
+        <a class="res-link" href="#f5"><em>05</em>Desempenho por número</a>
+      </nav>
+    </div>
+
+    <div>
+      <article class="feat-block reveal" id="f1">
+        <span class="fb-tag">01 · Pool de números WhatsApp</span>
+        <h3>Cada número com suas regras, e todas respeitadas, sempre.</h3>
+        <p>Defina <b>cooldown entre chamadas, teto diário e janelas de disponibilidade</b> por número. O motor alterna o pool automaticamente e protege a saúde de cada conta de WhatsApp.</p>
+        <div class="feat-visual">
+          <div class="num-row">
+            <span class="nr-phone">+55 11 98•••-2214</span>
+            <div class="nr-meta"><div class="nr-bar"><i style="--v:64%"></i></div><span class="nr-note">148 / 230 chamadas hoje</span></div>
+            <span class="nr-tag t-ok">disponível</span>
+          </div>
+          <div class="num-row">
+            <span class="nr-phone">+55 21 97•••-8830</span>
+            <div class="nr-meta"><div class="nr-bar warn"><i style="--v:87%"></i></div><span class="nr-note">cooldown ativo · libera em 04:12</span></div>
+            <span class="nr-tag t-cd">em cooldown</span>
+          </div>
+          <div class="num-row">
+            <span class="nr-phone">+55 31 99•••-1407</span>
+            <div class="nr-meta"><div class="nr-bar"><i style="--v:41%"></i></div><span class="nr-note">94 / 230 chamadas hoje</span></div>
+            <span class="nr-tag t-ok">disponível</span>
+          </div>
+          <div class="num-row">
+            <span class="nr-phone">+55 11 96•••-5529</span>
+            <div class="nr-meta"><div class="nr-bar off"><i style="--v:100%"></i></div><span class="nr-note">teto diário atingido · volta amanhã 08:00</span></div>
+            <span class="nr-tag t-off">limite diário</span>
+          </div>
+        </div>
+      </article>
+
+      <article class="feat-block reveal" id="f2">
+        <span class="fb-tag">02 · Roteamento</span>
+        <h3>O lead atendeu no WhatsApp? O SDR livre assume em menos de 1 segundo.</h3>
+        <p>Sem fila interna, sem “quem pega?”. Quando o lead atende a chamada de WhatsApp, ela é entregue ao <b>SDR disponível há mais tempo</b>. Se todos estiverem ocupados, o motor segura a discagem e nenhum atendimento é desperdiçado.</p>
+        <div class="feat-visual">
+          <div class="rv-incoming"><span class="live-dot"></span> lead atendeu a chamada de WhatsApp · roteando…</div>
+          <div class="rv-sdrs">
+            <div class="rv-sdr busy">Bruno <span>em conversa · 03:41</span></div>
+            <div class="rv-sdr chosen">Ana <span>livre há 12s · recebendo →</span></div>
+            <div class="rv-sdr busy">Carla <span>em conversa · 01:07</span></div>
+            <div class="rv-sdr">Diego <span>livre há 4s · próximo da fila</span></div>
+          </div>
+          <p class="rv-time">tempo médio entre o “alô” e o SDR na linha: <b>0,9 s</b></p>
+        </div>
+      </article>
+
+      <article class="feat-block reveal" id="f3">
+        <span class="fb-tag">03 · Novas tentativas</span>
+        <h3>Não atendeu? O motor chama de novo na melhor hora.</h3>
+        <p>Regras de rediscagem por tentativa, resultado e horário. O lead estava ocupado de manhã? Ele volta à fila às 14h <b>com uma nova chamada de WhatsApp</b>, sem planilha, sem post-it e sem esquecimento.</p>
+        <div class="feat-visual">
+          <div class="retry-track">
+            <div class="rt-step"><b>09:12 · tentativa 1</b><span>não atendeu → refileira</span></div>
+            <div class="rt-step"><b>11:47 · tentativa 2</b><span>ocupado → refileira</span></div>
+            <div class="rt-step win"><b>14:32 · tentativa 3</b><span>atendeu ✓ conectado à Ana</span></div>
+          </div>
+          <p class="rt-cap">regra ativa: <b>até 4 tentativas</b> · janelas 9h às 12h e 14h às 19h · intervalo mínimo 2h</p>
+        </div>
+      </article>
+
+      <article class="feat-block reveal" id="f4">
+        <span class="fb-tag">04 · Simultaneidade</span>
+        <h3>Chamadas simultâneas na medida exata do time.</h3>
+        <p>O limite de chamadas de WhatsApp em paralelo acompanha os <b>SDRs livres em tempo real</b>. Mais gente disponível? Mais linhas chamando. Menos gente? O motor desacelera. Tudo automático.</p>
+        <div class="feat-visual">
+          <div class="sim-visual">
+            <div class="sim-col"><div class="sim-big">6</div><small>chamadas simultâneas</small></div>
+            <div class="sim-eq">=</div>
+            <div class="sim-col"><div class="sim-big">4</div><small>SDRs livres</small></div>
+            <div class="sim-eq">+</div>
+            <div class="sim-col"><div class="sim-big">2</div><small>buffer de discagem</small></div>
+          </div>
+          <div class="sim-dots" aria-hidden="true">
+            <i class="sd-on"></i><i class="sd-on"></i><i class="sd-on"></i><i class="sd-on"></i><i class="sd-on"></i><i class="sd-on"></i><i class="sd-off"></i><i class="sd-off"></i>
+          </div>
+          <p class="sim-cap">6 linhas chamando no WhatsApp · 2 SDRs entram às 14h → o motor já recalcula</p>
+        </div>
+      </article>
+
+      <article class="feat-block reveal" id="f5">
+        <span class="fb-tag">05 · Desempenho</span>
+        <h3>Cada número WhatsApp medido. Cada decisão, informada.</h3>
+        <p><b>Taxa de atendimento, duração média, motivos de falha e saúde</b> por número, para escalar as linhas que atendem bem e aposentar as que só gastam lead.</p>
+        <div class="feat-visual">
+          <div class="spark-row">
+            <b>atendimentos · última hora</b>
+            <span class="mono">▲ 23%</span>
+            <svg class="spark" width="150" height="38" viewBox="0 0 150 38" aria-hidden="true">
+              <polyline pathLength="1" points="0,30 15,26 30,28 45,20 60,22 75,14 90,16 105,9 120,12 135,5 150,7"/>
+            </svg>
+          </div>
+          <div class="mini-bars">
+            <div class="mb best"><b>68%</b><i style="--h:92%;--bd:.05s"></i><small>Nº 01</small></div>
+            <div class="mb"><b>61%</b><i style="--h:78%;--bd:.15s"></i><small>Nº 02</small></div>
+            <div class="mb"><b>57%</b><i style="--h:68%;--bd:.25s"></i><small>Nº 03</small></div>
+            <div class="mb"><b>49%</b><i style="--h:52%;--bd:.35s"></i><small>Nº 04</small></div>
+            <div class="mb"><b>38%</b><i style="--h:36%;--bd:.45s"></i><small>Nº 05</small></div>
+          </div>
+          <p class="sim-cap">taxa de atendimento por número · últimos 7 dias</p>
+        </div>
+      </article>
+    </div>
+  </div>
+</section>
+
+<!-- ============ PAINEL ============ -->
+<section class="painel-sec" id="painel">
+  <div class="wrap">
+    <div class="reveal">
+      <span class="kicker">Visão do gestor</span>
+      <h2 class="h2">Todas as chamadas de WhatsApp, em um painel.</h2>
+      <p class="lead">Ligações, atendimentos, tentativas e saúde de cada número, em tempo real, sem pedir relatório para ninguém.</p>
+    </div>
+
+    <div class="panel reveal" style="--d:.15s">
+      <div class="panel-head">
+        <span class="ph-title"><span class="live-dot"></span> painel operacional · whatsapp</span>
+        <div class="tabs" role="tablist" aria-label="Período do painel">
+          <button class="tab active" data-key="hoje" role="tab" aria-selected="true">Hoje</button>
+          <button class="tab" data-key="semana" role="tab" aria-selected="false">Últimos 7 dias</button>
+        </div>
+      </div>
+      <div class="kpis">
+        <div class="kpi"><div class="kpi-v">412</div><div class="kpi-l">chamadas conectadas</div><div class="kpi-d up">▲ 18% vs. ontem</div></div>
+        <div class="kpi"><div class="kpi-v">57<small>%</small></div><div class="kpi-l">atendimento no whatsapp</div><div class="kpi-d up">▲ 6 p.p. na semana</div></div>
+        <div class="kpi"><div class="kpi-v">0,9<small>s</small></div><div class="kpi-l">conexão pós-“alô”</div><div class="kpi-d up">instantâneo p/ SDR livre</div></div>
+        <div class="kpi"><div class="kpi-v">12</div><div class="kpi-l">números no pool</div><div class="kpi-d up">11 saudáveis · 1 em cooldown</div></div>
+      </div>
+      <div class="panel-body">
+        <div class="chart-side">
+          <div class="chart-cap"><span>chamadas via whatsapp realizadas</span><span id="chartTotal">826 no total</span></div>
+          <div class="chart" id="chartBars"></div>
+        </div>
+        <div class="top-side">
+          <p class="top-cap">melhores números · taxa de atendimento</p>
+          <div class="top-num"><div class="tn-row"><span>+55 11 98•••-2214</span><b>68%</b></div><div class="tn-bar"><i style="--v:68%"></i></div></div>
+          <div class="top-num"><div class="tn-row"><span>+55 21 97•••-8830</span><b>61%</b></div><div class="tn-bar"><i style="--v:61%"></i></div></div>
+          <div class="top-num"><div class="tn-row"><span>+55 31 99•••-1407</span><b>57%</b></div><div class="tn-bar"><i style="--v:57%"></i></div></div>
+          <div class="top-num"><div class="tn-row"><span>+55 41 98•••-7743</span><b>54%</b></div><div class="tn-bar"><i style="--v:54%"></i></div></div>
+          <div class="top-num"><div class="tn-row"><span>+55 11 96•••-5529</span><b>49%</b></div><div class="tn-bar"><i style="--v:49%"></i></div></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ MÉTRICAS (dark) ============ -->
+<section class="metrics" id="resultados">
+  <div class="wrap">
+    <p class="metrics-cap">resultados médios em operações b2b · 60 dias de uso</p>
+    <div class="metrics-grid">
+      <div class="metric reveal"><div class="metric-num counter" data-to="3.4" data-dec="1" data-suf="x">0</div><p class="metric-lab">mais conversas por SDR, por dia</p></div>
+      <div class="metric reveal" style="--d:.1s"><div class="metric-num counter" data-to="78" data-suf="%">0</div><p class="metric-lab">menos tempo ocioso entre chamadas</p></div>
+      <div class="metric reveal" style="--d:.2s"><div class="metric-num counter" data-to="41" data-pre="+" data-suf="%">0</div><p class="metric-lab">reuniões agendadas em 60 dias</p></div>
+      <div class="metric reveal" style="--d:.3s"><div class="metric-num counter" data-to="0.9" data-dec="1" data-suf=" s">0</div><p class="metric-lab">entre o “alô” e o SDR na linha</p></div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ COMPARATIVO ============ -->
+<section class="comparativo" id="comparativo">
+  <div class="wrap">
+    <div class="reveal">
+      <span class="kicker">Antes × depois</span>
+      <h2 class="h2">Telefone do jeito antigo vs. chamada pelo WhatsApp</h2>
+    </div>
+    <div class="table-scroll reveal" style="--d:.15s">
+      <table class="cmp">
+        <thead>
+          <tr>
+            <th>Na operação</th>
+            <th>Ligação tradicional</th>
+            <th>ZapLiga<span class="tag-pro">100% WHATSAPP</span></th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr><td>Por onde sai a chamada</td><td><span class="no-ic">×</span>Linha fixa, celular ou VoIP, número que o lead ignora</td><td><span class="ok-ic">✓</span>WhatsApp, o app que o lead abre 20× por dia</td></tr>
+          <tr><td>Quem disca</td><td><span class="no-ic">×</span>O SDR, uma a uma, na mão</td><td><span class="ok-ic">✓</span>O motor, em lote e sozinho</td></tr>
+          <tr><td>Tempo entre conversas</td><td><span class="no-ic">×</span>4 a 9 minutos</td><td><span class="ok-ic">✓</span>~20 segundos</td></tr>
+          <tr><td>Limites de cada número</td><td><span class="no-ic">×</span>Planilha e memória</td><td><span class="ok-ic">✓</span>Cooldown, teto diário e janelas automáticos</td></tr>
+          <tr><td>Lead não atendeu</td><td><span class="no-ic">×</span>Vira anotação esquecida</td><td><span class="ok-ic">✓</span>Volta à fila na melhor janela, sozinho</td></tr>
+          <tr><td>Distribuição das chamadas</td><td><span class="no-ic">×</span>Desigual, no grito</td><td><span class="ok-ic">✓</span>Sempre o SDR livre há mais tempo</td></tr>
+          <tr><td>Métricas por número</td><td><span class="no-ic">×</span>Nenhuma</td><td><span class="ok-ic">✓</span>Taxa, duração e saúde em tempo real</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
+<!-- ============ DEPOIMENTOS ============ -->
+<section class="depoimentos" id="depoimentos">
+  <div class="wrap">
+    <div class="reveal">
+      <span class="kicker">Depoimentos</span>
+      <h2 class="h2">Quem trocou o telefone pelo WhatsApp, aprova.</h2>
+    </div>
+    <div class="depo-grid">
+      <figure class="depo-card reveal">
+        <blockquote class="depo-quote">“O lead vê <b>chamada de WhatsApp</b> e atende na hora. Antes, do 0800, quase ninguém pegava. Hoje o SDR senta, fica disponível e <b>as conversas simplesmente chegam</b>.”</blockquote>
+        <figcaption class="depo-foot">
+          <span class="avatar av-1">MD</span>
+          <span><span class="depo-name">Marina Duarte</span><br><span class="depo-role">Head de Vendas · Nortech SaaS</span></span>
+          <span class="depo-chip">+52% reuniões</span>
+        </figcaption>
+      </figure>
+      <figure class="depo-card reveal" style="--d:.15s">
+        <blockquote class="depo-quote">“As regras de cooldown salvaram nossos números. <b>Zero bloqueios em 6 meses</b>, mesmo com um volume 3x maior de chamadas pelo WhatsApp.”</blockquote>
+        <figcaption class="depo-foot">
+          <span class="avatar av-2">RL</span>
+          <span><span class="depo-name">Rafael Lima</span><br><span class="depo-role">Coord. de Pré-vendas · CobraFácil</span></span>
+          <span class="depo-chip">0 bloqueios</span>
+        </figcaption>
+      </figure>
+      <figure class="depo-card reveal" style="--d:.3s">
+        <blockquote class="depo-quote">“Finalmente sei <b>qual número atende bem</b> e qual só gasta lead. O painel de desempenho virou pauta fixa da nossa reunião de segunda.”</blockquote>
+        <figcaption class="depo-foot">
+          <span class="avatar av-3">PS</span>
+          <span><span class="depo-name">Paula Siqueira</span><br><span class="depo-role">Diretora Comercial · EduPro</span></span>
+          <span class="depo-chip">3,1x contatos</span>
+        </figcaption>
+      </figure>
+    </div>
+  </div>
+</section>
+
+<!-- ============ FAQ ============ -->
+<section class="faq-sec" id="faq">
+  <div class="wrap">
+    <div class="reveal" style="text-align:center">
+      <span class="kicker" style="justify-content:center">Perguntas frequentes</span>
+      <h2 class="h2" style="margin:0 auto">Tudo sobre ligar pelo WhatsApp em escala.</h2>
+    </div>
+    <div class="faq-list">
+      <div class="faq-item reveal">
+        <button class="faq-q" aria-expanded="false">A chamada é realmente feita pelo WhatsApp?<span class="faq-ic" aria-hidden="true"></span></button>
+        <div class="faq-a"><p><b>Sim, 100%.</b> É a chamada de voz nativa do WhatsApp, feita a partir de números reais gerenciados pelo motor. Não usamos VoIP, linha telefônica nem discador externo: o lead recebe exatamente uma <b>“chamada via WhatsApp”</b> na tela do celular.</p></div>
+      </div>
+      <div class="faq-item reveal">
+        <button class="faq-q" aria-expanded="false">O que o lead vê quando vocês ligam?<span class="faq-ic" aria-hidden="true"></span></button>
+        <div class="faq-a"><p>Uma chamada comum de WhatsApp, com o nome ou número do seu time. <b>Nada de robô ou URA</b>: quando o lead atende, quem fala é o seu SDR, conectado em menos de 1 segundo.</p></div>
+      </div>
+      <div class="faq-item reveal">
+        <button class="faq-q" aria-expanded="false">Existe risco de bloqueio dos números?<span class="faq-ic" aria-hidden="true"></span></button>
+        <div class="faq-a"><p>Todo o sistema foi desenhado para minimizar esse risco: <b>cooldown entre chamadas, teto diário por número, janelas de horário</b> e monitoramento contínuo da saúde de cada conta. Se um número dá sinais de desgaste, o motor o tira de circulação automaticamente.</p></div>
+      </div>
+      <div class="faq-item reveal">
+        <button class="faq-q" aria-expanded="false">Preciso trocar os números de WhatsApp da minha equipe?<span class="faq-ic" aria-hidden="true"></span></button>
+        <div class="faq-a"><p><b>Não.</b> Você conecta ao pool os números que já usa, ou adiciona novos aos poucos. O motor passa a gerenciar a disponibilidade e as regras de cada um, sem mudança na experiência do lead.</p></div>
+      </div>
+      <div class="faq-item reveal">
+        <button class="faq-q" aria-expanded="false">Integra com o meu CRM?<span class="faq-ic" aria-hidden="true"></span></button>
+        <div class="faq-a"><p><b>Sim.</b> API aberta e webhooks para entrada de leads, registro de resultados e atualização de status. Os principais CRMs do mercado conectam em menos de um dia, e nosso time apoia a configuração.</p></div>
+      </div>
+      <div class="faq-item reveal">
+        <button class="faq-q" aria-expanded="false">E a LGPD?<span class="faq-ic" aria-hidden="true"></span></button>
+        <div class="faq-a"><p>Tratamos dados com <b>base legal definida, criptografia, controle de consentimento e opt-out</b>. Você define janelas de contato e regras de descarte, e todos os acessos ficam registrados em auditoria.</p></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ CTA FINAL ============ -->
+<section class="cta-final" id="cta">
+  <div class="cta-mq" aria-hidden="true">WHATSAPP · WHATSAPP · WHATSAPP · WHATSAPP · WHATSAPP · WHATSAPP ·</div>
+  <div class="wrap">
+    <div class="reveal">
+      <h2>Pare de discar.<br><span class="line2">Chame pelo WhatsApp.</span></h2>
+      <p>Agende uma demonstração de 15 minutos e veja o motor chamando a sua fila de leads, 100% pelo WhatsApp.</p>
+      <div class="cta-btns">
+        <a href="#" class="btn btn-primary" onclick="return false">Agendar demonstração gratuita
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
+        </a>
+        <a href="#" class="btn btn-ghost on-dark" onclick="return false">
+          <svg width="17" height="17" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 2a10 10 0 0 0-8.5 15.3L2 22l4.9-1.4A10 10 0 1 0 12 2zm5.5 14.2c-.24.66-1.36 1.26-1.9 1.3-.5.06-1.13.09-1.83-.12a16 16 0 0 1-1.66-.61c-2.93-1.26-4.84-4.2-4.99-4.4-.14-.19-1.2-1.6-1.2-3.05s.76-2.16 1.03-2.46c.27-.3.6-.37.8-.37h.57c.18 0 .43-.07.67.51.24.6.83 2.03.9 2.17.07.15.12.32.02.51-.1.2-.15.32-.3.5-.15.19-.31.42-.45.56-.15.15-.3.31-.14.6.17.3.76 1.25 1.63 2.02 1.12 1 2.07 1.3 2.36 1.45.3.15.46.13.63-.07.17-.2.73-.85.93-1.15.2-.3.39-.24.66-.14.27.1 1.7.8 2 .95.29.15.48.22.55.34.07.13.07.73-.18 1.38z"/></svg>
+          Falar no WhatsApp
+        </a>
+      </div>
+      <p class="cta-note">15 minutos · sem cartão · sem compromisso</p>
+    </div>
+  </div>
+</section>
+
+<!-- ============ FOOTER ============ -->
+<footer>
+  <div class="wrap">
+    <div class="foot-grid">
+      <div class="foot-brand">
+        <a href="#" class="logo" aria-label="ZapLiga">
+          <span class="logo-ic" aria-hidden="true">
+            <svg width="19" height="19" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2a10 10 0 0 0-8.5 15.3L2 22l4.9-1.4A10 10 0 1 0 12 2zm5.5 14.2c-.24.66-1.36 1.26-1.9 1.3-.5.06-1.13.09-1.83-.12a16 16 0 0 1-1.66-.61c-2.93-1.26-4.84-4.2-4.99-4.4-.14-.19-1.2-1.6-1.2-3.05s.76-2.16 1.03-2.46c.27-.3.6-.37.8-.37h.57c.18 0 .43-.07.67.51.24.6.83 2.03.9 2.17.07.15.12.32.02.51-.1.2-.15.32-.3.5-.15.19-.31.42-.45.56-.15.15-.3.31-.14.6.17.3.76 1.25 1.63 2.02 1.12 1 2.07 1.3 2.36 1.45.3.15.46.13.63-.07.17-.2.73-.85.93-1.15.2-.3.39-.24.66-.14.27.1 1.7.8 2 .95.29.15.48.22.55.34.07.13.07.73-.18 1.38z"/></svg>
+          </span>
+          Zap<span>Liga</span>
+        </a>
+        <p>O discador automático que liga para a sua fila de leads 100% pelo WhatsApp. Sem VoIP, sem linha telefônica, só conversa.</p>
+      </div>
+      <div class="foot-col">
+        <h4>Produto</h4>
+        <a href="#whatsapp">Por que WhatsApp</a>
+        <a href="#como-funciona">Como funciona</a>
+        <a href="#recursos">Recursos</a>
+        <a href="#painel">Painel</a>
+      </div>
+      <div class="foot-col">
+        <h4>Conteúdo</h4>
+        <a href="#faq">FAQ</a>
+        <a href="guia-pool-numeros.html">Guia do pool de números</a>
+        <a href="boas-praticas-anti-bloqueio.html">Boas práticas anti-bloqueio</a>
+        <a href="central-de-ajuda.html">Central de ajuda</a>
+      </div>
+      <div class="foot-col">
+        <h4>Empresa</h4>
+        <a href="sobre.html">Sobre</a>
+        <a href="carreiras.html">Carreiras</a>
+        <a href="contato.html">Contato</a>
+      </div>
+      <div class="foot-col">
+        <h4>Legal</h4>
+        <a href="termos-de-uso.html">Termos de uso</a>
+        <a href="privacidade.html">Privacidade</a>
+        <a href="lgpd.html">LGPD</a>
+      </div>
+    </div>
+    <div class="foot-bottom">
+      <span>© 2026 ZapLiga Tecnologia Ltda. Feito para times que vivem de conversa.</span>
+      <span class="status"><span class="live-dot"></span> todos os sistemas operacionais</span>
+    </div>
+  </div>
+</footer>
+
+<script src="script.js"></script>
+</body>
+</html>

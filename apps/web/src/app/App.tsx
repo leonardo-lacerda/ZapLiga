@@ -164,7 +164,7 @@ export default function App() {
   const { session, loading, login, acceptInvite } = useAuth();
   if (loading) return <div className="auth-shell"><p>Carregando sessão...</p></div>;
   if (!session) {
-    const match = window.location.pathname.match(/^\/invite\/([^/]+)/);
+    const match = window.location.pathname.match(/^\/(?:app\/)?invite\/([^/]+)/);
     return match ? <AcceptInvitePage token={decodeURIComponent(match[1])} acceptInvite={acceptInvite} /> : <LoginPage login={login} />;
   }
   return <AuthenticatedApp />;

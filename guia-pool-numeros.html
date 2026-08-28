@@ -1,0 +1,186 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Guia do pool de números · ZapLiga</title>
+<meta name="description" content="Entenda como o ZapLiga gerencia cooldown, limite diário, janelas de disponibilidade e rotação do seu pool de números de WhatsApp.">
+<link rel="preconnect" href="https://cdn.jsdelivr.net">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource/space-grotesk@5/500.css">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource/space-grotesk@5/700.css">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource/instrument-sans@5/400.css">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource/instrument-sans@5/500.css">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource/instrument-sans@5/600.css">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource/jetbrains-mono@5/400.css">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource/jetbrains-mono@5/700.css">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<div class="noise" aria-hidden="true"></div>
+
+<header class="nav" id="nav">
+  <div class="wrap nav-in">
+    <a href="index.html" class="logo" aria-label="ZapLiga início">
+      <span class="logo-ic" aria-hidden="true">
+        <svg width="19" height="19" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2a10 10 0 0 0-8.5 15.3L2 22l4.9-1.4A10 10 0 1 0 12 2zm5.5 14.2c-.24.66-1.36 1.26-1.9 1.3-.5.06-1.13.09-1.83-.12a16 16 0 0 1-1.66-.61c-2.93-1.26-4.84-4.2-4.99-4.4-.14-.19-1.2-1.6-1.2-3.05s.76-2.16 1.03-2.46c.27-.3.6-.37.8-.37h.57c.18 0 .43-.07.67.51.24.6.83 2.03.9 2.17.07.15.12.32.02.51-.1.2-.15.32-.3.5-.15.19-.31.42-.45.56-.15.15-.3.31-.14.6.17.3.76 1.25 1.63 2.02 1.12 1 2.07 1.3 2.36 1.45.3.15.46.13.63-.07.17-.2.73-.85.93-1.15.2-.3.39-.24.66-.14.27.1 1.7.8 2 .95.29.15.48.22.55.34.07.13.07.73-.18 1.38z"/></svg>
+      </span>
+      Zap<span>Liga</span>
+    </a>
+    <nav class="nav-links" aria-label="Navegação principal">
+      <a href="index.html#whatsapp">Por que WhatsApp</a>
+      <a href="index.html#como-funciona">Como funciona</a>
+      <a href="index.html#recursos">Recursos</a>
+      <a href="index.html#faq">FAQ</a>
+    </nav>
+    <a href="index.html#cta" class="btn btn-primary">Agendar demo</a>
+    <button class="burger" id="burger" aria-label="Abrir menu" aria-expanded="false"><i></i><i></i><i></i></button>
+  </div>
+</header>
+<nav class="mobile-menu" id="mobileMenu" aria-label="Menu móvel">
+  <a href="index.html#whatsapp">Por que WhatsApp</a>
+  <a href="index.html#como-funciona">Como funciona</a>
+  <a href="index.html#recursos">Recursos</a>
+  <a href="index.html#faq">FAQ</a>
+  <a href="index.html#cta" style="color:var(--green-ink)">Agendar demo →</a>
+</nav>
+
+<section class="page-hero">
+  <div class="wrap">
+    <span class="kicker">Guia · Central de ajuda</span>
+    <h1>Guia do pool de números de WhatsApp.</h1>
+    <p class="lead">Como o motor decide qual número liga, quando ele descansa e o que fazer para manter o pool inteiro saudável.</p>
+  </div>
+</section>
+
+<section class="page-content">
+  <div class="wrap sticky-wrap">
+    <div class="sticky-left">
+      <span class="kicker">Neste guia</span>
+      <h2 class="h2" style="font-size:22px">O que você vai encontrar aqui.</h2>
+      <p>Um resumo prático de como o pool de números funciona por dentro, para configurar com confiança.</p>
+      <nav class="res-nav" aria-label="Sumário">
+        <a class="res-link active" href="#g1"><em>01</em>O que é o pool</a>
+        <a class="res-link" href="#g2"><em>02</em>Cooldown entre chamadas</a>
+        <a class="res-link" href="#g3"><em>03</em>Limite diário</a>
+        <a class="res-link" href="#g4"><em>04</em>Janelas de disponibilidade</a>
+        <a class="res-link" href="#g5"><em>05</em>Rotação automática</a>
+      </nav>
+    </div>
+
+    <div>
+      <article class="feat-block legal-section" id="g1">
+        <span class="fb-tag">01 · Conceito</span>
+        <h3>O que é o pool de números</h3>
+        <p>O pool é o conjunto de números de WhatsApp conectados ao ZapLiga para fazer chamadas de voz. Em vez de um único número discando para todos os leads, o motor distribui as chamadas entre vários números, respeitando o limite de cada um.</p>
+        <div class="feat-visual">
+          <div class="num-row">
+            <span class="nr-phone">+55 11 98•••-2214</span>
+            <div class="nr-meta"><div class="nr-bar"><i style="--v:64%"></i></div><span class="nr-note">148 / 230 chamadas hoje</span></div>
+            <span class="nr-tag t-ok">disponível</span>
+          </div>
+          <div class="num-row">
+            <span class="nr-phone">+55 21 97•••-8830</span>
+            <div class="nr-meta"><div class="nr-bar warn"><i style="--v:87%"></i></div><span class="nr-note">cooldown ativo · libera em 04:12</span></div>
+            <span class="nr-tag t-cd">em cooldown</span>
+          </div>
+        </div>
+      </article>
+
+      <article class="feat-block legal-section" id="g2">
+        <span class="fb-tag">02 · Cooldown</span>
+        <h3>Cooldown entre chamadas</h3>
+        <p>Cooldown é o intervalo mínimo que um número espera entre uma chamada e outra. Ele existe para simular um padrão humano de uso, em vez de disparos em sequência que chamam atenção do WhatsApp.</p>
+        <p>Você define o cooldown por número no painel. Quanto mais novo o número, maior deve ser esse intervalo. Veja recomendações completas no <a href="boas-praticas-anti-bloqueio.html">guia de boas práticas anti-bloqueio</a>.</p>
+      </article>
+
+      <article class="feat-block legal-section" id="g3">
+        <span class="fb-tag">03 · Limite diário</span>
+        <h3>Limite diário</h3>
+        <p>Cada número tem um teto de chamadas por dia. Ao atingir o limite, o motor pausa esse número automaticamente até o próximo ciclo, sem afetar os demais números do pool.</p>
+        <div class="feat-visual">
+          <div class="num-row">
+            <span class="nr-phone">+55 11 96•••-5529</span>
+            <div class="nr-meta"><div class="nr-bar off"><i style="--v:100%"></i></div><span class="nr-note">teto diário atingido · volta amanhã 08:00</span></div>
+            <span class="nr-tag t-off">limite diário</span>
+          </div>
+        </div>
+      </article>
+
+      <article class="feat-block legal-section" id="g4">
+        <span class="fb-tag">04 · Disponibilidade</span>
+        <h3>Janelas de disponibilidade</h3>
+        <p>Defina os horários em que cada número pode discar, por exemplo, das 9h às 12h e das 14h às 19h. Fora dessas janelas, o número fica em espera, mesmo com chamadas pendentes na fila.</p>
+      </article>
+
+      <article class="feat-block legal-section" id="g5">
+        <span class="fb-tag">05 · Rotação</span>
+        <h3>Rotação automática</h3>
+        <p>A cada nova chamada, o motor escolhe o número mais saudável disponível no momento, considerando cooldown, limite diário e taxa de atendimento recente. Você não precisa escolher manualmente qual número vai discar.</p>
+        <p>Acompanhe a saúde de cada número em tempo real no painel, seção Desempenho por número.</p>
+      </article>
+    </div>
+  </div>
+</section>
+
+<section class="page-cta">
+  <div class="wrap">
+    <div class="reveal">
+      <h2>Pronto para montar o seu pool?</h2>
+      <p>Agende uma demonstração e veja o motor escolhendo números em tempo real.</p>
+      <div class="cta-btns">
+        <a href="index.html#cta" class="btn btn-primary">Agendar demonstração</a>
+        <a href="boas-praticas-anti-bloqueio.html" class="btn btn-ghost on-dark">Ver boas práticas</a>
+      </div>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap">
+    <div class="foot-grid">
+      <div class="foot-brand">
+        <a href="index.html" class="logo" aria-label="ZapLiga">
+          <span class="logo-ic" aria-hidden="true">
+            <svg width="19" height="19" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2a10 10 0 0 0-8.5 15.3L2 22l4.9-1.4A10 10 0 1 0 12 2zm5.5 14.2c-.24.66-1.36 1.26-1.9 1.3-.5.06-1.13.09-1.83-.12a16 16 0 0 1-1.66-.61c-2.93-1.26-4.84-4.2-4.99-4.4-.14-.19-1.2-1.6-1.2-3.05s.76-2.16 1.03-2.46c.27-.3.6-.37.8-.37h.57c.18 0 .43-.07.67.51.24.6.83 2.03.9 2.17.07.15.12.32.02.51-.1.2-.15.32-.3.5-.15.19-.31.42-.45.56-.15.15-.3.31-.14.6.17.3.76 1.25 1.63 2.02 1.12 1 2.07 1.3 2.36 1.45.3.15.46.13.63-.07.17-.2.73-.85.93-1.15.2-.3.39-.24.66-.14.27.1 1.7.8 2 .95.29.15.48.22.55.34.07.13.07.73-.18 1.38z"/></svg>
+          </span>
+          Zap<span>Liga</span>
+        </a>
+        <p>O discador automático que liga para a sua fila de leads 100% pelo WhatsApp. Sem VoIP, sem linha telefônica, só conversa.</p>
+      </div>
+      <div class="foot-col">
+        <h4>Produto</h4>
+        <a href="index.html#whatsapp">Por que WhatsApp</a>
+        <a href="index.html#como-funciona">Como funciona</a>
+        <a href="index.html#recursos">Recursos</a>
+        <a href="index.html#painel">Painel</a>
+      </div>
+      <div class="foot-col">
+        <h4>Conteúdo</h4>
+        <a href="index.html#faq">FAQ</a>
+        <a href="guia-pool-numeros.html">Guia do pool de números</a>
+        <a href="boas-praticas-anti-bloqueio.html">Boas práticas anti-bloqueio</a>
+        <a href="central-de-ajuda.html">Central de ajuda</a>
+      </div>
+      <div class="foot-col">
+        <h4>Empresa</h4>
+        <a href="sobre.html">Sobre</a>
+        <a href="carreiras.html">Carreiras</a>
+        <a href="contato.html">Contato</a>
+      </div>
+      <div class="foot-col">
+        <h4>Legal</h4>
+        <a href="termos-de-uso.html">Termos de uso</a>
+        <a href="privacidade.html">Privacidade</a>
+        <a href="lgpd.html">LGPD</a>
+      </div>
+    </div>
+    <div class="foot-bottom">
+      <span>© 2026 ZapLiga Tecnologia Ltda. Feito para times que vivem de conversa.</span>
+      <span class="status"><span class="live-dot"></span> todos os sistemas operacionais</span>
+    </div>
+  </div>
+</footer>
+
+<script src="pages.js"></script>
+</body>
+</html>

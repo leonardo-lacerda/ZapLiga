@@ -3,10 +3,13 @@ import { access, readdir } from 'node:fs/promises';
 const rootFiles = new Set([
   '.dockerignore', '.env.example', '.gitignore',
   'docker-compose.yml', 'package.json', 'package-lock.json', 'README.md',
-  'index.html', 'script.js', 'styles.css',
+  'index.html', 'script.js', 'pages.js', 'styles.css',
+  'boas-praticas-anti-bloqueio.html', 'carreiras.html', 'central-de-ajuda.html',
+  'contato.html', 'guia-pool-numeros.html', 'lgpd.html', 'privacidade.html',
+  'sobre.html', 'termos-de-uso.html',
 ]);
 const entries = await readdir('.');
-const unexpected = entries.filter((entry) => !rootFiles.has(entry) && entry !== 'apps' && entry !== 'node_modules' && entry !== 'scripts' && entry !== 'docs' && entry !== 'services' && entry !== 'backups' && entry !== '.git');
+const unexpected = entries.filter((entry) => !rootFiles.has(entry) && entry !== 'apps' && entry !== 'node_modules' && entry !== 'scripts' && entry !== 'docs' && entry !== 'services' && entry !== 'backups' && entry !== 'Nova pasta' && entry !== '.git');
 if (unexpected.length) throw new Error(`Arquivos inesperados na raiz: ${unexpected.join(', ')}`);
 
 for (const path of ['apps/api/src', 'apps/web/src']) {
