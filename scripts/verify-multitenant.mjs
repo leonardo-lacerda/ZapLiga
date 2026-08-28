@@ -6,6 +6,8 @@ const adminPassword = process.env.SMOKE_ADMIN_PASSWORD ?? 'ZapCall-Smoke-2026!';
 const legacyTenantId = process.env.SMOKE_LEGACY_TENANT_ID ?? 'tenant-legado';
 const slug = `smoke-${Date.now()}`;
 let temporaryTenantId;
+const temporaryTenantIds = [];
+const temporaryUserIds = [];
 
 const assert = (condition, message) => {
   if (!condition) throw new Error(message);
@@ -27,13 +29,17 @@ const cookieFrom = (response) => {
 };
 
 const cleanup = async () => {
-  if (!temporaryTenantId) return;
+  if (temporaryTenantId) temporaryTenantIds.push(temporaryTenantId);
+  if (!temporaryTenantIds.length && !temporaryUserIds.length) return;
   const pool = new pg.Pool({ connectionString: process.env.DATABASE_URL ?? 'postgres://zapcall:zapcall@localhost:5432/zapcall' });
   try {
-    for (const table of ['calls', 'sdr_pauses', 'audit_logs', 'invitations', 'tenant_memberships', 'websocket_tickets', 'dialer_settings', 'sdrs', 'whatsapp_numbers', 'leads']) {
-      await pool.query(`DELETE FROM ${table} WHERE tenant_id = $1`, [temporaryTenantId]);
+    for (const tenantId of new Set(temporaryTenantIds)) {
+      for (const table of ['calls', 'sdr_pauses', 'audit_logs', 'invitations', 'tenant_memberships', 'websocket_tickets', 'dialer_settings', 'sdrs', 'whatsapp_numbers', 'leads']) {
+        await pool.query(`DELETE FROM ${table} WHERE tenant_id = $1`, [tenantId]);
+      }
+      await pool.query('DELETE FROM tenants WHERE id = $1', [tenantId]);
     }
-    await pool.query('DELETE FROM tenants WHERE id = $1', [temporaryTenantId]);
+    for (const userId of temporaryUserIds) await pool.query('DELETE FROM users WHERE id = $1', [userId]);
   } finally {
     await pool.end();
   }
@@ -50,6 +56,19 @@ try {
 
   const me = await request('/api/auth/me', { headers: auth });
   assert(me.response.ok && me.body?.user?.platformRole === 'super_admin', 'me não identificou o Admin supremo');
+
+  const registrationEmail = `organizer-${Date.now()}@zapliga-smoke.local`;
+  const registration = await request('/api/auth/register', { method: 'POST', body: JSON.stringify({ name: 'Organizador Smoke', email: registrationEmail, password: 'OrganizerSmoke2026', companyName: 'Empresa Smoke Organizer', companySlug: `empresa-smoke-${Date.now()}` }) });
+  assert(registration.response.status === 201 && registration.body?.accessToken && registration.body?.user?.platformRole === 'user' && registration.body?.tenant?.role === 'leader', `cadastro de organizador falhou: ${registration.response.status}`);
+  temporaryTenantIds.push(registration.body.tenant.id);
+  temporaryUserIds.push(registration.body.user.id);
+  const organizerAuth = { authorization: `Bearer ${registration.body.accessToken}` };
+  const organizerMe = await request('/api/auth/me', { headers: organizerAuth });
+  assert(organizerMe.response.ok && organizerMe.body?.tenants?.some((tenant) => tenant.id === registration.body.tenant.id && tenant.role === 'leader'), 'organizador não recebeu membership leader');
+  const sdrInvite = await request(`/api/tenants/${registration.body.tenant.id}/invitations`, { method: 'POST', headers: organizerAuth, body: JSON.stringify({ email: `sdr-${Date.now()}@zapliga-smoke.local`, role: 'sdr' }) });
+  assert(sdrInvite.response.status === 201 && sdrInvite.body?.role === 'sdr', `organizador não conseguiu convidar SDR: ${sdrInvite.response.status}`);
+  const roleInjection = await request('/api/auth/register', { method: 'POST', body: JSON.stringify({ name: 'Role Injection', email: `role-${Date.now()}@zapliga-smoke.local`, password: 'OrganizerSmoke2026', companyName: 'Role Injection', role: 'sdr' }) });
+  assert(roleInjection.response.status === 400, `cadastro com papel SDR deveria ser rejeitado: ${roleInjection.response.status}`);
 
   const explicit = await request(`/api/tenants/${legacyTenantId}/leads`, { headers: { ...auth, 'x-tenant-id': legacyTenantId } });
   assert(explicit.response.ok, `rota explícita de leads falhou: ${explicit.response.status}`);

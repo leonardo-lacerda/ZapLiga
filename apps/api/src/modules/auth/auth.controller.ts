@@ -2,6 +2,7 @@ import { Body, Controller, Get, Post, Req, Res, UseGuards } from '@nestjs/common
 import { Request, Response } from 'express';
 import { AuthGuard, CurrentUser, Roles, RolesGuard, TenantMembershipGuard } from './auth.guards';
 import { LoginDto } from './dto/login.dto';
+import { RegisterOrganizerDto } from './dto/register-organizer.dto';
 import { AuthService } from './auth.service';
 
 @Controller('/api/auth')
@@ -11,6 +12,13 @@ export class AuthController {
   @Post('/login')
   async login(@Body() body: LoginDto, @Req() request: Request, @Res({ passthrough: true }) response: Response) {
     const result = await this.auth.login(body.email, body.password, request);
+    this.auth.setRefreshCookie(response, result._refreshToken);
+    return this.auth.publicResponse(result);
+  }
+
+  @Post('/register')
+  async register(@Body() body: RegisterOrganizerDto, @Req() request: Request, @Res({ passthrough: true }) response: Response) {
+    const result = await this.auth.registerOrganizer(body, request);
     this.auth.setRefreshCookie(response, result._refreshToken);
     return this.auth.publicResponse(result);
   }

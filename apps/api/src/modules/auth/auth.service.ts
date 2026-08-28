@@ -1,4 +1,4 @@
-import { HttpException, HttpStatus, Injectable, UnauthorizedException } from '@nestjs/common';
+import { ConflictException, HttpException, HttpStatus, Injectable, UnauthorizedException } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { randomBytes, randomUUID, createHash } from 'node:crypto';
 import { Request, Response } from 'express';
@@ -7,6 +7,7 @@ import { AuditService } from '../audit/audit.service';
 import { UsersService } from '../users/users.service';
 import { publicUser, normalizeEmail } from '../users/users.utils';
 import { RedisService } from '../../infrastructure/redis/redis.service';
+import { slugifyTenant } from '../tenants/tenants.service';
 
 export const REFRESH_COOKIE = 'zapcall_refresh';
 
@@ -38,6 +39,35 @@ export class AuthService {
     const session = await this.createSession(user.id, request);
     await this.audit.record({ actorUserId: user.id, action: 'auth.login_success', entityType: 'user', entityId: user.id, ...requestMeta(request) });
     return this.authResponse(user, session.refreshToken, session.id, session.expiresAt, request);
+  }
+
+  async registerOrganizer(input: { name: string; email: string; password: string; companyName: string; companySlug?: string }, request?: Request) {
+    const name = input.name.trim();
+    const email = normalizeEmail(input.email);
+    const companyName = input.companyName.trim();
+    const companySlug = slugifyTenant(input.companySlug?.trim() || companyName);
+    if (!companySlug) throw new ConflictException('Informe um nome válido para a empresa');
+    const passwordHash = await this.users.hashPassword(input.password);
+    let created: { user: any; tenant: any };
+    try {
+      created = await this.db.transaction(async (client) => {
+        const existing = await client.query('SELECT 1 FROM users WHERE lower(email) = lower($1) LIMIT 1', [email]);
+        if (existing.rows[0]) throw new ConflictException('Este e-mail já possui uma conta');
+        const userId = randomUUID();
+        const tenantId = randomUUID();
+        const tenant = (await client.query('INSERT INTO tenants (id, name, slug) VALUES ($1, $2, $3) RETURNING *', [tenantId, companyName, companySlug])).rows[0];
+        const user = (await client.query("INSERT INTO users (id, name, email, password_hash, platform_role) VALUES ($1, $2, $3, $4, 'user') RETURNING *", [userId, name, email, passwordHash])).rows[0];
+        await client.query("INSERT INTO tenant_memberships (id, tenant_id, user_id, role) VALUES ($1, $2, $3, 'leader')", [randomUUID(), tenantId, userId]);
+        return { user, tenant };
+      });
+    } catch (error) {
+      if ((error as any)?.code === '23505') throw new ConflictException('O e-mail ou slug da empresa já está cadastrado');
+      throw error;
+    }
+    const session = await this.createSession(created.user.id, request);
+    await this.audit.record({ actorUserId: created.user.id, tenantId: created.tenant.id, action: 'organizer.registered', entityType: 'tenant', entityId: created.tenant.id, ...requestMeta(request) });
+    const auth = await this.authResponse(created.user, session.refreshToken, session.id, session.expiresAt, request);
+    return { ...auth, tenant: { id: created.tenant.id, name: created.tenant.name, slug: created.tenant.slug, role: 'leader' } };
   }
 
   async createSessionForUser(userId: string, request?: Request) {

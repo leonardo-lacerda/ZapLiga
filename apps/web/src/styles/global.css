@@ -58,6 +58,9 @@ p { color: var(--muted); }
 .auth-form label { display: grid; gap: 7px; color: var(--text); font-size: 12px; font-weight: 600; }
 .auth-form input { width: 100%; min-height: 42px; padding: 9px 11px; border: 1px solid var(--border); border-radius: 7px; background: var(--surface); color: var(--text); }
 .auth-form button { justify-content: center; min-height: 42px; }
+.auth-links { display: flex; justify-content: center; gap: 6px; margin-top: 18px; color: var(--muted); font-size: 12px; }
+.auth-links a { color: var(--primary); font-weight: 700; text-decoration: none; }
+.field-hint { color: var(--subtle); font-weight: 400; }
 @media (max-width: 520px) { .auth-brand { position: static; margin-bottom: 24px; } .auth-shell { display: block; padding-top: 28px; } .auth-card { margin: 0 auto; } }
 
 .trial-banner { min-height: 40px; padding: 6px 16px; background: var(--primary); color: white; display: flex; align-items: center; justify-content: space-between; gap: 16px; font-size: 12px; }

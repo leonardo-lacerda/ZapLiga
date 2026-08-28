@@ -31,6 +31,8 @@ O Compose usa `WAXUM_API_KEY` para autenticar a API do Waxum; altere o valor no 
 
 ## API
 
+O cadastro publico do ZapLiga fica em `/app/cadastro` (tambem disponivel em `/cadastro`) e cria somente a empresa e seu organizador (`leader`). Nao existe cadastro publico para SDR ou Admin; o organizador convida SDRs pelo painel.
+
 As rotas operacionais legadas continuam descritas no plano do MVP. A fundação de autenticação agora inclui login, refresh token rotativo, empresas, memberships, convites e auditoria.
 
 Para criar o primeiro Admin supremo em desenvolvimento:

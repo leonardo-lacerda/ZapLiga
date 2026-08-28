@@ -15,6 +15,7 @@ import { AccessPage } from '../features/access/AccessPage';
 import { AdminPage } from '../features/access/AdminPage';
 import { AcceptInvitePage } from '../features/auth/AcceptInvitePage';
 import { LoginPage } from '../features/auth/LoginPage';
+import { RegisterPage } from '../features/auth/RegisterPage';
 import { useAuth } from '../features/auth/AuthProvider';
 
 const pauseFromSdr = (sdr: AnyRow) => sdr?.current_pause_id && sdr.pause_started_at ? ({ id: sdr.current_pause_id, pause_type: sdr.pause_type ?? 'post_call', started_at: sdr.pause_started_at, call_id: sdr.pause_call_id, lead_name: sdr.pause_lead_name, lead_phone: sdr.pause_lead_phone, call_started_at: sdr.pause_call_started_at, pause_elapsed_seconds: sdr.pause_elapsed_seconds }) : null;
@@ -161,11 +162,12 @@ function AuthenticatedApp() {
 }
 
 export default function App() {
-  const { session, loading, login, acceptInvite } = useAuth();
+  const { session, loading, login, register, acceptInvite } = useAuth();
   if (loading) return <div className="auth-shell"><p>Carregando sessão...</p></div>;
   if (!session) {
     const match = window.location.pathname.match(/^\/(?:app\/)?invite\/([^/]+)/);
-    return match ? <AcceptInvitePage token={decodeURIComponent(match[1])} acceptInvite={acceptInvite} /> : <LoginPage login={login} />;
+    const isRegister = /^\/(?:app\/)?cadastro\/?$/.test(window.location.pathname);
+    return match ? <AcceptInvitePage token={decodeURIComponent(match[1])} acceptInvite={acceptInvite} /> : isRegister ? <RegisterPage register={register} /> : <LoginPage login={login} />;
   }
   return <AuthenticatedApp />;
 }

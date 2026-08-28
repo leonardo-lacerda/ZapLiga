@@ -18,6 +18,7 @@ type AuthContextValue = {
   session: AuthSession | null;
   loading: boolean;
   login: (email: string, password: string) => Promise<void>;
+  register: (input: { name: string; email: string; password: string; companyName: string; companySlug?: string }) => Promise<void>;
   acceptInvite: (token: string, name: string, password: string) => Promise<void>;
   logout: () => Promise<void>;
   activeTenantId: string;
@@ -57,6 +58,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     applySession(await json('/api/auth/me', undefined, false));
   }, [applySession]);
 
+  const register = useCallback(async (input: { name: string; email: string; password: string; companyName: string; companySlug?: string }) => {
+    const result = await json('/api/auth/register', { method: 'POST', body: JSON.stringify(input) });
+    setAccessToken(result.accessToken);
+    applySession(await json('/api/auth/me', undefined, false));
+  }, [applySession]);
+
   const acceptInvite = useCallback(async (token: string, name: string, password: string) => {
     const result = await json(`/api/invitations/${encodeURIComponent(token)}/accept`, { method: 'POST', body: JSON.stringify({ name, password }) });
     setAccessToken(result.accessToken);
@@ -69,7 +76,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const setTenant = useCallback((tenantId: string) => { setActiveTenantId(tenantId); setActiveTenantState(tenantId); }, []);
 
-  const value = useMemo(() => ({ session, loading, login, acceptInvite, logout, activeTenantId, setTenant, reload }), [session, loading, login, acceptInvite, logout, activeTenantId, setTenant, reload]);
+  const value = useMemo(() => ({ session, loading, login, register, acceptInvite, logout, activeTenantId, setTenant, reload }), [session, loading, login, register, acceptInvite, logout, activeTenantId, setTenant, reload]);
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }
 

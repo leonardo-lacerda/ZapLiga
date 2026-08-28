@@ -2,14 +2,14 @@ import { ConflictException, Injectable, NotFoundException } from '@nestjs/common
 import { randomUUID } from 'node:crypto';
 import { DatabaseService } from '../../database/database.service';
 
-const slugify = (value: string) => value.normalize('NFKD').replace(/[\u0300-\u036f]/g, '').toLowerCase().trim().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 80);
+export const slugifyTenant = (value: string) => value.normalize('NFKD').replace(/[\u0300-\u036f]/g, '').toLowerCase().trim().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 80);
 
 @Injectable()
 export class TenantsService {
   constructor(private readonly db: DatabaseService) {}
 
   async create(name: string, slug?: string) {
-    const normalizedSlug = slugify(slug || name);
+    const normalizedSlug = slugifyTenant(slug || name);
     if (!normalizedSlug) throw new ConflictException('Informe um nome ou slug válido para a empresa');
     try {
       const result = await this.db.query('INSERT INTO tenants (id, name, slug) VALUES ($1, $2, $3) RETURNING *', [randomUUID(), name.trim(), normalizedSlug]);
