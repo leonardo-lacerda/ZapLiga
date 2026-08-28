@@ -1,6 +1,6 @@
 import { Inject, Injectable, Logger, OnModuleDestroy, OnModuleInit, forwardRef } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
-import WebSocket from 'ws';
+import WebSocket, { RawData } from 'ws';
 import { DatabaseService } from '../../database/database.service';
 import { RedisService } from '../../infrastructure/redis/redis.service';
 import { WaxumClient } from '../../infrastructure/waxum/waxum.client';
@@ -15,10 +15,18 @@ type CallResource = {
   media?: WebSocket;
   browser?: WebSocket;
   mediaActive: boolean;
+  mediaOpen?: boolean;
   answerSignalReceived?: boolean;
   answerAbort?: AbortController;
+  answerWatcherStarted?: boolean;
+  sdrNotified?: boolean;
+  waxumCallId?: string;
   answerEventLogged?: boolean;
   browserAudioLogged?: boolean;
+  ringTimeout?: NodeJS.Timeout;
+  browserMessageHandler?: (data: RawData, isBinary: boolean) => void;
+  browserCloseHandler?: () => void;
+  browserErrorHandler?: () => void;
   finishing?: boolean;
 };
 
@@ -332,6 +340,18 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
     for (const row of result.rows) await this.finishCall(row.id, 'cancelled', 'sdr_offer_timeout', true);
   }
 
+  private notifyAnswered(callId: string, sdrId: string, row: any, resource: CallResource) {
+    if (resource.sdrNotified || resource.finishing) return;
+    resource.sdrNotified = true;
+    this.gateway.sendToSdr(sdrId, {
+      type: 'call_started', callId,
+      lead: { id: row.lead_id, name: row.name, phone: row.phone },
+      number: { id: row.number_id, label: row.label },
+      expiresAt: row.offer_expires_at,
+    });
+    if (resource.media?.readyState === WebSocket.OPEN) this.gateway.sendToSdr(sdrId, { type: 'media_open', callId });
+  }
+
   async attachMedia(callId: string, sdrId: string, browser: WebSocket) {
     const resource = this.active.get(callId);
     if (!resource || resource.sdrId !== sdrId) return browser.close(1008, 'call not assigned');
@@ -339,35 +359,58 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
     if (!call.rows[0]) return browser.close(1008, 'call not found');
     resource.browser = browser;
     resource.answerAbort = new AbortController();
-    let timeout: NodeJS.Timeout | undefined;
     try {
       const settings = await this.getSettings();
-      void this.waxum.waitForOutgoingAnswer(call.rows[0].waxum_session_id, callId, resource.answerAbort.signal)
-        .then((answered) => {
-          if (!answered || resource.finishing || resource.mediaActive) return;
-          resource.answerSignalReceived = true;
-          this.log('Atendimento sinalizado pelo WhatsApp; aguardando mídia pós-atendimento', 'info', callId);
-        })
-        .catch((error) => {
-          if ((error as Error & { name?: string }).name === 'AbortError' || resource.finishing) return;
-          this.log(`Não foi possível confirmar o atendimento: ${String(error)}`, 'warning', callId);
-        });
-      const media = this.waxum.openMedia(call.rows[0].waxum_session_id, call.rows[0].phone);
+      let recipient: string;
+      try {
+        recipient = await this.waxum.resolveCallRecipient(call.rows[0].waxum_session_id, call.rows[0].phone);
+        this.log(`Destinatario VoIP resolvido para ${recipient}`, 'info', callId);
+      } catch (error) {
+        const message = String((error as Error).message ?? error);
+        this.log(`Waxum nao conseguiu preparar o destinatario: ${message}`, 'error', callId);
+        await this.finishCall(callId, 'failed', `waxum_recipient_error:${message}`);
+        return;
+      }
+      if (resource.finishing) return;
+      const media = this.waxum.openMedia(call.rows[0].waxum_session_id, recipient);
       resource.media = media;
-      timeout = setTimeout(() => {
-        if (!resource.mediaActive) void this.finishCall(callId, 'no_answer', 'ring_timeout').catch((error) => this.logger.error(`Could not finish timed out call ${callId}: ${String(error)}`));
+      resource.ringTimeout = setTimeout(() => {
+        if (!resource.mediaActive && !resource.answerSignalReceived) void this.finishCall(callId, 'no_answer', 'ring_timeout').catch((error) => this.logger.error(`Could not finish timed out call ${callId}: ${String(error)}`));
       }, Number(settings.ring_timeout_seconds) * 1000);
 
       media.on('open', () => {
-        if (resource.mediaActive && browser.readyState === WebSocket.OPEN) {
+        resource.mediaOpen = true;
+        if (browser.readyState === WebSocket.OPEN) {
           try { browser.send(JSON.stringify({ type: 'media_open' })); } catch { /* browser disconnected */ }
         }
       });
       media.on('message', (data, isBinary) => {
-        // Waxum sends a textual `call_started` metadata event on its media
-        // socket. Keep that internal event away from the SDR control socket;
-        // the API already sent the normalized call_started payload above.
-        if (!isBinary) return;
+        // Waxum generates its own call id. It is different from the ZapCall
+        // database id and is the id carried by WhatsApp Accept events.
+        if (!isBinary) {
+          try {
+            const metadata = JSON.parse(data.toString()) as { type?: string; call_id?: string };
+            if (metadata.type === 'call_started' && metadata.call_id && !resource.answerWatcherStarted) {
+              resource.waxumCallId = metadata.call_id;
+              resource.answerWatcherStarted = true;
+              this.log(`Chamada Waxum iniciada (${metadata.call_id}); aguardando atendimento`, 'info', callId);
+              void this.waxum.waitForOutgoingAnswer(call.rows[0].waxum_session_id, metadata.call_id, resource.answerAbort!.signal)
+                .then((answered) => {
+                  if (!answered || resource.finishing || resource.mediaActive) return;
+                  resource.answerSignalReceived = true;
+                  this.notifyAnswered(callId, sdrId, call.rows[0], resource);
+                  this.log('Atendimento sinalizado pelo WhatsApp; aguardando mídia pós-atendimento', 'info', callId);
+                })
+                .catch((error) => {
+                  if ((error as Error & { name?: string }).name === 'AbortError' || resource.finishing) return;
+                  this.log(`Não foi possível confirmar o atendimento: ${String(error)}`, 'warning', callId);
+                });
+            }
+          } catch (error) {
+            this.log(`Metadados de mídia inválidos: ${String(error)}`, 'warning', callId);
+          }
+          return;
+        }
         // Um frame de mídia pode chegar enquanto o WhatsApp ainda está tocando.
         // Ele não confirma atendimento e não deve chegar ao SDR.
         if (!resource.answerSignalReceived) {
@@ -377,17 +420,16 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
           }
           return;
         }
+        const firstActiveFrame = !resource.mediaActive;
         resource.mediaActive = true;
-        void this.db.query(`UPDATE calls SET status = 'media_active', started_at = COALESCE(started_at, now()), connected_at = now() WHERE id = $1`, [callId]);
-        this.gateway.sendToSdr(sdrId, {
-          type: 'call_started', callId,
-          lead: { id: call.rows[0].lead_id, name: call.rows[0].name, phone: call.rows[0].phone },
-          number: { id: call.rows[0].number_id, label: call.rows[0].label },
-          expiresAt: call.rows[0].offer_expires_at,
-        });
-        this.gateway.sendToSdr(sdrId, { type: 'media_active', callId });
-        if (resource.media?.readyState === WebSocket.OPEN) this.gateway.sendToSdr(sdrId, { type: 'media_open', callId });
-        this.log('Cliente aceitou a chamada; áudio liberado para o SDR', 'info', callId);
+        if (firstActiveFrame) {
+          if (resource.ringTimeout) clearTimeout(resource.ringTimeout);
+          resource.ringTimeout = undefined;
+          void this.db.query(`UPDATE calls SET status = 'media_active', started_at = COALESCE(started_at, now()), connected_at = now() WHERE id = $1`, [callId]);
+          this.notifyAnswered(callId, sdrId, call.rows[0], resource);
+          this.gateway.sendToSdr(sdrId, { type: 'media_active', callId });
+          this.log('Cliente aceitou a chamada; áudio liberado para o SDR', 'info', callId);
+        }
         if (browser.readyState === WebSocket.OPEN) {
           try { browser.send(data, { binary: true }); } catch { /* browser disconnected */ }
         }
@@ -421,32 +463,38 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
         void this.finishCall(callId, resource.mediaActive ? 'completed' : 'no_answer', resource.mediaActive ? 'remote_hangup' : closeReason)
           .catch((error) => this.logger.error(`Could not finish closed call ${callId}: ${String(error)}`));
       });
-      browser.on('message', (data, isBinary) => {
-        if (isBinary && !resource.mediaActive) return;
+      resource.browserMessageHandler = (data, isBinary) => {
+        // Start forwarding microphone PCM as soon as Waxum accepts the media
+        // socket. Waiting for the first inbound frame can deadlock the bridge:
+        // some calls only produce inbound audio after receiving an uplink
+        // frame from the browser.
+        if (isBinary && !resource.mediaOpen) return;
         if (isBinary && !resource.browserAudioLogged && Buffer.byteLength(data as any) > 0) {
           resource.browserAudioLogged = true;
           this.log(`Audio do microfone recebido (${Buffer.byteLength(data as any)} bytes)`, 'info', callId);
         }
         if (isBinary && media.readyState === WebSocket.OPEN) media.send(data, { binary: true });
-      });
-      browser.on('close', () => {
+      };
+      resource.browserCloseHandler = () => {
         void this.finishCall(callId, resource.mediaActive ? 'failed' : 'cancelled', 'browser_disconnected')
           .catch((error) => this.logger.error(`Could not finish browser-disconnected call ${callId}: ${String(error)}`));
-      });
-      browser.on('error', () => {
+      };
+      resource.browserErrorHandler = () => {
         void this.finishCall(callId, 'failed', 'browser_error')
           .catch((error) => this.logger.error(`Could not finish browser-error call ${callId}: ${String(error)}`));
-      });
+      };
+      browser.on('message', resource.browserMessageHandler);
+      browser.on('close', resource.browserCloseHandler);
+      browser.on('error', resource.browserErrorHandler);
     } catch (error) {
       await this.finishCall(callId, 'failed', String(error));
-    } finally {
-      if (timeout) setTimeout(() => clearTimeout(timeout), 0);
     }
   }
 
   async recordOutcome(callId: string, outcome: string) {
     const resource = this.active.get(callId);
-    if (resource) return this.finishCall(callId, ['microphone_denied', 'browser_error'].includes(outcome) ? 'failed' : 'completed', outcome);
+    const isBrowserAudioFailure = outcome === 'microphone_denied' || outcome === 'browser_error' || outcome.startsWith('audio_error:');
+    if (resource) return this.finishCall(callId, isBrowserAudioFailure ? 'failed' : 'completed', outcome);
     await this.db.query(`UPDATE calls SET outcome = $1 WHERE id = $2`, [outcome, callId]);
     return { ok: true };
   }
@@ -465,6 +513,10 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
       if (resource) {
         resource.finishing = true;
         resource.answerAbort?.abort();
+        if (resource.ringTimeout) clearTimeout(resource.ringTimeout);
+        if (resource.browser && resource.browserMessageHandler) resource.browser.off('message', resource.browserMessageHandler);
+        if (resource.browser && resource.browserCloseHandler) resource.browser.off('close', resource.browserCloseHandler);
+        if (resource.browser && resource.browserErrorHandler) resource.browser.off('error', resource.browserErrorHandler);
         if (resource.media && resource.media.readyState === WebSocket.OPEN) resource.media.close();
       }
       const call = await this.db.query(`SELECT c.*, s.id AS sdr_id, n.id AS number_id, l.attempts, ds.max_attempts_per_lead, ds.retry_delay_minutes FROM calls c JOIN sdrs s ON s.id = c.sdr_id JOIN whatsapp_numbers n ON n.id = c.number_id JOIN leads l ON l.id = c.lead_id CROSS JOIN dialer_settings ds WHERE c.id = $1`, [callId]);

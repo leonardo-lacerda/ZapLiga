@@ -33,6 +33,7 @@ const callReasonNames: Record<string, string> = {
 export const formatCallReason = (value: unknown) => {
   const reason = String(value ?? '').trim();
   if (!reason) return '—';
+  if (reason.startsWith('waxum_recipient_error:')) return `Destinatário não preparado pelo Waxum: ${reason.slice('waxum_recipient_error:'.length)}`;
   if (reason.startsWith('waxum_error:')) return `Erro no Waxum: ${reason.slice('waxum_error:'.length)}`;
   if (reason.startsWith('waxum_http_error:')) return `Waxum recusou a conexão (HTTP ${reason.slice('waxum_http_error:'.length)})`;
   if (reason.startsWith('waxum_closed:')) {

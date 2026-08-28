@@ -2,44 +2,105 @@ export class AudioBridge {
   private context?: AudioContext;
   private stream?: MediaStream;
   private processor?: ScriptProcessorNode;
+  private starting?: Promise<void>;
+  private socket?: WebSocket;
+  private stopRequested = false;
   private nextPlayTime = 0;
   private captureSampleRate = 16000;
   private sourceBuffer: number[] = [];
   private sourceCursor = 0;
+  private outgoingSamples: number[] = [];
+  private readonly frameSamples = 960;
+
+  /**
+   * Opens the browser microphone from an explicit user action. Preparing it
+   * when the SDR becomes available avoids discovering a missing device only
+   * after WhatsApp has already answered.
+   */
+  async prepare() {
+    if (this.context && this.processor && this.stream) {
+      if (this.context.state === 'suspended') await this.context.resume();
+      return;
+    }
+    if (this.starting) return this.starting;
+
+    this.stopRequested = false;
+    this.starting = this.startInternal().finally(() => { this.starting = undefined; });
+    return this.starting;
+  }
 
   async start(socket: WebSocket) {
-    this.stream = await navigator.mediaDevices.getUserMedia({
-      audio: {
-        channelCount: 1,
-        sampleRate: { ideal: 16000 },
-        echoCancellation: true,
-        noiseSuppression: true,
-        autoGainControl: true,
-      },
-    });
-    this.context = new AudioContext({ sampleRate: 16000 });
-    this.captureSampleRate = this.context.sampleRate;
+    this.socket = socket;
+    await this.prepare();
+    if (this.context?.state === 'suspended') await this.context.resume();
+  }
+
+  private async startInternal() {
+    let stream: MediaStream;
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          channelCount: { ideal: 1 },
+          sampleRate: { ideal: 16000 },
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
+        },
+      });
+    } catch (error) {
+      const name = error instanceof DOMException ? error.name : 'AudioError';
+      const detail = error instanceof Error ? error.message : String(error);
+      let inputs = 0;
+      try { inputs = (await navigator.mediaDevices.enumerateDevices()).filter((device) => device.kind === 'audioinput').length; } catch { /* diagnóstico opcional */ }
+      throw new Error(`${name}: ${detail}. Microfones detectados: ${inputs}. Verifique o dispositivo de entrada do Windows.`);
+    }
+    if (this.stopRequested) {
+      stream.getTracks().forEach((track) => track.stop());
+      return;
+    }
+
+    const context = new AudioContext({ sampleRate: 16000 });
+    await context.resume();
+    if (this.stopRequested) {
+      stream.getTracks().forEach((track) => track.stop());
+      await context.close();
+      return;
+    }
+
+    this.stream = stream;
+    this.context = context;
+    this.captureSampleRate = context.sampleRate;
     this.sourceBuffer = [];
     this.sourceCursor = 0;
-    const source = this.context.createMediaStreamSource(this.stream);
-    this.processor = this.context.createScriptProcessor(4096, 1, 1);
+    this.outgoingSamples = [];
+    const source = context.createMediaStreamSource(stream);
+    // ScriptProcessor is retained for this MVP, but its output is reframed
+    // below. Waxum/whatsapp-rust accepts exactly 960 mono samples per frame.
+    this.processor = context.createScriptProcessor(1024, 1, 1);
     this.processor.onaudioprocess = (event) => {
-      if (socket.readyState !== WebSocket.OPEN) return;
       const input = event.inputBuffer.getChannelData(0);
       const pcm = this.resampleToPcm16(input);
-      if (pcm.length > 0) socket.send(pcm.buffer);
+      this.outgoingSamples.push(...pcm);
+      while (this.outgoingSamples.length >= this.frameSamples) {
+        const frame = new Int16Array(this.outgoingSamples.splice(0, this.frameSamples));
+        if (this.socket?.readyState === WebSocket.OPEN) this.socket.send(frame.buffer);
+      }
     };
-    const silent = this.context.createGain();
+    const silent = context.createGain();
     silent.gain.value = 0;
     source.connect(this.processor);
     this.processor.connect(silent);
-    silent.connect(this.context.destination);
+    silent.connect(context.destination);
   }
 
   play(raw: ArrayBuffer) {
     if (!this.context || raw.byteLength < 2) return;
-    const pcm = new Int16Array(raw);
-    const buffer = this.context.createBuffer(1, pcm.length, 16000);
+    if (this.context.state === 'suspended') void this.context.resume();
+    const sampleCount = Math.floor(raw.byteLength / 2);
+    const pcm = new Int16Array(sampleCount);
+    const view = new DataView(raw);
+    for (let i = 0; i < sampleCount; i++) pcm[i] = view.getInt16(i * 2, true);
+    const buffer = this.context.createBuffer(1, sampleCount, 16000);
     const channel = buffer.getChannelData(0);
     for (let i = 0; i < pcm.length; i++) channel[i] = pcm[i] / 0x7fff;
     const source = this.context.createBufferSource();
@@ -51,16 +112,19 @@ export class AudioBridge {
   }
 
   async stop() {
+    this.stopRequested = true;
     this.processor?.disconnect();
     this.stream?.getTracks().forEach((track) => track.stop());
     await this.context?.close();
     this.processor = undefined;
     this.stream = undefined;
     this.context = undefined;
+    this.socket = undefined;
     this.nextPlayTime = 0;
     this.captureSampleRate = 16000;
     this.sourceBuffer = [];
     this.sourceCursor = 0;
+    this.outgoingSamples = [];
   }
 
   /** Waxum expects mono PCM16 at exactly 16 kHz. Browsers may run the
@@ -104,5 +168,3 @@ export class AudioBridge {
     return pcm;
   }
 }
-
-
