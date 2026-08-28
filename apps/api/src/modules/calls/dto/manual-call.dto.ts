@@ -1,5 +1,7 @@
-import { IsString, MinLength } from 'class-validator';
+import { IsOptional, IsString, MinLength } from 'class-validator';
 
 export class ManualCallDto {
-  @IsString() @MinLength(1) leadId!: string;
+  @IsOptional() @IsString() @MinLength(1) leadId?: string;
+  @IsOptional() @IsString() @MinLength(3) phone?: string;
+  @IsOptional() @IsString() name?: string;
 }

@@ -70,6 +70,8 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
 
   getLogs(tenantId = legacyTenantId()) { return this.logs.filter((entry) => entry.tenantId === tenantId).slice(0, 100); }
 
+  private normalizePhone(value: unknown) { return String(value ?? '').replace(/\D/g, ''); }
+
   async getSdrState(sdrId: string, tenantId = legacyTenantId()) {
     const result = await this.db.query(`
       SELECT s.id, s.name, s.available, s.state, s.current_pause_id,
@@ -181,11 +183,12 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
       this.db.query(`SELECT * FROM leads WHERE tenant_id = $1 AND id = $2 AND do_not_call = false AND status IN ('queued', 'retry_wait') AND attempts < $3`, [tenantId, leadId, settings.max_attempts_per_lead]),
     ]);
     const sdr = sdrs.rows.find((row: any) => this.gateway.isConnected(row.id));
-    const number = numbers.rows[0];
     const lead = leads.rows[0];
     if (!lead) throw new Error('Este lead não está elegível para uma chamada manual');
     if (!sdr) throw new Error('Nenhum SDR conectado e disponível');
-    if (!number) throw new Error('Nenhum número WhatsApp conectado e fora do cooldown');
+    if (!numbers.rows.length) throw new Error('Nenhum número WhatsApp conectado e fora do cooldown');
+    const number = numbers.rows.find((row: any) => this.normalizePhone(row.phone) !== this.normalizePhone(lead.phone));
+    if (!number) throw new Error('O número de destino é a própria linha de WhatsApp conectada. Ligue para um número diferente.');
 
     const token = randomUUID();
     const reserved = await this.redis.reserve({
@@ -196,6 +199,67 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
     });
     if (!reserved) throw new Error('Os limites de chamadas estão ocupados; tente novamente em instantes');
     return this.startReservedCall(sdr, number, lead, settings, token, 'manual', tenantId);
+  }
+
+  async manualCallWithInput(input: { leadId?: string; phone?: string; name?: string }, tenantId = legacyTenantId(), sdrUserId?: string) {
+    const settings = await this.getSettings(tenantId);
+    let lead: any;
+    const leadId = String(input.leadId ?? '').trim();
+    if (leadId) {
+      const result = await this.db.query(`SELECT * FROM leads WHERE tenant_id = $1 AND id = $2 AND do_not_call = false AND status IN ('queued', 'retry_wait') AND attempts < $3`, [tenantId, leadId, settings.max_attempts_per_lead]);
+      lead = result.rows[0];
+    } else {
+      const phone = String(input.phone ?? '').replace(/\D/g, '');
+      if (!phone) throw new Error('Informe um telefone valido');
+      const existing = await this.db.query('SELECT * FROM leads WHERE tenant_id = $1 AND phone = $2 LIMIT 1', [tenantId, phone]);
+      if (existing.rows[0]) {
+        lead = existing.rows[0];
+        const activeCall = await this.db.query(`SELECT 1 FROM calls WHERE tenant_id = $1 AND lead_id = $2 AND status IN ('reserved', 'dialing', 'media_active') LIMIT 1`, [tenantId, lead.id]);
+        if (lead.do_not_call || activeCall.rows[0]) lead = undefined;
+      } else {
+        lead = await this.db.transaction(async (client) => {
+          await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [`lead-quota:${tenantId}`]);
+          const [tenant, count] = await Promise.all([
+            client.query('SELECT max_leads FROM tenants WHERE id = $1', [tenantId]),
+            client.query('SELECT count(*)::int AS count FROM leads WHERE tenant_id = $1', [tenantId]),
+          ]);
+          if (Number(count.rows[0]?.count ?? 0) >= Number(tenant.rows[0]?.max_leads ?? 100000)) throw new Error('O limite de leads desta empresa foi atingido');
+          return (await client.query('INSERT INTO leads (id, tenant_id, name, phone) VALUES ($1, $2, $3, $4) RETURNING *', [randomUUID(), tenantId, String(input.name ?? '').trim() || 'Ligacao manual', phone])).rows[0];
+        });
+      }
+    }
+    if (!lead) throw new Error('Este contato nao esta elegivel para uma chamada manual');
+
+    const [sdrs, numbers] = await Promise.all([
+      this.db.query(`
+        SELECT s.* FROM sdrs s
+        WHERE s.tenant_id = $1 AND s.available = true AND s.state = 'available'
+          AND ($2::text IS NULL OR s.user_id = $2)
+          AND NOT EXISTS (
+            SELECT 1 FROM calls c
+            WHERE c.tenant_id = s.tenant_id AND c.sdr_id = s.id AND c.status IN ('reserved', 'dialing', 'media_active')
+          )
+        ORDER BY s.last_assigned_at NULLS FIRST, s.last_assigned_at ASC
+      `, [tenantId, sdrUserId ?? null]),
+      this.db.query(`SELECT * FROM whatsapp_numbers WHERE status IN ('connected', 'online', 'ready', 'authenticated') ORDER BY last_call_ended_at NULLS FIRST, last_call_ended_at ASC`),
+    ]);
+    const sdr = sdrs.rows.find((row: any) => this.gateway.isConnected(row.id));
+    if (!sdr) throw new Error('Nenhum SDR conectado e disponivel');
+    if (!numbers.rows.length) throw new Error('Nenhum numero WhatsApp conectado');
+    // WhatsApp cannot place a call to the line's own number (self-call closes
+    // the media socket immediately), so never pair a lead with its own line.
+    const number = numbers.rows.find((row: any) => this.normalizePhone(row.phone) !== this.normalizePhone(lead.phone));
+    if (!number) throw new Error('O numero de destino e a propria linha de WhatsApp conectada. Ligue para um numero diferente.');
+
+    const token = randomUUID();
+    const reserved = await this.redis.reserve({
+      tenantId, token, globalMax: settings.global_max_concurrent_calls,
+      numberMax: number.max_concurrent_calls, numberId: number.id,
+      leadId: lead.id, sdrId: sdr.id,
+      ttlMs: (Number(settings.ring_timeout_seconds) + 60) * 1000,
+    });
+    if (!reserved) throw new Error('Os limites de chamadas estao ocupados; tente novamente em instantes');
+    return { ...(await this.startReservedCall(sdr, number, lead, settings, token, 'manual', tenantId)), leadId: lead.id };
   }
 
   async getStatus(tenantId = legacyTenantId()) {
@@ -303,11 +367,13 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
   }
 
   async getSdrStatus(tenantId: string, userId: string) {
-    const [settings, sdr] = await Promise.all([
+    const [settings, sdr, pool] = await Promise.all([
       this.getSettings(tenantId),
       this.db.query(`SELECT id, name, available, state, current_pause_id FROM sdrs WHERE tenant_id = $1 AND user_id = $2 LIMIT 1`, [tenantId, userId]),
+      // Shared number pool: expose only whether a line is available, never how many.
+      this.db.query(`SELECT EXISTS (SELECT 1 FROM whatsapp_numbers WHERE status IN ('connected', 'online', 'ready', 'authenticated')) AS ready`),
     ]);
-    return { running: Boolean(settings?.running), sdr: sdr.rows[0] ?? null };
+    return { running: Boolean(settings?.running), sdr: sdr.rows[0] ?? null, line_ready: Boolean(pool.rows[0]?.ready) };
   }
 
   async tick(tenantId = legacyTenantId()) {
@@ -342,8 +408,11 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
       for (let i = 0; i < Math.min(sdrs.rows.length, numbers.rows.length, leads.rows.length); i++) {
         const sdr = sdrs.rows[i];
         if (!this.gateway.isConnected(sdr.id)) continue;
-        const number = numbers.rows[i % numbers.rows.length];
         const lead = leads.rows[i];
+        // Skip self-calls: WhatsApp closes the media immediately when the line
+        // dials its own number. Pick another connected line if available.
+        const number = numbers.rows.find((row: any) => this.normalizePhone(row.phone) !== this.normalizePhone(lead.phone));
+        if (!number) continue;
         const token = randomUUID();
         const reserved = await this.redis.reserve({
           tenantId, token, globalMax: settings.global_max_concurrent_calls,
@@ -401,7 +470,7 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
       this.log(`Discando ${source} para ${lead.name} via ${number.label}`, 'info', callId, tenantId);
       const browser = this.gateway.getSocket(sdr.id);
       this.gateway.sendToSdr(sdr.id, { type: 'call_reserved', callId, lead: { id: lead.id, name: lead.name, phone: lead.phone }, number: { id: number.id, label: number.label } });
-      if (browser) void this.attachMedia(callId, sdr.id, browser);
+      if (browser) void this.attachMedia(callId, sdr.id, browser, tenantId);
       return { callId, status: 'reserved' };
     } catch (error) {
       await this.redis.release({ tenantId, token, numberId: number.id, leadId: lead.id, sdrId: sdr.id });
@@ -588,7 +657,8 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
     const resource = this.active.get(callId);
     if (resource && (resource.tenantId !== tenantId || (sdrId && resource.sdrId !== sdrId))) throw new Error('Chamada não pertence ao SDR autenticado');
     const isBrowserAudioFailure = outcome === 'microphone_denied' || outcome === 'browser_error' || outcome.startsWith('audio_error:');
-    if (resource) return this.finishCall(callId, isBrowserAudioFailure ? 'failed' : 'completed', outcome);
+    const isCancel = outcome === 'sdr_cancelled';
+    if (resource) return this.finishCall(callId, isBrowserAudioFailure ? 'failed' : isCancel ? 'cancelled' : 'completed', outcome);
     const ownership = sdrId ? ' AND sdr_id = $4' : '';
     await this.db.query(`UPDATE calls SET outcome = $1 WHERE tenant_id = $2 AND id = $3${ownership}`, sdrId ? [outcome, tenantId, callId, sdrId] : [outcome, tenantId, callId]);
     return { ok: true };

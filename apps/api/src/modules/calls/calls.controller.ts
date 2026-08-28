@@ -20,11 +20,17 @@ export class CallsController {
   }
 
   @Post(['/api/calls/manual', '/api/tenants/:tenantId/calls/manual'])
+  @Roles('leader', 'super_admin', 'sdr')
   async manual(@Body() body: ManualCallDto, @CurrentTenant() tenantId: string, @CurrentUser() user: any) {
     const leadId = String(body.leadId ?? '').trim();
-    if (!leadId) throw new BadRequestException('leadId é obrigatório');
-    try { const result = await this.dialer.manualCall(leadId, tenantId); await this.audit.record({ actorUserId: user.id, tenantId, action: 'call.manual_started', entityType: 'lead', entityId: leadId, metadata: result }); return result; }
-    catch (error) { throw new BadRequestException(String((error as Error).message ?? error)); }
+    const phone = String(body.phone ?? '').trim();
+    if (!leadId && !phone) throw new BadRequestException('Informe um leadId ou telefone');
+    const sdrUserId = user.platformRole === 'super_admin' || user.tenantMembership?.role !== 'sdr' ? undefined : user.id;
+    try {
+      const result = await this.dialer.manualCallWithInput({ leadId: leadId || undefined, phone: phone || undefined, name: body.name }, tenantId, sdrUserId);
+      await this.audit.record({ actorUserId: user.id, tenantId, action: 'call.manual_started', entityType: 'lead', entityId: leadId || String(result.leadId ?? ''), metadata: result });
+      return result;
+    } catch (error) { throw new BadRequestException(String((error as Error).message ?? error)); }
   }
 
   @Post(['/api/calls/:id/outcome', '/api/tenants/:tenantId/calls/:id/outcome'])

@@ -76,14 +76,12 @@ export class SdrGateway implements OnModuleDestroy {
           if (membership.rows[0]?.role !== 'sdr') throw new Error('Somente usuários SDR podem abrir o canal operacional');
         }
         const name = identity.name.trim();
-        const requestedId = String(message.sdrId ?? '').trim();
         const existing = await this.db.query(`
           SELECT id, name, available, state, current_pause_id
           FROM sdrs
-          WHERE tenant_id = $1 AND (user_id = $2 OR (id = $3 AND user_id IS NULL AND name = $4) OR (name = $4 AND user_id IS NULL))
-          ORDER BY (user_id = $2) DESC
+          WHERE tenant_id = $1 AND user_id = $2
           LIMIT 1
-        `, [identity.tenantId, identity.userId, requestedId, name]);
+        `, [identity.tenantId, identity.userId]);
         const sdr = existing.rows[0] ?? (await this.db.query(`
           INSERT INTO sdrs (id, tenant_id, user_id, name, session_id) VALUES ($1, $2, $3, $4, $5)
           RETURNING id, name, available, state, current_pause_id
