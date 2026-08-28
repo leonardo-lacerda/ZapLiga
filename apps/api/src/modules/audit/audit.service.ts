@@ -24,17 +24,26 @@ export class AuditService {
     `, [randomUUID(), input.actorUserId ?? null, input.tenantId ?? null, input.action, input.entityType ?? null, input.entityId ?? null, JSON.stringify(input.metadata ?? {}), input.ipAddress ?? null, input.userAgent?.slice(0, 500) ?? null]);
   }
 
-  async list(limit = 100, offset = 0) {
+  async list(limit = 100, offset = 0, filters: { tenantId?: string; actorId?: string; action?: string; search?: string } = {}) {
     const safeLimit = Math.min(500, Math.max(1, Math.floor(Number(limit) || 100)));
     const safeOffset = Math.max(0, Math.floor(Number(offset) || 0));
+    const values: unknown[] = [];
+    const where: string[] = [];
+    if (filters.tenantId?.trim()) { values.push(filters.tenantId.trim()); where.push(`a.tenant_id = $${values.length}`); }
+    if (filters.actorId?.trim()) { values.push(filters.actorId.trim()); where.push(`a.actor_user_id = $${values.length}`); }
+    if (filters.action?.trim()) { values.push(filters.action.trim()); where.push(`a.action = $${values.length}`); }
+    if (filters.search?.trim()) { values.push(`%${filters.search.trim()}%`); where.push(`(a.action ILIKE $${values.length} OR a.entity_type ILIKE $${values.length} OR a.entity_id ILIKE $${values.length} OR u.name ILIKE $${values.length} OR u.email ILIKE $${values.length} OR t.name ILIKE $${values.length})`); }
+    const clause = where.length ? `WHERE ${where.join(' AND ')}` : '';
+    values.push(safeLimit, safeOffset);
     return (await this.db.query(`
       SELECT a.*, u.name AS actor_name, u.email AS actor_email, t.name AS tenant_name
       FROM audit_logs a
       LEFT JOIN users u ON u.id = a.actor_user_id
       LEFT JOIN tenants t ON t.id = a.tenant_id
+      ${clause}
       ORDER BY a.created_at DESC
-      LIMIT $1 OFFSET $2
-    `, [safeLimit, safeOffset])).rows;
+      LIMIT $${values.length - 1} OFFSET $${values.length}
+    `, values)).rows;
   }
 
   async listForTenant(tenantId: string, limit = 100, offset = 0) {

@@ -6,6 +6,7 @@ import type { AnyRow } from '../../types';
 import { LiveTimer } from '../../components/LiveTimer';
 
 type SdrsPageProps = { tenantId: string; sdrs: AnyRow[] };
+type InvitationLink = { id: string; url: string; name: string; email: string; expiresAt: string };
 
 const isPending = (invitation: AnyRow) => !invitation.accepted_at && !invitation.revoked_at && new Date(invitation.expires_at).getTime() > Date.now();
 
@@ -16,6 +17,9 @@ export function SdrsPage({ tenantId, sdrs }: SdrsPageProps) {
   const [email, setEmail] = useState('');
   const [message, setMessage] = useState('');
   const [busy, setBusy] = useState(false);
+  const [linkBusyId, setLinkBusyId] = useState('');
+  const [invitationLink, setInvitationLink] = useState<InvitationLink | null>(null);
+  const [copied, setCopied] = useState(false);
 
   const load = useCallback(async () => {
     if (!tenantId) return;
@@ -38,9 +42,11 @@ export function SdrsPage({ tenantId, sdrs }: SdrsPageProps) {
     event.preventDefault(); setBusy(true); setMessage('');
     try {
       const result = await json(`/api/tenants/${tenantId}/sdrs/invitations`, { method: 'POST', body: JSON.stringify({ name, email }) });
-      setName(''); setEmail('');
-      setMessage(result.invitationUrl ? `Convite criado. Link: ${result.invitationUrl}` : 'Convite criado e enviado por e-mail.');
       await load();
+      if (!result.invitationUrl) throw new Error('O link de cadastro não foi gerado.');
+      setInvitationLink({ id: result.id, url: result.invitationUrl, name: result.name ?? name, email: result.email ?? email, expiresAt: result.expiresAt });
+      setCopied(false); setName(''); setEmail('');
+      setMessage('Link de cadastro criado. Copie e envie ao SDR.');
     } catch (error) {
       setMessage(error instanceof Error ? error.message : String(error));
     } finally { setBusy(false); }
@@ -53,18 +59,40 @@ export function SdrsPage({ tenantId, sdrs }: SdrsPageProps) {
     } catch (error) { setMessage(error instanceof Error ? error.message : String(error)); }
   };
 
-  const resend = async (invitationId: string) => {
+  const generateNewLink = async (invitationId: string) => {
+    setLinkBusyId(invitationId); setMessage('');
     try {
       const result = await json(`/api/tenants/${tenantId}/sdrs/invitations/${invitationId}/resend`, { method: 'POST' });
-      setMessage(result.invitationUrl ? `Convite reenviado. Link: ${result.invitationUrl}` : 'Convite reenviado por e-mail.');
       await load();
+      if (!result.invitationUrl) throw new Error('O novo link de cadastro não foi gerado.');
+      setInvitationLink({ id: result.id, url: result.invitationUrl, name: result.name ?? 'SDR', email: result.email ?? '', expiresAt: result.expiresAt });
+      setCopied(false); setMessage('Novo link criado. O link anterior deixou de funcionar.');
     } catch (error) { setMessage(error instanceof Error ? error.message : String(error)); }
+    finally { setLinkBusyId(''); }
+  };
+
+  const copyInvitationLink = async () => {
+    if (!invitationLink) return;
+    try {
+      if (navigator.clipboard?.writeText) await navigator.clipboard.writeText(invitationLink.url);
+      else {
+        const textarea = document.createElement('textarea');
+        textarea.value = invitationLink.url; textarea.setAttribute('readonly', ''); textarea.style.position = 'fixed'; textarea.style.opacity = '0';
+        document.body.appendChild(textarea);
+        try {
+          textarea.select();
+          if (!document.execCommand('copy')) throw new Error('cópia bloqueada');
+        } finally { document.body.removeChild(textarea); }
+      }
+      setCopied(true); setMessage('Link copiado. Agora envie-o ao SDR.');
+    } catch { setMessage('Não foi possível copiar automaticamente. Selecione o link e copie manualmente.'); }
   };
 
   const revoke = async (invitationId: string) => {
     if (!window.confirm('Revogar este convite? O link deixará de funcionar.')) return;
     try {
       await json(`/api/tenants/${tenantId}/invitations/${invitationId}`, { method: 'DELETE' });
+      if (invitationLink?.id === invitationId) { setInvitationLink(null); setCopied(false); }
       await load();
     } catch (error) { setMessage(error instanceof Error ? error.message : String(error)); }
   };
@@ -76,13 +104,18 @@ export function SdrsPage({ tenantId, sdrs }: SdrsPageProps) {
     <div className="page-heading"><div><span className="eyebrow">EQUIPE</span><h1>SDRs</h1><p>Cadastre, convide e acompanhe os operadores da sua empresa.</p></div><Badge tone="info">{members.length} SDRs</Badge></div>
     {message && <div className="alert" role="alert"><span>{message}</span><button type="button" onClick={() => setMessage('')} aria-label="Fechar mensagem">×</button></div>}
     <Panel>
-      <SectionHeader title="Cadastrar SDR" description="Informe os dados do operador. Ele receberá um convite e criará a própria senha." />
+      <SectionHeader title="Cadastrar SDR" description="Informe os dados do operador e gere um link para ele criar a própria senha." />
       <form className="form-row" onSubmit={invite}>
         <input placeholder="Nome completo" value={name} onChange={(event) => setName(event.target.value)} minLength={2} required />
         <input type="email" placeholder="email@empresa.com" value={email} onChange={(event) => setEmail(event.target.value)} required />
-        <Button icon="plus" disabled={busy}>{busy ? 'Enviando...' : 'Enviar convite'}</Button>
+        <Button icon="plus" disabled={busy}>{busy ? 'Gerando link...' : 'Gerar link de cadastro'}</Button>
       </form>
-      <p className="form-hint">O acesso será criado como SDR. O organizador não define a senha e não pode criar Admin ou líder por este formulário.</p>
+      <p className="form-hint">O e-mail identifica o SDR, mas nenhuma mensagem será enviada. Compartilhe o link gerado diretamente com ele.</p>
+      {invitationLink && <div className="invitation-link-card" role="status" aria-live="polite">
+        <div className="invitation-link-heading"><div><strong>Link de cadastro pronto</strong><p>Envie este link ao SDR para ele finalizar o cadastro.</p></div><Badge tone="success">Manual</Badge></div>
+        <div className="invitation-link-field"><input value={invitationLink.url} readOnly aria-label="Link de cadastro do SDR" onFocus={(event) => event.currentTarget.select()} /><Button type="button" variant="secondary" icon={copied ? 'check' : 'copy'} onClick={() => void copyInvitationLink()}>{copied ? 'Copiado' : 'Copiar link'}</Button></div>
+        <small className="invitation-link-expiry">Válido até {new Date(invitationLink.expiresAt).toLocaleString('pt-BR')}</small>
+      </div>}
     </Panel>
     <Panel>
       <SectionHeader title="SDRs cadastrados" description="Status de acesso e situação operacional dos operadores." />
@@ -109,7 +142,7 @@ export function SdrsPage({ tenantId, sdrs }: SdrsPageProps) {
           return <div className="access-row" key={invitation.id}>
             <div><strong>{invitation.invitee_name || 'SDR'}</strong><small>{invitation.invited_email} · expira em {new Date(invitation.expires_at).toLocaleString('pt-BR')}</small></div>
             <Badge tone={invitation.accepted_at ? 'success' : pending ? 'info' : 'warning'}>{state}</Badge>
-            {pending ? <><Button variant="ghost" onClick={() => void resend(invitation.id)}>Reenviar</Button><Button variant="ghost" onClick={() => void revoke(invitation.id)}>Revogar</Button></> : <span />}
+            {pending ? <><Button variant="ghost" disabled={linkBusyId === invitation.id} onClick={() => void generateNewLink(invitation.id)}>{linkBusyId === invitation.id ? 'Gerando...' : 'Gerar novo link'}</Button><Button variant="ghost" onClick={() => void revoke(invitation.id)}>Revogar</Button></> : <span />}
           </div>;
         })}
         {!invitations.length && <p className="text-muted">Nenhum convite enviado.</p>}

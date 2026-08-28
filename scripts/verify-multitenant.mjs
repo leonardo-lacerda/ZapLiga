@@ -66,7 +66,7 @@ try {
   const organizerMe = await request('/api/auth/me', { headers: organizerAuth });
   assert(organizerMe.response.ok && organizerMe.body?.tenants?.some((tenant) => tenant.id === registration.body.tenant.id && tenant.role === 'leader'), 'organizador não recebeu membership leader');
   const sdrInvite = await request(`/api/tenants/${registration.body.tenant.id}/sdrs/invitations`, { method: 'POST', headers: organizerAuth, body: JSON.stringify({ name: 'SDR Smoke', email: `sdr-${Date.now()}@zapliga-smoke.local` }) });
-  assert(sdrInvite.response.status === 201 && sdrInvite.body?.role === 'sdr', `organizador não conseguiu convidar SDR: ${sdrInvite.response.status}`);
+  assert(sdrInvite.response.status === 201 && sdrInvite.body?.role === 'sdr' && sdrInvite.body?.invitationUrl, `organizador não conseguiu gerar link de SDR: ${sdrInvite.response.status}`);
   const invitationToken = String(sdrInvite.body?.invitationUrl ?? '').split('/').pop();
   const invitationPreview = await request(`/api/invitations/${encodeURIComponent(invitationToken)}`);
   assert(invitationPreview.response.ok && invitationPreview.body?.role === 'sdr' && invitationPreview.body?.name === 'SDR Smoke', 'convite de SDR não foi criado corretamente');
@@ -80,9 +80,12 @@ try {
   const activatedSdr = await request(`/api/tenants/${registration.body.tenant.id}/members/${acceptedSdr.body.user.id}/status`, { method: 'PATCH', headers: organizerAuth, body: JSON.stringify({ status: 'active' }) });
   assert(activatedSdr.response.ok, `organizador não conseguiu reativar SDR: ${activatedSdr.response.status}`);
   const pendingSdr = await request(`/api/tenants/${registration.body.tenant.id}/sdrs/invitations`, { method: 'POST', headers: organizerAuth, body: JSON.stringify({ name: 'SDR Reenvio', email: `resend-${Date.now()}@zapliga-smoke.local` }) });
-  assert(pendingSdr.response.status === 201, `não foi possível criar convite para teste de reenvio: ${pendingSdr.response.status}`);
+  assert(pendingSdr.response.status === 201 && pendingSdr.body?.invitationUrl, `não foi possível criar convite para teste de novo link: ${pendingSdr.response.status}`);
+  const previousInvitationToken = String(pendingSdr.body.invitationUrl).split('/').pop();
   const resentSdr = await request(`/api/tenants/${registration.body.tenant.id}/sdrs/invitations/${pendingSdr.body.id}/resend`, { method: 'POST', headers: organizerAuth });
-  assert(resentSdr.response.status === 201 && resentSdr.body?.role === 'sdr' && resentSdr.body.id !== pendingSdr.body.id, `reenvio de convite SDR falhou: ${resentSdr.response.status}`);
+  assert(resentSdr.response.status === 201 && resentSdr.body?.role === 'sdr' && resentSdr.body?.invitationUrl && resentSdr.body.id !== pendingSdr.body.id, `geração de novo link SDR falhou: ${resentSdr.response.status}`);
+  const previousInvitation = await request(`/api/invitations/${encodeURIComponent(previousInvitationToken)}`);
+  assert(previousInvitation.response.status === 404, 'o link anterior continuou válido após gerar um novo');
   const revokedSdr = await request(`/api/tenants/${registration.body.tenant.id}/invitations/${resentSdr.body.id}`, { method: 'DELETE', headers: organizerAuth });
   assert(revokedSdr.response.ok, `revogação de convite SDR falhou: ${revokedSdr.response.status}`);
   const roleInjection = await request('/api/auth/register', { method: 'POST', body: JSON.stringify({ name: 'Role Injection', email: `role-${Date.now()}@zapliga-smoke.local`, password: 'OrganizerSmoke2026', companyName: 'Role Injection', role: 'sdr' }) });

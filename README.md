@@ -46,6 +46,12 @@ npm --workspace apps/api run bootstrap:admin
 
 O fluxo de login usa `POST /api/auth/login`, `POST /api/auth/refresh`, `POST /api/auth/logout` e `GET /api/auth/me`. Empresas são criadas por `super_admin`; líderes e SDRs entram por convite. Os endpoints operacionais são escopados por `tenant_id`; as rotas explícitas usam `/api/tenants/:tenantId/...` e aliases antigos exigem `x-tenant-id` compatível.
 
+## Convite de SDR por link
+
+Na página de SDR, o organizador informa o nome e o e-mail do operador e gera um link de cadastro. O link deve ser copiado e enviado manualmente ao SDR; nenhum e-mail automático é disparado por esse fluxo. O convite expira conforme `INVITATION_TTL_SECONDS` (48 horas por padrão), e gerar um novo link revoga o anterior.
+
+O `WEB_ORIGIN` deve apontar para o endereço público do painel para que o link funcione fora do ambiente local. SMTP continua sendo necessário apenas para os convites genéricos de líder usados na área de acesso.
+
 ## Limitações deliberadas do MVP
 
 - Sem gravação ou CRM no escopo atual; multi-tenant e autenticação fazem parte da base implementada.

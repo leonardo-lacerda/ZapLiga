@@ -22,6 +22,7 @@ type AuthContextValue = {
   acceptInvite: (token: string, name: string, password: string) => Promise<void>;
   logout: () => Promise<void>;
   activeTenantId: string;
+  selectTenant: (tenantId: string) => void;
   reload: () => Promise<void>;
 };
 
@@ -32,11 +33,21 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [activeTenantId, setActiveTenantState] = useState('');
   const [loading, setLoading] = useState(true);
 
+  const selectTenant = useCallback((tenantId: string) => {
+    if (!session?.tenants.some((tenant) => tenant.id === tenantId && tenant.status === 'active')) return;
+    setActiveTenantId(tenantId);
+    setActiveTenantState(tenantId);
+  }, [session]);
+
   const applySession = useCallback((next: AuthSession) => {
     setSession(next);
-    const available = next.tenants.find((tenant) => tenant.status === 'active');
-    if (available) { setActiveTenantId(available.id); setActiveTenantState(available.id); }
-    else { clearActiveTenantId(); setActiveTenantState(''); }
+    setActiveTenantState((current) => {
+      const available = next.tenants.find((tenant) => tenant.id === current && tenant.status === 'active')
+        ?? next.tenants.find((tenant) => tenant.status === 'active');
+      if (available) { setActiveTenantId(available.id); return available.id; }
+      clearActiveTenantId();
+      return '';
+    });
   }, []);
 
   const reload = useCallback(async () => {
@@ -73,7 +84,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     try { await json('/api/auth/logout', { method: 'POST' }, false); } finally { clearAccessToken(); clearActiveTenantId(); setActiveTenantState(''); setSession(null); }
   }, []);
 
-  const value = useMemo(() => ({ session, loading, login, register, acceptInvite, logout, activeTenantId, reload }), [session, loading, login, register, acceptInvite, logout, activeTenantId, reload]);
+  const value = useMemo(() => ({ session, loading, login, register, acceptInvite, logout, activeTenantId, selectTenant, reload }), [session, loading, login, register, acceptInvite, logout, activeTenantId, selectTenant, reload]);
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }
 

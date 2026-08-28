@@ -9,6 +9,7 @@ import { normalizeEmail } from '../users/users.utils';
 import { InvitationMailer } from './invitation-mailer';
 
 const hashToken = (token: string) => createHash('sha256').update(token).digest('hex');
+type InvitationDelivery = 'email' | 'manual_link';
 
 @Injectable()
 export class InvitationsService {
@@ -16,7 +17,7 @@ export class InvitationsService {
 
   constructor(private readonly db: DatabaseService, private readonly tenants: TenantsService, private readonly users: UsersService, private readonly memberships: MembershipsService, private readonly audit: AuditService, private readonly mailer: InvitationMailer) {}
 
-  async create(tenantId: string, invitedBy: string, email: string, role: MembershipRole, inviteeName?: string) {
+  async create(tenantId: string, invitedBy: string, email: string, role: MembershipRole, inviteeName?: string, delivery: InvitationDelivery = 'email') {
     const tenant = await this.tenants.requireById(tenantId);
     const normalizedEmail = normalizeEmail(email);
     const normalizedName = inviteeName?.trim() || null;
@@ -33,18 +34,20 @@ export class InvitationsService {
     await this.db.query(`INSERT INTO invitations (id, tenant_id, invited_email, invitee_name, role, token_hash, invited_by, expires_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`, [invitationId, tenantId, normalizedEmail, normalizedName, role, hashToken(token), invitedBy, expiresAt]);
     const origin = (process.env.WEB_ORIGIN ?? 'http://localhost:5173').split(',')[0].replace(/\/$/, '');
     const invitationUrl = `${origin}/app/invite/${encodeURIComponent(token)}`;
-    try {
-      await this.mailer.send({ email: normalizedEmail, tenantName: tenant.name, role, invitationUrl });
-    } catch (error) {
-      await this.db.query('UPDATE invitations SET revoked_at = now() WHERE id = $1 AND accepted_at IS NULL', [invitationId]);
-      throw error;
+    if (delivery === 'email') {
+      try {
+        await this.mailer.send({ email: normalizedEmail, tenantName: tenant.name, role, invitationUrl });
+      } catch (error) {
+        await this.db.query('UPDATE invitations SET revoked_at = now() WHERE id = $1 AND accepted_at IS NULL', [invitationId]);
+        throw error;
+      }
     }
-    await this.audit.record({ actorUserId: invitedBy, tenantId, action: role === 'sdr' ? 'sdr.invitation.created' : 'invitation.created', entityType: 'invitation', entityId: invitationId, metadata: { email: normalizedEmail, role } });
-    return { id: invitationId, tenantId, name: normalizedName, email: normalizedEmail, role, expiresAt, invitationUrl: process.env.NODE_ENV === 'production' ? undefined : invitationUrl };
+    await this.audit.record({ actorUserId: invitedBy, tenantId, action: role === 'sdr' ? 'sdr.invitation.created' : 'invitation.created', entityType: 'invitation', entityId: invitationId, metadata: { email: normalizedEmail, role, delivery } });
+    return { id: invitationId, tenantId, name: normalizedName, email: normalizedEmail, role, expiresAt, invitationUrl: delivery === 'manual_link' || process.env.NODE_ENV !== 'production' ? invitationUrl : undefined };
   }
 
   createSdrInvitation(tenantId: string, invitedBy: string, email: string, name: string) {
-    return this.create(tenantId, invitedBy, email, 'sdr', name);
+    return this.create(tenantId, invitedBy, email, 'sdr', name, 'manual_link');
   }
 
   async resendSdrInvitation(tenantId: string, invitationId: string, invitedBy: string) {
@@ -56,10 +59,10 @@ export class InvitationsService {
     `, [invitationId, tenantId]);
     const invitation = result.rows[0];
     if (!invitation) throw new NotFoundException('Convite não encontrado ou já encerrado');
-    if (invitation.role !== 'sdr') throw new ConflictException('Somente convites de SDR podem ser reenviados por esta página');
+    if (invitation.role !== 'sdr') throw new ConflictException('Somente convites de SDR podem gerar novo link por esta página');
     await this.revoke(tenantId, invitationId, invitedBy);
     const replacement = await this.createSdrInvitation(tenantId, invitedBy, invitation.invited_email, invitation.invitee_name ?? '');
-    await this.audit.record({ actorUserId: invitedBy, tenantId, action: 'sdr.invitation.resent', entityType: 'invitation', entityId: replacement.id, metadata: { replacedInvitationId: invitationId } });
+    await this.audit.record({ actorUserId: invitedBy, tenantId, action: 'sdr.invitation.resent', entityType: 'invitation', entityId: replacement.id, metadata: { replacedInvitationId: invitationId, delivery: 'manual_link' } });
     return replacement;
   }
 

@@ -9,7 +9,14 @@ export class AuditController {
   @Get('/api/admin/audit')
   @UseGuards(AuthGuard, RolesGuard)
   @Roles('super_admin')
-  list(@Query('limit') limit?: string, @Query('offset') offset?: string) { return this.audit.list(Number(limit), Number(offset)); }
+  list(
+    @Query('limit') limit?: string,
+    @Query('offset') offset?: string,
+    @Query('tenantId') tenantId?: string,
+    @Query('actorId') actorId?: string,
+    @Query('action') action?: string,
+    @Query('search') search?: string,
+  ) { return this.audit.list(Number(limit), Number(offset), { tenantId, actorId, action, search }); }
 
   @Get('/api/tenants/:tenantId/audit')
   @UseGuards(AuthGuard, TenantMembershipGuard, RolesGuard)
