@@ -1,0 +1,188 @@
+import { HttpException, HttpStatus, Injectable, UnauthorizedException } from '@nestjs/common';
+import { JwtService } from '@nestjs/jwt';
+import { randomBytes, randomUUID, createHash } from 'node:crypto';
+import { Request, Response } from 'express';
+import { DatabaseService } from '../../database/database.service';
+import { AuditService } from '../audit/audit.service';
+import { UsersService } from '../users/users.service';
+import { publicUser, normalizeEmail } from '../users/users.utils';
+import { RedisService } from '../../infrastructure/redis/redis.service';
+
+export const REFRESH_COOKIE = 'zapcall_refresh';
+
+const sha256 = (value: string) => createHash('sha256').update(value).digest('hex');
+const requestMeta = (request?: Request) => ({ ipAddress: request?.ip ?? null, userAgent: String(request?.headers['user-agent'] ?? '').slice(0, 500) || null });
+
+@Injectable()
+export class AuthService {
+  private readonly accessTtlSeconds = Math.max(60, Number(process.env.JWT_ACCESS_TTL_SECONDS ?? 900));
+  private readonly refreshTtlSeconds = Math.max(300, Number(process.env.REFRESH_TOKEN_TTL_SECONDS ?? 2592000));
+  constructor(private readonly db: DatabaseService, private readonly jwt: JwtService, private readonly users: UsersService, private readonly audit: AuditService, private readonly redis: RedisService) {}
+
+  async login(email: string, password: string, request?: Request) {
+    const normalizedEmail = normalizeEmail(email);
+    const attemptKey = `zapcall:security:login:${sha256(`${request?.ip ?? 'unknown'}:${normalizedEmail}`)}`;
+    const attempt = Number(await this.redis.client.get(attemptKey) ?? 0);
+    if (attempt >= 8) {
+      throw new HttpException('Muitas tentativas de login. Tente novamente em alguns minutos.', HttpStatus.TOO_MANY_REQUESTS);
+    }
+    const user = await this.users.findByEmail(normalizedEmail);
+    if (!user || user.status !== 'active' || !(await this.users.comparePassword(password, user.password_hash))) {
+      const nextAttempt = await this.redis.client.incr(attemptKey);
+      if (nextAttempt === 1) await this.redis.client.expire(attemptKey, 15 * 60);
+      await this.audit.record({ action: 'auth.login_failed', metadata: { email: normalizedEmail }, ...requestMeta(request) });
+      throw new UnauthorizedException('E-mail ou senha inválidos');
+    }
+    await this.redis.client.del(attemptKey);
+    await this.users.markLogin(user.id);
+    const session = await this.createSession(user.id, request);
+    await this.audit.record({ actorUserId: user.id, action: 'auth.login_success', entityType: 'user', entityId: user.id, ...requestMeta(request) });
+    return this.authResponse(user, session.refreshToken, session.id, session.expiresAt, request);
+  }
+
+  async createSessionForUser(userId: string, request?: Request) {
+    const user = await this.users.requireById(userId);
+    if (user.status !== 'active') throw new UnauthorizedException('Usuário bloqueado');
+    await this.users.markLogin(user.id);
+    const session = await this.createSession(user.id, request);
+    return this.authResponse(user, session.refreshToken, session.id, session.expiresAt, request);
+  }
+
+  async refresh(request: Request) {
+    const rawToken = this.readRefreshToken(request);
+    if (!rawToken) throw new UnauthorizedException('Refresh token ausente');
+    const tokenHash = sha256(rawToken);
+    const rotated = await this.db.transaction(async (client) => {
+      const result = await client.query(`
+        SELECT s.*, u.name, u.email, u.platform_role, u.status AS user_status, u.created_at AS user_created_at, u.last_login_at
+        FROM user_sessions s JOIN users u ON u.id = s.user_id
+        WHERE s.refresh_token_hash = $1
+        FOR UPDATE
+      `, [tokenHash]);
+      const current = result.rows[0];
+      if (!current) throw new UnauthorizedException('Refresh token inválido');
+      if (current.revoked_at || new Date(current.expires_at).getTime() <= Date.now()) {
+        await client.query('UPDATE user_sessions SET revoked_at = COALESCE(revoked_at, now()) WHERE family_id = $1 AND revoked_at IS NULL', [current.family_id]);
+        throw new UnauthorizedException('Refresh token expirado ou reutilizado');
+      }
+      if (current.user_status !== 'active') throw new UnauthorizedException('Usuário bloqueado');
+      const nextRawToken = randomBytes(48).toString('base64url');
+      const nextId = randomUUID();
+      const expiresAt = new Date(Date.now() + this.refreshTtlSeconds * 1000);
+      await client.query(`INSERT INTO user_sessions (id, user_id, family_id, refresh_token_hash, expires_at, ip_address, user_agent) VALUES ($1, $2, $3, $4, $5, $6, $7)`, [nextId, current.user_id, current.family_id, sha256(nextRawToken), expiresAt, requestMeta(request).ipAddress, requestMeta(request).userAgent]);
+      await client.query('UPDATE user_sessions SET revoked_at = now(), replaced_by_session_id = $1, last_used_at = now() WHERE id = $2', [nextId, current.id]);
+      return {
+        user: {
+          id: current.user_id,
+          name: current.name,
+          email: current.email,
+          platform_role: current.platform_role,
+          status: current.user_status,
+          created_at: current.user_created_at,
+          last_login_at: current.last_login_at,
+        },
+        refreshToken: nextRawToken,
+        id: nextId,
+        expiresAt,
+      };
+    });
+    const result = this.authResponse(rotated.user, rotated.refreshToken, rotated.id, rotated.expiresAt, request);
+    await this.audit.record({ actorUserId: rotated.user.id, action: 'auth.refresh', entityType: 'session', entityId: rotated.id, ...requestMeta(request) });
+    return result;
+  }
+
+  async logout(request: Request) {
+    const rawToken = this.readRefreshToken(request);
+    if (rawToken) await this.db.query('UPDATE user_sessions SET revoked_at = COALESCE(revoked_at, now()), last_used_at = now() WHERE refresh_token_hash = $1', [sha256(rawToken)]);
+    await this.audit.record({ action: 'auth.logout', ...requestMeta(request) });
+  }
+
+  async logoutAll(userId: string, request?: Request) {
+    await this.db.query('UPDATE user_sessions SET revoked_at = COALESCE(revoked_at, now()) WHERE user_id = $1 AND revoked_at IS NULL', [userId]);
+    await this.audit.record({ actorUserId: userId, action: 'auth.logout_all', entityType: 'user', entityId: userId, ...requestMeta(request) });
+  }
+
+  async createWebsocketTicket(userId: string, tenantId: string) {
+    const token = randomBytes(32).toString('base64url');
+    const expiresAt = new Date(Date.now() + 60_000);
+    await this.db.query(`
+      INSERT INTO websocket_tickets (id, token_hash, user_id, tenant_id, expires_at)
+      VALUES ($1, $2, $3, $4, $5)
+    `, [randomUUID(), sha256(token), userId, tenantId, expiresAt]);
+    return { ticket: token, expiresAt };
+  }
+
+  async consumeWebsocketTicket(token: string) {
+    return this.db.transaction(async (client) => {
+      const result = await client.query(`
+        SELECT wt.*, u.name, u.email, u.platform_role, u.status AS user_status
+        FROM websocket_tickets wt
+        JOIN users u ON u.id = wt.user_id
+        WHERE wt.token_hash = $1
+        FOR UPDATE
+      `, [sha256(token)]);
+      const ticket = result.rows[0];
+      if (!ticket || ticket.used_at || ticket.user_status !== 'active' || new Date(ticket.expires_at).getTime() <= Date.now()) return null;
+      await client.query('UPDATE websocket_tickets SET used_at = now() WHERE id = $1', [ticket.id]);
+      return { userId: ticket.user_id, tenantId: ticket.tenant_id, name: ticket.name, platformRole: ticket.platform_role };
+    });
+  }
+
+  async me(userId: string) {
+    const user = await this.users.requireById(userId);
+    if (user.status !== 'active') throw new UnauthorizedException('Usuário bloqueado');
+    const memberships = await this.db.query(`
+      SELECT t.id, t.name, t.slug, t.status, tm.role, tm.status AS membership_status
+      FROM tenants t
+      LEFT JOIN tenant_memberships tm ON tm.tenant_id = t.id AND tm.user_id = $1 AND tm.status = 'active'
+      WHERE t.status = 'active' AND ($2 = 'super_admin' OR tm.user_id IS NOT NULL)
+      ORDER BY t.name
+    `, [userId, user.platform_role]);
+    return { user: publicUser(user), tenants: memberships.rows };
+  }
+
+  verifyAccessToken(token: string) { return this.jwt.verifyAsync(token); }
+
+  setRefreshCookie(response: Response, token: string) {
+    response.cookie(REFRESH_COOKIE, token, {
+      httpOnly: true,
+      secure: this.cookieSecure,
+      sameSite: process.env.AUTH_COOKIE_SAME_SITE === 'none' ? 'none' : 'lax',
+      path: '/api/auth',
+      maxAge: this.refreshTtlSeconds * 1000,
+    });
+  }
+
+  clearRefreshCookie(response: Response) {
+    response.clearCookie(REFRESH_COOKIE, { httpOnly: true, secure: this.cookieSecure, sameSite: 'lax', path: '/api/auth' });
+  }
+
+  private get cookieSecure() { return process.env.AUTH_COOKIE_SECURE === 'true' || (process.env.NODE_ENV === 'production' && process.env.AUTH_COOKIE_SECURE !== 'false'); }
+
+  private async createSession(userId: string, request?: Request) {
+    const refreshToken = randomBytes(48).toString('base64url');
+    const id = randomUUID();
+    const expiresAt = new Date(Date.now() + this.refreshTtlSeconds * 1000);
+    await this.db.query(`
+      INSERT INTO user_sessions (id, user_id, family_id, refresh_token_hash, expires_at, ip_address, user_agent)
+      VALUES ($1, $2, $3, $4, $5, $6, $7)
+    `, [id, userId, id, sha256(refreshToken), expiresAt, requestMeta(request).ipAddress, requestMeta(request).userAgent]);
+    return { id, refreshToken, expiresAt };
+  }
+
+  private async authResponse(user: any, refreshToken: string, sessionId: string, expiresAt: Date, request?: Request) {
+    const accessToken = await this.jwt.signAsync({ sub: user.id, sid: sessionId, platformRole: user.platform_role });
+    return { accessToken, expiresIn: this.accessTtlSeconds, refreshExpiresAt: expiresAt, user: publicUser(user), _refreshToken: refreshToken };
+  }
+
+  publicResponse(result: any) {
+    const { _refreshToken: _ignoredToken, ...safe } = result;
+    return safe;
+  }
+
+  private readRefreshToken(request: Request) {
+    const raw = String(request.headers.cookie ?? '');
+    const cookie = raw.split(';').map((part) => part.trim()).find((part) => part.startsWith(`${REFRESH_COOKIE}=`));
+    return cookie ? decodeURIComponent(cookie.slice(REFRESH_COOKIE.length + 1)) : null;
+  }
+}

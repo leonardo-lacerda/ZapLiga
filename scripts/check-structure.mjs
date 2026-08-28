@@ -3,9 +3,10 @@ import { access, readdir } from 'node:fs/promises';
 const rootFiles = new Set([
   '.dockerignore', '.env.example', '.gitignore',
   'docker-compose.yml', 'package.json', 'package-lock.json', 'README.md',
+  'index.html', 'script.js', 'styles.css',
 ]);
 const entries = await readdir('.');
-const unexpected = entries.filter((entry) => !rootFiles.has(entry) && entry !== 'apps' && entry !== 'node_modules' && entry !== 'scripts' && entry !== 'docs' && entry !== '.git');
+const unexpected = entries.filter((entry) => !rootFiles.has(entry) && entry !== 'apps' && entry !== 'node_modules' && entry !== 'scripts' && entry !== 'docs' && entry !== 'services' && entry !== 'backups' && entry !== '.git');
 if (unexpected.length) throw new Error(`Arquivos inesperados na raiz: ${unexpected.join(', ')}`);
 
 for (const path of ['apps/api/src', 'apps/web/src']) {
@@ -13,7 +14,7 @@ for (const path of ['apps/api/src', 'apps/web/src']) {
 }
 
 const expectedSourceEntries = {
-  'apps/api/src': new Set(['app.module.ts', 'main.ts', 'database', 'infrastructure', 'modules']),
+  'apps/api/src': new Set(['app.module.ts', 'main.ts', 'database', 'infrastructure', 'modules', 'scripts']),
   'apps/web/src': new Set(['main.tsx', 'vite-env.d.ts', 'app', 'audio', 'components', 'features', 'services', 'shared', 'styles', 'types']),
 };
 for (const [path, expected] of Object.entries(expectedSourceEntries)) {

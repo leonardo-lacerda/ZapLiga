@@ -31,11 +31,22 @@ O Compose usa `WAXUM_API_KEY` para autenticar a API do Waxum; altere o valor no 
 
 ## API
 
-As rotas públicas implementadas estão descritas no plano do MVP. O backend inicializa o schema PostgreSQL automaticamente. Não há login: mantenha-o acessível apenas na rede local.
+As rotas operacionais legadas continuam descritas no plano do MVP. A fundação de autenticação agora inclui login, refresh token rotativo, empresas, memberships, convites e auditoria.
+
+Para criar o primeiro Admin supremo em desenvolvimento:
+
+```powershell
+$env:SUPERADMIN_EMAIL = "admin@example.com"
+$env:SUPERADMIN_PASSWORD = "troque-esta-senha"
+$env:SUPERADMIN_NAME = "Admin"
+npm --workspace apps/api run bootstrap:admin
+```
+
+O fluxo de login usa `POST /api/auth/login`, `POST /api/auth/refresh`, `POST /api/auth/logout` e `GET /api/auth/me`. Empresas são criadas por `super_admin`; líderes e SDRs entram por convite. Os endpoints operacionais são escopados por `tenant_id`; as rotas explícitas usam `/api/tenants/:tenantId/...` e aliases antigos exigem `x-tenant-id` compatível.
 
 ## Limitações deliberadas do MVP
 
-- Sem gravação, CRM, multi-tenant ou autenticação.
+- Sem gravação ou CRM no escopo atual; multi-tenant e autenticação fazem parte da base implementada.
 - A detecção de atendimento usa o primeiro áudio recebido pelo WebSocket do Waxum.
 - A criação da sessão, QR e reconexão dependem do contrato do Waxum instalado.
 - O navegador precisa permitir microfone e permanecer conectado durante a chamada.

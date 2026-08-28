@@ -3,7 +3,7 @@
   "sourceRoot": "src",
   "compilerOptions": {
     "tsConfigPath": "tsconfig.build.json",
-    "assets": ["src/database/schema.sql"],
+    "assets": ["src/database/schema.sql", "src/database/migrations/**/*"],
     "watchAssets": true
   }
 }

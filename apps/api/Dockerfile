@@ -14,5 +14,5 @@ COPY --from=build /app/package.json ./package.json
 COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /app/apps/api/package.json ./apps/api/package.json
 COPY --from=build /app/apps/api/dist ./apps/api/dist
-COPY --from=build /app/apps/api/src/database/schema.sql ./apps/api/dist/database/schema.sql
+COPY --from=build /app/apps/api/src/database/migrations ./apps/api/dist/database/migrations
 CMD ["node", "apps/api/dist/main.js"]

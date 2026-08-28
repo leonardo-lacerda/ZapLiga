@@ -12,7 +12,8 @@
     "build": "npm run clean && npm run check:structure && npm run build:api && npm run build:web",
     "build:api": "npm --workspace apps/api run build",
     "build:web": "npm --workspace apps/web run build",
-    "test": "npm --workspace apps/api run test"
+    "test": "npm --workspace apps/api run test",
+    "verify:multitenant": "node scripts/verify-multitenant.mjs"
   },
   "devDependencies": {
     "concurrently": "^9.1.2"
