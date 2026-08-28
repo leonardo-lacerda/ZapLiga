@@ -22,7 +22,6 @@ type AuthContextValue = {
   acceptInvite: (token: string, name: string, password: string) => Promise<void>;
   logout: () => Promise<void>;
   activeTenantId: string;
-  setTenant: (tenantId: string) => void;
   reload: () => Promise<void>;
 };
 
@@ -74,9 +73,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     try { await json('/api/auth/logout', { method: 'POST' }, false); } finally { clearAccessToken(); clearActiveTenantId(); setActiveTenantState(''); setSession(null); }
   }, []);
 
-  const setTenant = useCallback((tenantId: string) => { setActiveTenantId(tenantId); setActiveTenantState(tenantId); }, []);
-
-  const value = useMemo(() => ({ session, loading, login, register, acceptInvite, logout, activeTenantId, setTenant, reload }), [session, loading, login, register, acceptInvite, logout, activeTenantId, setTenant, reload]);
+  const value = useMemo(() => ({ session, loading, login, register, acceptInvite, logout, activeTenantId, reload }), [session, loading, login, register, acceptInvite, logout, activeTenantId, reload]);
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }
 

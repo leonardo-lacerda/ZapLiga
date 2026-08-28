@@ -63,6 +63,7 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
   }
 
   async getSettings(tenantId = legacyTenantId()) {
+    await this.db.query('INSERT INTO dialer_settings (tenant_id) VALUES ($1) ON CONFLICT (tenant_id) DO NOTHING', [tenantId]);
     const result = await this.db.query('SELECT * FROM dialer_settings WHERE tenant_id = $1', [tenantId]);
     return result.rows[0];
   }

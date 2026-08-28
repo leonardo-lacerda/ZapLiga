@@ -22,7 +22,8 @@ export class MembershipsController {
     const actorMembership = actor.tenantMembership;
     if (actor.platformRole !== 'super_admin' && target.role === 'leader') throw new ForbiddenException('Líderes só podem ser administrados pelo Admin supremo');
     const membership = await this.memberships.setStatus(tenantId, userId, body.status);
-    await this.audit.record({ actorUserId: actor.id, tenantId, action: `membership.${body.status}`, entityType: 'membership', entityId: target.id, metadata: { userId, role: target.role, actorRole: actorMembership?.role ?? actor.platformRole } });
+    const action = target.role === 'sdr' ? body.status === 'active' ? 'sdr.activated' : body.status === 'blocked' ? 'sdr.blocked' : 'sdr.removed' : `membership.${body.status}`;
+    await this.audit.record({ actorUserId: actor.id, tenantId, action, entityType: 'membership', entityId: target.id, metadata: { userId, role: target.role, actorRole: actorMembership?.role ?? actor.platformRole } });
     return membership;
   }
 

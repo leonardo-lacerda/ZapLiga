@@ -3,7 +3,6 @@ import { randomUUID } from 'node:crypto';
 import { DatabaseService } from '../../database/database.service';
 import { AuthGuard, CurrentTenant, CurrentUser, Roles, RolesGuard, TenantMembershipGuard } from '../auth/auth.guards';
 import { DialerService } from '../dialer/dialer.service';
-import { CreateSdrDto } from './dto/create-sdr.dto';
 import { FinishPauseDto } from './dto/finish-pause.dto';
 import { AuditService } from '../audit/audit.service';
 
@@ -29,26 +28,19 @@ export class SdrsController {
     if (Number(quota.rows[0]?.current ?? 0) >= Number(quota.rows[0]?.max_sdrs ?? 500)) throw new ConflictException('O limite de SDRs desta empresa foi atingido');
   }
 
-  @Post(['/api/sdrs', '/api/tenants/:tenantId/sdrs'])
-  async create(@Body() body: CreateSdrDto, @CurrentTenant() tenantId: string, @CurrentUser() user: any) {
-    const name = String(body.name ?? '').trim();
-    if (!name) throw new BadRequestException('name é obrigatório');
-    await this.assertSdrQuota(tenantId);
-    const sdr = (await this.db.query(`INSERT INTO sdrs (id,tenant_id,name) VALUES ($1,$2,$3) ON CONFLICT (tenant_id, name) DO UPDATE SET name = EXCLUDED.name RETURNING *`, [randomUUID(), tenantId, name])).rows[0];
-    await this.audit.record({ actorUserId: user.id, tenantId, action: 'sdr.created_or_updated', entityType: 'sdr', entityId: sdr.id });
-    return sdr;
-  }
-
   @Get(['/api/sdrs', '/api/tenants/:tenantId/sdrs'])
   list(@Query('limit') limit = '100', @Query('offset') offset = '0', @CurrentTenant() tenantId: string) {
     const safeLimit = Math.min(500, Math.max(1, Number(limit) || 100));
     const safeOffset = Math.max(0, Number(offset) || 0);
     return this.db.query(`
-      SELECT s.*, p.pause_type, p.started_at AS pause_started_at, p.call_id AS pause_call_id,
+      SELECT s.*, u.name AS user_name, u.email AS user_email, u.status AS user_status, u.last_login_at,
+        tm.status AS membership_status, p.pause_type, p.started_at AS pause_started_at, p.call_id AS pause_call_id,
         c.lead_id AS pause_lead_id, l.name AS pause_lead_name, l.phone AS pause_lead_phone,
         c.connected_at AS pause_call_started_at,
         CASE WHEN p.started_at IS NULL THEN 0 ELSE GREATEST(0, EXTRACT(EPOCH FROM (now() - p.started_at))::int) END AS pause_elapsed_seconds
       FROM sdrs s
+      LEFT JOIN users u ON u.id = s.user_id
+      LEFT JOIN tenant_memberships tm ON tm.tenant_id = s.tenant_id AND tm.user_id = s.user_id
       LEFT JOIN sdr_pauses p ON p.tenant_id = s.tenant_id AND p.id = s.current_pause_id AND p.ended_at IS NULL
       LEFT JOIN calls c ON c.tenant_id = s.tenant_id AND c.id = p.call_id
       LEFT JOIN leads l ON l.tenant_id = s.tenant_id AND l.id = c.lead_id

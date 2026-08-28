@@ -13,12 +13,12 @@ const digits = (value: unknown) => String(value ?? '').replace(/\D/g, '');
 
 @Controller()
 @UseGuards(AuthGuard, TenantMembershipGuard, RolesGuard)
-@Roles('leader', 'super_admin')
 export class NumbersController {
   private readonly qrRequests = new Map<string, Promise<any>>();
 
   constructor(private readonly db: DatabaseService, private readonly waxum: WaxumClient, private readonly audit: AuditService) {}
 
+  @Roles('super_admin')
   @Post(['/api/numbers', '/api/tenants/:tenantId/numbers'])
   async create(@Body() body: CreateNumberDto, @CurrentTenant() tenantId: string, @CurrentUser() user: any) {
     const label = String(body.label ?? '').trim();
@@ -33,6 +33,7 @@ export class NumbersController {
     } catch (error) { throw new BadRequestException(`Não foi possível criar a sessão Waxum: ${String(error)}`); }
   }
 
+  @Roles('leader', 'super_admin')
   @Get(['/api/numbers', '/api/tenants/:tenantId/numbers'])
   list(@Query('limit') limit = '100', @Query('offset') offset = '0', @CurrentTenant() tenantId: string) {
     const safeLimit = Math.min(200, Math.max(1, Number(limit) || 100));
@@ -40,6 +41,7 @@ export class NumbersController {
     return this.db.query("SELECT * FROM whatsapp_numbers WHERE tenant_id = $1 AND status <> 'removed' ORDER BY created_at DESC LIMIT $2 OFFSET $3", [tenantId, safeLimit, safeOffset]).then((result) => result.rows);
   }
 
+  @Roles('super_admin')
   @Delete(['/api/numbers/:id', '/api/tenants/:tenantId/numbers/:id'])
   async remove(@Param('id') id: string, @CurrentTenant() tenantId: string, @CurrentUser() user: any) {
     const number = await this.find(id, tenantId);
@@ -58,6 +60,7 @@ export class NumbersController {
     return { ok: true, id, archived: true };
   }
 
+  @Roles('super_admin')
   @Get(['/api/numbers/:id/qr', '/api/tenants/:tenantId/numbers/:id/qr'])
   async qr(@Param('id') id: string, @CurrentTenant() tenantId: string) {
     const requestKey = `${tenantId}:${id}`;
@@ -68,6 +71,7 @@ export class NumbersController {
     return request;
   }
 
+  @Roles('super_admin')
   @Post(['/api/numbers/:id/reconnect', '/api/tenants/:tenantId/numbers/:id/reconnect'])
   async reconnect(@Param('id') id: string, @CurrentTenant() tenantId: string) {
     let number = await this.find(id, tenantId);
@@ -79,6 +83,7 @@ export class NumbersController {
     }
   }
 
+  @Roles('super_admin')
   @Patch(['/api/numbers/:id/settings', '/api/tenants/:tenantId/numbers/:id/settings'])
   async settings(@Param('id') id: string, @Body() body: UpdateNumberDto, @CurrentTenant() tenantId: string, @CurrentUser() user: any) {
     const result = await this.db.query(`UPDATE whatsapp_numbers SET max_concurrent_calls = COALESCE($1,max_concurrent_calls), cooldown_seconds = COALESCE($2,cooldown_seconds), label = COALESCE($3,label) WHERE tenant_id = $4 AND id = $5 AND status <> 'removed' RETURNING *`, [body.maxConcurrentCalls == null ? null : Number(body.maxConcurrentCalls), body.cooldownSeconds == null ? null : Number(body.cooldownSeconds), body.label ? String(body.label) : null, tenantId, id]);

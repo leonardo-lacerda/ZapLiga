@@ -1,6 +1,7 @@
 import { Body, Controller, Delete, ForbiddenException, Get, Param, Post, UseGuards } from '@nestjs/common';
 import { AuthGuard, CurrentUser, Roles, RolesGuard, TenantMembershipGuard } from '../auth/auth.guards';
 import { CreateInvitationDto } from './dto/create-invitation.dto';
+import { CreateSdrInvitationDto } from './dto/create-sdr-invitation.dto';
 import { AcceptInvitationDto } from './dto/accept-invitation.dto';
 import { InvitationsService } from './invitations.service';
 import { AuthService } from '../auth/auth.service';
@@ -10,6 +11,20 @@ import { Req, Res } from '@nestjs/common';
 @Controller()
 export class InvitationsController {
   constructor(private readonly invitations: InvitationsService, private readonly auth: AuthService) {}
+
+  @Post('/api/tenants/:tenantId/sdrs/invitations')
+  @UseGuards(AuthGuard, TenantMembershipGuard, RolesGuard)
+  @Roles('leader', 'super_admin')
+  createSdrInvitation(@Param('tenantId') tenantId: string, @Body() body: CreateSdrInvitationDto, @CurrentUser() user: any) {
+    return this.invitations.createSdrInvitation(tenantId, user.id, body.email, body.name);
+  }
+
+  @Post('/api/tenants/:tenantId/sdrs/invitations/:invitationId/resend')
+  @UseGuards(AuthGuard, TenantMembershipGuard, RolesGuard)
+  @Roles('leader', 'super_admin')
+  resendSdrInvitation(@Param('tenantId') tenantId: string, @Param('invitationId') invitationId: string, @CurrentUser() user: any) {
+    return this.invitations.resendSdrInvitation(tenantId, invitationId, user.id);
+  }
 
   @Post('/api/tenants/:tenantId/invitations')
   @UseGuards(AuthGuard, TenantMembershipGuard, RolesGuard)

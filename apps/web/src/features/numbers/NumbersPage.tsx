@@ -5,28 +5,28 @@ import { labelStatus } from '../../shared/format';
 
 const connectedStatuses = ['connected', 'online', 'ready', 'authenticated', 'logged_in'];
 
-export function NumbersPage({ numbers, numberForm, setNumberForm, createNumber, showQr, reconnectNumber, removeNumber, qrLoading, qr, closeQr }: AnyRow) {
+export function NumbersPage({ numbers, numberForm, setNumberForm, createNumber, showQr, reconnectNumber, removeNumber, qrLoading, qr, closeQr, canManageNumbers = false }: AnyRow) {
   return <>
     <div className="page-heading">
-      <div><span className="eyebrow">WHATSAPP</span><h1>Numeros</h1><p>Gerencie as sessoes conectadas a sua operacao.</p></div>
+      <div><span className="eyebrow">WHATSAPP</span><h1>Numeros</h1><p>{canManageNumbers ? 'Gerencie as sessoes conectadas a sua operacao.' : 'Consulte as sessoes conectadas a sua operacao.'}</p></div>
       <Badge tone="info">{numbers.length} sessoes</Badge>
     </div>
-    <Panel>
+    {canManageNumbers && <Panel>
       <SectionHeader title="Adicionar numero" description="Crie uma sessao para conectar um numero autorizado." />
       <form className="form-row" onSubmit={createNumber}>
         <input placeholder="Nome do numero" value={numberForm.label} onChange={(e) => setNumberForm({ ...numberForm, label: e.target.value })} required />
         <input placeholder="Telefone opcional" value={numberForm.phone} onChange={(e) => setNumberForm({ ...numberForm, phone: e.target.value })} />
         <Button icon="plus">Criar sessao</Button>
       </form>
-    </Panel>
+    </Panel>}
     <div className="resource-grid">
       {numbers.map((number: AnyRow) => <div className="resource-card" key={number.id}>
         <div className="resource-card-header"><div className="resource-icon blue"><Icon name="phone" size={18} /></div><Badge tone={connectedStatuses.includes(String(number.status).toLowerCase()) ? 'success' : 'neutral'}>{labelStatus(number.status)}</Badge></div>
         <h3>{number.label}</h3><p>{number.phone || 'Telefone nao informado'}</p>
         <div className="resource-meta"><span>Limite de chamadas</span><strong>{number.max_concurrent_calls}</strong></div>
-        <div className="card-actions">{!connectedStatuses.includes(String(number.status).toLowerCase()) && <Button variant="secondary" icon="qr" disabled={qrLoading} onClick={() => void showQr(number.id)}>Abrir QR</Button>}<Button variant="ghost" icon="refresh" disabled={qrLoading} onClick={() => void reconnectNumber(number.id)}>Reconectar</Button><Button variant="danger" icon="close" disabled={qrLoading} onClick={() => void removeNumber(number.id, number.label)}>Remover</Button></div>
+        {canManageNumbers && <div className="card-actions">{!connectedStatuses.includes(String(number.status).toLowerCase()) && <Button variant="secondary" icon="qr" disabled={qrLoading} onClick={() => void showQr(number.id)}>Abrir QR</Button>}<Button variant="ghost" icon="refresh" disabled={qrLoading} onClick={() => void reconnectNumber(number.id)}>Reconectar</Button><Button variant="danger" icon="close" disabled={qrLoading} onClick={() => void removeNumber(number.id, number.label)}>Remover</Button></div>}
       </div>)}
-      {!numbers.length && <div className="full-span"><EmptyState title="Nenhum numero cadastrado" description="Adicione uma sessao para conectar seu WhatsApp." /></div>}
+      {!numbers.length && <div className="full-span"><EmptyState title="Nenhum numero cadastrado" description={canManageNumbers ? 'Adicione uma sessao para conectar seu WhatsApp.' : 'Os numeros serao configurados pelo administrador da plataforma.'} /></div>}
     </div>
     {qr && <QrModal qr={qr} closeQr={closeQr} />}
   </>;

@@ -65,8 +65,26 @@ try {
   const organizerAuth = { authorization: `Bearer ${registration.body.accessToken}` };
   const organizerMe = await request('/api/auth/me', { headers: organizerAuth });
   assert(organizerMe.response.ok && organizerMe.body?.tenants?.some((tenant) => tenant.id === registration.body.tenant.id && tenant.role === 'leader'), 'organizador não recebeu membership leader');
-  const sdrInvite = await request(`/api/tenants/${registration.body.tenant.id}/invitations`, { method: 'POST', headers: organizerAuth, body: JSON.stringify({ email: `sdr-${Date.now()}@zapliga-smoke.local`, role: 'sdr' }) });
+  const sdrInvite = await request(`/api/tenants/${registration.body.tenant.id}/sdrs/invitations`, { method: 'POST', headers: organizerAuth, body: JSON.stringify({ name: 'SDR Smoke', email: `sdr-${Date.now()}@zapliga-smoke.local` }) });
   assert(sdrInvite.response.status === 201 && sdrInvite.body?.role === 'sdr', `organizador não conseguiu convidar SDR: ${sdrInvite.response.status}`);
+  const invitationToken = String(sdrInvite.body?.invitationUrl ?? '').split('/').pop();
+  const invitationPreview = await request(`/api/invitations/${encodeURIComponent(invitationToken)}`);
+  assert(invitationPreview.response.ok && invitationPreview.body?.role === 'sdr' && invitationPreview.body?.name === 'SDR Smoke', 'convite de SDR não foi criado corretamente');
+  const acceptedSdr = await request(`/api/invitations/${encodeURIComponent(invitationToken)}/accept`, { method: 'POST', body: JSON.stringify({ name: 'SDR Smoke', password: 'SdrSmokePassword2026' }) });
+  assert(acceptedSdr.response.status === 201 && acceptedSdr.body?.tenant?.role === 'sdr', `aceite do convite de SDR falhou: ${acceptedSdr.response.status}`);
+  temporaryUserIds.push(acceptedSdr.body.user.id);
+  const sdrList = await request(`/api/tenants/${registration.body.tenant.id}/sdrs`, { headers: organizerAuth });
+  assert(sdrList.response.ok && sdrList.body?.some((sdr) => sdr.user_id === acceptedSdr.body.user.id && sdr.user_email), 'perfil operacional do SDR não foi vinculado ao usuário');
+  const blockedSdr = await request(`/api/tenants/${registration.body.tenant.id}/members/${acceptedSdr.body.user.id}/status`, { method: 'PATCH', headers: organizerAuth, body: JSON.stringify({ status: 'blocked' }) });
+  assert(blockedSdr.response.ok, `organizador não conseguiu bloquear SDR: ${blockedSdr.response.status}`);
+  const activatedSdr = await request(`/api/tenants/${registration.body.tenant.id}/members/${acceptedSdr.body.user.id}/status`, { method: 'PATCH', headers: organizerAuth, body: JSON.stringify({ status: 'active' }) });
+  assert(activatedSdr.response.ok, `organizador não conseguiu reativar SDR: ${activatedSdr.response.status}`);
+  const pendingSdr = await request(`/api/tenants/${registration.body.tenant.id}/sdrs/invitations`, { method: 'POST', headers: organizerAuth, body: JSON.stringify({ name: 'SDR Reenvio', email: `resend-${Date.now()}@zapliga-smoke.local` }) });
+  assert(pendingSdr.response.status === 201, `não foi possível criar convite para teste de reenvio: ${pendingSdr.response.status}`);
+  const resentSdr = await request(`/api/tenants/${registration.body.tenant.id}/sdrs/invitations/${pendingSdr.body.id}/resend`, { method: 'POST', headers: organizerAuth });
+  assert(resentSdr.response.status === 201 && resentSdr.body?.role === 'sdr' && resentSdr.body.id !== pendingSdr.body.id, `reenvio de convite SDR falhou: ${resentSdr.response.status}`);
+  const revokedSdr = await request(`/api/tenants/${registration.body.tenant.id}/invitations/${resentSdr.body.id}`, { method: 'DELETE', headers: organizerAuth });
+  assert(revokedSdr.response.ok, `revogação de convite SDR falhou: ${revokedSdr.response.status}`);
   const roleInjection = await request('/api/auth/register', { method: 'POST', body: JSON.stringify({ name: 'Role Injection', email: `role-${Date.now()}@zapliga-smoke.local`, password: 'OrganizerSmoke2026', companyName: 'Role Injection', role: 'sdr' }) });
   assert(roleInjection.response.status === 400, `cadastro com papel SDR deveria ser rejeitado: ${roleInjection.response.status}`);
 
