@@ -73,9 +73,13 @@ jobs:
           DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
           DEPLOY_PORT: ${{ secrets.DEPLOY_PORT }}
           DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
         run: |
           set -euo pipefail
-          ssh -p "${DEPLOY_PORT:-22}" -o BatchMode=yes -o StrictHostKeyChecking=yes "$DEPLOY_USER@$DEPLOY_HOST" 'bash -se' <<'REMOTE'
+          deploy_key="$RUNNER_TEMP/zapliga-deploy-key"
+          printf '%s\n' "$DEPLOY_SSH_KEY" > "$deploy_key"
+          chmod 600 "$deploy_key"
+          ssh -i "$deploy_key" -p "${DEPLOY_PORT:-22}" -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes "$DEPLOY_USER@$DEPLOY_HOST" 'bash -se' <<'REMOTE'
           set -Eeuo pipefail
 
           APP_DIR=/opt/zapliga
