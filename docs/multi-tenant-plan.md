@@ -2,7 +2,7 @@
 
 ## Objetivo
 
-Transformar o ZapCall em uma aplicação SaaS multi-tenant, onde cada empresa possui dados e operação isolados, com três perfis:
+Transformar o ZapLiga em uma aplicação SaaS multi-tenant, onde cada empresa possui dados e operação isolados, com três perfis:
 
 1. `SDR`: recebe e opera chamadas.
 2. `Líder`: administra a equipe e os dados da própria empresa.

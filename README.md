@@ -1,4 +1,4 @@
-# ZapCall — MVP local
+# ZapLiga — MVP local
 
 Discador local para chamadas de voz do WhatsApp usando Waxum como gateway não oficial. O projeto é um protótipo técnico: use somente números e leads autorizados, respeite a legislação aplicável e aceite o risco operacional de contas não oficiais.
 

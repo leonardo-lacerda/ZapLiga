@@ -477,7 +477,7 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
         }
       });
       media.on('message', (data, isBinary) => {
-        // Waxum generates its own call id. It is different from the ZapCall
+        // Waxum generates its own call id. It is different from the ZapLiga
         // database id and is the id carried by WhatsApp Accept events.
         if (!isBinary) {
           try {

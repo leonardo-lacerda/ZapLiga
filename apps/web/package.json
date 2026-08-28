@@ -1,5 +1,5 @@
 {
-  "name": "zapcall-web",
+  "name": "zapliga-web",
   "private": true,
   "scripts": {
     "dev": "vite --host 0.0.0.0",

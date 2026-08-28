@@ -1,5 +1,5 @@
 {
-  "name": "zapcall-api",
+  "name": "zapliga-api",
   "private": true,
   "scripts": {
     "start:dev": "nest start --watch",

@@ -21,6 +21,6 @@ async function bootstrap() {
   const port = Number(process.env.PORT ?? 3000);
   await app.listen(port, '0.0.0.0');
   app.get(SdrGateway).attach(app.getHttpServer());
-  console.log(`ZapCall API listening on http://localhost:${port}`);
+  console.log(`ZapLiga API listening on http://localhost:${port}`);
 }
 void bootstrap();

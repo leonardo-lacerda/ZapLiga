@@ -35,8 +35,8 @@ export class InvitationMailer {
         from: process.env.SMTP_FROM ?? process.env.SMTP_USER,
         to: message.email,
         subject: `Convite para entrar na empresa ${message.tenantName}`,
-        text: `Você foi convidado para a empresa ${message.tenantName} no ZapCall como ${message.role}. Acesse: ${message.invitationUrl}`,
-        html: `<p>Você foi convidado para a empresa <strong>${tenantName}</strong> no ZapCall como <strong>${role}</strong>.</p><p><a href="${invitationUrl}">Aceitar convite</a></p>`,
+        text: `Você foi convidado para a empresa ${message.tenantName} no ZapLiga como ${message.role}. Acesse: ${message.invitationUrl}`,
+        html: `<p>Você foi convidado para a empresa <strong>${tenantName}</strong> no ZapLiga como <strong>${role}</strong>.</p><p><a href="${invitationUrl}">Aceitar convite</a></p>`,
       });
       return;
     }

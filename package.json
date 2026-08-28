@@ -1,5 +1,5 @@
 {
-  "name": "zapcall-mvp",
+  "name": "zapliga-mvp",
   "private": true,
   "workspaces": ["apps/api", "apps/web"],
   "scripts": {

@@ -8,13 +8,13 @@
 - Digest Linux/amd64: `sha256:57e75022185d2950e52d370b77f597ad2a533792a17df49925370bad5f121e19`
 - Validada em: `2026-08-27`
 
-## Build usado pelo ZapCall
+## Build usado pelo ZapLiga
 
 - Commit oficial: `1d1b6ba6a1280878ac51677a2f0e4c30dcec9d2e` (`v0.12.2`)
 - Imagem oficial fixada pelo digest do manifesto acima.
 - Sem fork ou patch local do Waxum.
 
-O endpoint de diagnóstico `events/tail` do Waxum limita o payload a 160 caracteres e não deve ser usado para detectar atendimento. O ZapCall consome o evento completo `wa.events.<session_id>.incoming_call` publicado pelo Waxum no NATS JetStream e correlaciona o `call_id` e a ação `Accept`.
+O endpoint de diagnóstico `events/tail` do Waxum limita o payload a 160 caracteres e não deve ser usado para detectar atendimento. O ZapLiga consome o evento completo `wa.events.<session_id>.incoming_call` publicado pelo Waxum no NATS JetStream e correlaciona o `call_id` e a ação `Accept`.
 
 Essa é a versão usada e testada pelo ZapLiga. O digest no `docker-compose.yml` impede atualizações silenciosas da imagem.
 

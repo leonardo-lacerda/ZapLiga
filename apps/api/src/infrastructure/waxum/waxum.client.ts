@@ -19,7 +19,7 @@ export class WaxumClient implements OnModuleDestroy {
   }
 
   private getNatsConnection() {
-    this.natsConnection ??= connect({ servers: this.natsUrl, name: 'zapcall-api' });
+    this.natsConnection ??= connect({ servers: this.natsUrl, name: 'zapliga-api' });
     return this.natsConnection;
   }
 
