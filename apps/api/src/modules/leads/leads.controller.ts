@@ -16,10 +16,17 @@ const digits = (value: unknown) => String(value ?? '').replace(/\D/g, '');
 export class LeadsController {
   constructor(private readonly db: DatabaseService, private readonly audit: AuditService) {}
 
+  private async defaultFolderId(tenantId: string) {
+    const result = await this.db.query(`SELECT id FROM lead_folders WHERE tenant_id = $1 ORDER BY sort_order ASC, created_at ASC LIMIT 1`, [tenantId]);
+    if (!result.rows[0]) throw new BadRequestException('Nenhuma pasta de leads foi configurada para esta empresa');
+    return result.rows[0].id as string;
+  }
+
   @Post(['/api/leads', '/api/tenants/:tenantId/leads'])
   async create(@Body() body: CreateLeadDto, @CurrentTenant() tenantId: string, @CurrentUser() user: any) {
     const phone = digits(body.phone);
     if (!phone || !String(body.name ?? '').trim()) throw new BadRequestException('name e phone são obrigatórios');
+    const folderId = String(body.folderId ?? '').trim() || await this.defaultFolderId(tenantId);
     const lead = await this.db.transaction(async (client) => {
       await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [`lead-quota:${tenantId}`]);
       const [tenant, existing] = await Promise.all([
@@ -30,7 +37,7 @@ export class LeadsController {
         const count = await client.query('SELECT count(*)::int AS count FROM leads WHERE tenant_id = $1', [tenantId]);
         if (Number(count.rows[0]?.count ?? 0) >= Number(tenant.rows[0]?.max_leads ?? 100000)) throw new ConflictException('O limite de leads desta empresa foi atingido');
       }
-      return (await client.query(`INSERT INTO leads (id,tenant_id,name,phone) VALUES ($1,$2,$3,$4) ON CONFLICT (tenant_id, phone) DO UPDATE SET name = EXCLUDED.name RETURNING *`, [randomUUID(), tenantId, String(body.name).trim(), phone])).rows[0];
+      return (await client.query(`INSERT INTO leads (id,tenant_id,folder_id,name,phone) VALUES ($1,$2,$3,$4,$5) ON CONFLICT (tenant_id, phone) DO UPDATE SET name = EXCLUDED.name RETURNING *`, [randomUUID(), tenantId, folderId, String(body.name).trim(), phone])).rows[0];
     });
     await this.audit.record({ actorUserId: user.id, tenantId, action: 'lead.created_or_updated', entityType: 'lead', entityId: lead.id });
     return lead;
@@ -44,6 +51,7 @@ export class LeadsController {
     try { records = parse(file.buffer.toString('utf8'), { columns: true, skip_empty_lines: true, bom: true, trim: true }); }
     catch { throw new BadRequestException('CSV inválido; use as colunas name,phone'); }
     if (records.length > 50_000) throw new BadRequestException('O CSV excede o limite de 50.000 linhas');
+    const folderId = await this.defaultFolderId(tenantId);
     const validLeads: Array<{ name: string; phone: string }> = [];
     let skipped = 0;
     for (const row of records) {
@@ -65,7 +73,7 @@ export class LeadsController {
       const existingPhones = new Set(existing.rows.map((row: any) => row.phone));
       const newPhones = uniquePhones.filter((phone) => !existingPhones.has(phone));
       if (Number(current.rows[0]?.count ?? 0) + newPhones.length > Number(tenant.rows[0]?.max_leads ?? 100000)) throw new ConflictException('O CSV excede o limite de leads desta empresa');
-      for (const lead of validLeads) await client.query(`INSERT INTO leads (id,tenant_id,name,phone) VALUES ($1,$2,$3,$4) ON CONFLICT (tenant_id, phone) DO UPDATE SET name = EXCLUDED.name`, [randomUUID(), tenantId, lead.name, lead.phone]);
+      for (const lead of validLeads) await client.query(`INSERT INTO leads (id,tenant_id,folder_id,name,phone) VALUES ($1,$2,$3,$4,$5) ON CONFLICT (tenant_id, phone) DO UPDATE SET name = EXCLUDED.name`, [randomUUID(), tenantId, folderId, lead.name, lead.phone]);
       return validLeads.length;
     });
     await this.audit.record({ actorUserId: user.id, tenantId, action: 'lead.imported', entityType: 'lead_import', metadata: { imported, skipped, total: records.length } });
@@ -132,7 +140,7 @@ export class LeadsController {
   async reset(@Param('id') id: string, @CurrentTenant() tenantId: string, @CurrentUser() user: any) {
     const active = await this.db.query(`SELECT status FROM calls WHERE tenant_id = $1 AND lead_id = $2 AND status IN ('reserved', 'dialing', 'media_active') LIMIT 1`, [tenantId, id]);
     if (active.rows[0]) throw new BadRequestException('Não é possível resetar um contato durante uma chamada');
-    const result = await this.db.query(`UPDATE leads SET status = 'queued', attempts = 0, next_eligible_at = now(), do_not_call = false WHERE tenant_id = $1 AND id = $2 RETURNING *`, [tenantId, id]);
+    const result = await this.db.query(`UPDATE leads SET status = 'queued', attempts = 0, last_auto_round = 0, next_eligible_at = now(), do_not_call = false WHERE tenant_id = $1 AND id = $2 RETURNING *`, [tenantId, id]);
     if (!result.rows[0]) throw new NotFoundException('Lead não encontrado');
     await this.audit.record({ actorUserId: user.id, tenantId, action: 'lead.reset', entityType: 'lead', entityId: id });
     return result.rows[0];

@@ -3,7 +3,6 @@ import { connect, NatsConnection, StringCodec } from 'nats';
 import WebSocket from 'ws';
 
 type WaxumSession = { id: string; name?: string; phone_number?: string; status?: string };
-type WaxumContactInfo = { jid?: string; lid?: string | null; is_registered?: boolean };
 
 @Injectable()
 export class WaxumClient implements OnModuleDestroy {
@@ -40,8 +39,12 @@ export class WaxumClient implements OnModuleDestroy {
       try { parsed = body ? JSON.parse(body) : {}; } catch { /* plain response */ }
       if (response.ok) return parsed as T;
       if (response.status === 429 && attempt < maxAttempts - 1) {
-        const match = typeof parsed === 'string' ? parsed.match(/wait for\s+(\d+)s/i) : null;
-        await new Promise((resolve) => setTimeout(resolve, Math.max(5, Number(match?.[1] ?? 5) + 1) * 1000));
+        // All requests share one serial chain, so never sleep here for the full
+        // server-requested window (which can be 100s+). A long in-chain sleep
+        // stalls every other Waxum call — including the dialer's LID lookups —
+        // and hangs calls in `reserved`. Cap the retry wait; callers that need
+        // to honor the real backoff (the dialer) do so at the number level.
+        await new Promise((resolve) => setTimeout(resolve, 3000));
         continue;
       }
       const error = new Error(`Waxum ${response.status}: ${typeof parsed === 'string' ? parsed : JSON.stringify(parsed)}`) as Error & { statusCode?: number };
@@ -56,22 +59,34 @@ export class WaxumClient implements OnModuleDestroy {
   getQr(sessionId: string) { return this.request<any>(`/api/v1/sessions/${encodeURIComponent(sessionId)}/qr`); }
   getStatus(sessionId: string) { return this.request<any>(`/api/v1/sessions/${encodeURIComponent(sessionId)}/status`, {}, 1); }
   reconnect(sessionId: string) { return this.request<any>(`/api/v1/sessions/${encodeURIComponent(sessionId)}/connect`, { method: 'POST', body: JSON.stringify({}) }).catch((error: Error & { statusCode?: number }) => { if (error.statusCode === 409) return { already_connecting: true }; throw error; }); }
-  async resolveCallRecipient(sessionId: string, phone: string) {
-    // VoIP media needs the recipient's LID, not only the phone-number JID.
-    // The /contacts/check endpoint only reports registration; /contacts/info
-    // also returns the PN -> LID mapping that Waxum uses for media keys.
-    const normalized = phone.includes('@') ? phone : phone.replace(/\D/g, '');
-    if (normalized.endsWith('@lid')) return normalized;
-
-    const response = await this.request<{ contacts?: WaxumContactInfo[] }>(
-      `/api/v1/sessions/${encodeURIComponent(sessionId)}/contacts/info`,
-      { method: 'POST', body: JSON.stringify({ phones: [normalized] }) },
+  // WhatsApp VoIP needs the callee's LID to derive media keys; a phone-number
+  // JID (`<pn>@s.whatsapp.net`) is rejected with "no known LID for the PN
+  // callee". A cold number's LID is not in the local store, but a usync
+  // (`contacts/check`, which does NOT notify the callee) makes Waxum learn it.
+  // check normalizes the number (e.g. drops the Brazilian 9th digit) and
+  // returns the canonical JID under which the LID is then stored.
+  async checkContact(sessionId: string, phone: string): Promise<{ jid: string; isRegistered: boolean } | null> {
+    const digits = phone.replace(/\D/g, '');
+    const res = await this.request<{ results?: Array<{ phone?: string; jid?: string; is_registered?: boolean }> }>(
+      `/api/v1/sessions/${encodeURIComponent(sessionId)}/contacts/check`,
+      { method: 'POST', body: JSON.stringify({ phones: [digits] }) },
       1,
     );
-    const contact = response.contacts?.find((item) => item.is_registered !== false);
-    if (!contact) throw new Error(`Waxum nao encontrou o contato ${normalized}`);
-    if (!contact.lid) throw new Error(`Waxum nao retornou o LID do contato ${normalized}`);
-    return contact.lid;
+    const row = res.results?.[0];
+    if (!row?.jid) return null;
+    return { jid: row.jid, isRegistered: Boolean(row.is_registered) };
+  }
+
+  // Reads the LID that a prior usync stored for this contact JID. Returns null
+  // when the store has no mapping yet (HTTP 404).
+  async getStoredLid(sessionId: string, jid: string): Promise<string | null> {
+    try {
+      const res = await this.request<{ lid?: string | null }>(`/api/v1/sessions/${encodeURIComponent(sessionId)}/contacts/${encodeURIComponent(jid)}/lid`, {}, 1);
+      return res?.lid ? String(res.lid) : null;
+    } catch (error) {
+      if ((error as Error & { statusCode?: number }).statusCode === 404) return null;
+      throw error;
+    }
   }
   async waitForOutgoingAnswer(sessionId: string, callId: string, signal: AbortSignal) {
     const connection = await this.getNatsConnection();

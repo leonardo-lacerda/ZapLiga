@@ -12,7 +12,7 @@ export const clearActiveTenantId = () => { activeTenantId = ''; };
 
 const tenantRoute = (path: string) => {
   if (!activeTenantId || path.startsWith('/api/tenants/')) return path;
-  const resources = ['/api/leads', '/api/numbers', '/api/sdrs', '/api/calls', '/api/dialer', '/api/me/sdr'];
+  const resources = ['/api/leads', '/api/lead-folders', '/api/numbers', '/api/sdrs', '/api/calls', '/api/dialer', '/api/me/sdr'];
   const resource = resources.find((candidate) => path === candidate || path.startsWith(`${candidate}/`));
   if (!resource) return path;
   const suffix = path.slice(resource.length);

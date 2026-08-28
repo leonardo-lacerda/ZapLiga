@@ -30,6 +30,9 @@ type CallResource = {
   browserCloseHandler?: () => void;
   browserErrorHandler?: () => void;
   finishing?: boolean;
+  rateLimitBackoffSeconds?: number;
+  callPlacedAt?: number;
+  receivedAnyFrame?: boolean;
 };
 
 @Injectable()
@@ -41,6 +44,13 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
   private readonly active = new Map<string, CallResource>();
   private readonly finishingCalls = new Set<string>();
   private readonly logs: any[] = [];
+  // Consecutive "instant failure" count per WhatsApp line (no media frames, no
+  // answer, closed in <FLAG_FAST_FAIL_MS). Repeated instant failures are the
+  // signature of a WhatsApp reachout timelock (463 MissingTcToken).
+  private readonly lineFailures = new Map<string, number>();
+  private readonly FLAG_FAILURE_THRESHOLD = 2;
+  private readonly FLAG_FAST_FAIL_MS = 5000;
+  private readonly flagQuarantineHours = Math.max(1, Number(process.env.WHATSAPP_FLAG_HOURS) || 6);
 
   constructor(
     private readonly db: DatabaseService,
@@ -72,6 +82,34 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
 
   private normalizePhone(value: unknown) { return String(value ?? '').replace(/\D/g, ''); }
 
+  // Resolve the VoIP recipient for a phone. WhatsApp calls require the callee's
+  // LID (not the phone-number JID) to derive media keys. Cold numbers have no
+  // LID in the store, so we trigger a usync (`contacts/check`, silent for the
+  // callee) to learn it, then read and cache it. The LID is a stable identity,
+  // so caching it in Redis means we pay the usync cost once per number instead
+  // of on every dial — which is what previously triggered the 429 storms.
+  private async resolveRecipient(sessionId: string, phone: string): Promise<string> {
+    if (phone.includes('@lid')) return phone;
+    const pn = this.normalizePhone(phone);
+    if (!pn) throw new Error('lid_unavailable');
+    const cacheKey = `zapcall:lid:${pn}`;
+    const cached = await this.redis.client.get(cacheKey).catch(() => null);
+    if (cached) return `${cached}@lid`;
+    const contact = await this.waxum.checkContact(sessionId, pn);
+    if (!contact) throw new Error('lid_unavailable');
+    if (!contact.isRegistered) throw new Error('not_on_whatsapp');
+    let lid = await this.waxum.getStoredLid(sessionId, contact.jid);
+    if (!lid) {
+      // The usync that learns the LID can land just after check returns; retry
+      // the store read once after a short delay before giving up.
+      await new Promise((resolve) => setTimeout(resolve, 400));
+      lid = await this.waxum.getStoredLid(sessionId, contact.jid);
+    }
+    if (!lid) throw new Error('lid_unavailable');
+    await this.redis.client.set(cacheKey, lid, 'EX', 60 * 60 * 24 * 30).catch(() => undefined);
+    return `${lid}@lid`;
+  }
+
   async getSdrState(sdrId: string, tenantId = legacyTenantId()) {
     const result = await this.db.query(`
       SELECT s.id, s.name, s.available, s.state, s.current_pause_id,
@@ -97,6 +135,16 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
     }
     const state = available ? 'available' : 'offline';
     await this.db.query('UPDATE sdrs SET available = $1, state = $2 WHERE tenant_id = $3 AND id = $4', [available, state, tenantId, sdrId]);
+    if (available) {
+      // A disponibilidade do SDR habilita a operação automática da empresa.
+      // O tick ainda valida SDRs, números e pastas ativas antes de discar.
+      const settings = await this.getSettings(tenantId);
+      if (!settings.running) {
+        await this.db.query('UPDATE dialer_settings SET running = true WHERE tenant_id = $1', [tenantId]);
+        this.log('Discador iniciado automaticamente por disponibilidade do SDR', 'info', undefined, tenantId);
+      }
+      await this.tick(tenantId);
+    }
     this.gateway.broadcast({ type: 'sdr_state_changed', sdrId, state, available }, tenantId);
     return this.getSdrState(sdrId, tenantId);
   }
@@ -107,7 +155,7 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
     const notes = String(input.notes ?? '').trim();
     if (!callResult || !pipelineStage || !notes) throw new Error('Resultado, etapa da tubulação e anotação são obrigatórios');
     return this.db.transaction(async (client) => {
-      const pauseResult = await client.query(`SELECT p.*, c.lead_id FROM sdr_pauses p LEFT JOIN calls c ON c.tenant_id = p.tenant_id AND c.id = p.call_id WHERE p.tenant_id = $1 AND p.id = $2 AND p.sdr_id = $3 FOR UPDATE`, [tenantId, pauseId, sdrId]);
+      const pauseResult = await client.query(`SELECT p.*, c.lead_id FROM sdr_pauses p LEFT JOIN calls c ON c.tenant_id = p.tenant_id AND c.id = p.call_id WHERE p.tenant_id = $1 AND p.id = $2 AND p.sdr_id = $3 FOR UPDATE OF p`, [tenantId, pauseId, sdrId]);
       const pause = pauseResult.rows[0];
       if (!pause) throw new Error('Pausa não encontrada');
       if (pause.ended_at) throw new Error('Esta pausa já foi encerrada');
@@ -165,6 +213,12 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
     return this.getStatus(tenantId);
   }
 
+  private async defaultFolderId(tenantId: string) {
+    const result = await this.db.query(`SELECT id FROM lead_folders WHERE tenant_id = $1 ORDER BY sort_order ASC, created_at ASC LIMIT 1`, [tenantId]);
+    if (!result.rows[0]) throw new Error('Nenhuma pasta de leads foi configurada');
+    return result.rows[0].id as string;
+  }
+
   async manualCall(leadId: string, tenantId = legacyTenantId()) {
     const settings = await this.getSettings(tenantId);
     const [sdrs, numbers, leads] = await Promise.all([
@@ -179,8 +233,8 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
       `, [tenantId]),
       // Manual calls intentionally bypass the number cooldown for the MVP.
       // Redis still enforces the global and per-number concurrent limits.
-      this.db.query(`SELECT * FROM whatsapp_numbers WHERE status IN ('connected', 'online', 'ready', 'authenticated') ORDER BY last_call_ended_at NULLS FIRST, last_call_ended_at ASC`),
-      this.db.query(`SELECT * FROM leads WHERE tenant_id = $1 AND id = $2 AND do_not_call = false AND status IN ('queued', 'retry_wait') AND attempts < $3`, [tenantId, leadId, settings.max_attempts_per_lead]),
+      this.db.query(`SELECT * FROM whatsapp_numbers WHERE status IN ('connected', 'online', 'ready', 'authenticated') AND (flagged_until IS NULL OR flagged_until <= now()) ORDER BY last_call_ended_at NULLS FIRST, last_call_ended_at ASC`),
+      this.db.query(`SELECT l.* FROM leads l JOIN lead_folders f ON f.tenant_id = l.tenant_id AND f.id = l.folder_id WHERE l.tenant_id = $1 AND l.id = $2 AND f.is_active = true AND l.do_not_call = false AND l.status IN ('queued', 'retry_wait') AND l.attempts < $3`, [tenantId, leadId, settings.max_attempts_per_lead]),
     ]);
     const sdr = sdrs.rows.find((row: any) => this.gateway.isConnected(row.id));
     const lead = leads.rows[0];
@@ -206,15 +260,22 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
     let lead: any;
     const leadId = String(input.leadId ?? '').trim();
     if (leadId) {
-      const result = await this.db.query(`SELECT * FROM leads WHERE tenant_id = $1 AND id = $2 AND do_not_call = false AND status IN ('queued', 'retry_wait') AND attempts < $3`, [tenantId, leadId, settings.max_attempts_per_lead]);
+      const result = await this.db.query(`SELECT l.* FROM leads l JOIN lead_folders f ON f.tenant_id = l.tenant_id AND f.id = l.folder_id WHERE l.tenant_id = $1 AND l.id = $2 AND f.is_active = true AND l.do_not_call = false`, [tenantId, leadId]);
       lead = result.rows[0];
+      if (lead) {
+        const activeCall = await this.db.query(`SELECT 1 FROM calls WHERE tenant_id = $1 AND lead_id = $2 AND status IN ('reserved', 'dialing', 'media_active') LIMIT 1`, [tenantId, lead.id]);
+        if (activeCall.rows[0]) lead = undefined;
+      }
     } else {
       const phone = String(input.phone ?? '').replace(/\D/g, '');
       if (!phone) throw new Error('Informe um telefone valido');
-      const existing = await this.db.query('SELECT * FROM leads WHERE tenant_id = $1 AND phone = $2 LIMIT 1', [tenantId, phone]);
+      const existing = await this.db.query(`SELECT l.* FROM leads l JOIN lead_folders f ON f.tenant_id = l.tenant_id AND f.id = l.folder_id WHERE l.tenant_id = $1 AND l.phone = $2 AND f.is_active = true LIMIT 1`, [tenantId, phone]);
       if (existing.rows[0]) {
         lead = existing.rows[0];
         const activeCall = await this.db.query(`SELECT 1 FROM calls WHERE tenant_id = $1 AND lead_id = $2 AND status IN ('reserved', 'dialing', 'media_active') LIMIT 1`, [tenantId, lead.id]);
+        // A manual call is an explicit override of queue eligibility. It may
+        // redial a previously completed/failed lead, but never a blocked lead
+        // or one that already has an active call.
         if (lead.do_not_call || activeCall.rows[0]) lead = undefined;
       } else {
         lead = await this.db.transaction(async (client) => {
@@ -224,7 +285,10 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
             client.query('SELECT count(*)::int AS count FROM leads WHERE tenant_id = $1', [tenantId]),
           ]);
           if (Number(count.rows[0]?.count ?? 0) >= Number(tenant.rows[0]?.max_leads ?? 100000)) throw new Error('O limite de leads desta empresa foi atingido');
-          return (await client.query('INSERT INTO leads (id, tenant_id, name, phone) VALUES ($1, $2, $3, $4) RETURNING *', [randomUUID(), tenantId, String(input.name ?? '').trim() || 'Ligacao manual', phone])).rows[0];
+          const folderId = await this.defaultFolderId(tenantId);
+          const folder = await client.query('SELECT is_active FROM lead_folders WHERE tenant_id = $1 AND id = $2', [tenantId, folderId]);
+          if (!folder.rows[0]?.is_active) throw new Error('Nenhuma pasta de leads ativa');
+          return (await client.query('INSERT INTO leads (id, tenant_id, folder_id, name, phone) VALUES ($1, $2, $3, $4, $5) RETURNING *', [randomUUID(), tenantId, folderId, String(input.name ?? '').trim() || 'Ligacao manual', phone])).rows[0];
         });
       }
     }
@@ -241,7 +305,7 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
           )
         ORDER BY s.last_assigned_at NULLS FIRST, s.last_assigned_at ASC
       `, [tenantId, sdrUserId ?? null]),
-      this.db.query(`SELECT * FROM whatsapp_numbers WHERE status IN ('connected', 'online', 'ready', 'authenticated') ORDER BY last_call_ended_at NULLS FIRST, last_call_ended_at ASC`),
+      this.db.query(`SELECT * FROM whatsapp_numbers WHERE status IN ('connected', 'online', 'ready', 'authenticated') AND (flagged_until IS NULL OR flagged_until <= now()) ORDER BY last_call_ended_at NULLS FIRST, last_call_ended_at ASC`),
     ]);
     const sdr = sdrs.rows.find((row: any) => this.gateway.isConnected(row.id));
     if (!sdr) throw new Error('Nenhum SDR conectado e disponivel');
@@ -272,7 +336,7 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
       SELECT count(*)::int AS total, count(*) FILTER (WHERE connected_at IS NOT NULL)::int AS answered
       FROM calls WHERE tenant_id = $1 AND created_at > now() - interval '24 hours'
     `, [tenantId]);
-    const [available, leads, numberDetails, queueSummary, queuePreview, activeCalls, sdrDetails] = await Promise.all([
+    const [available, leads, numberDetails, queueSummary, queuePreview, activeCalls, sdrDetails, folderSummary] = await Promise.all([
       this.db.query(`
         SELECT count(*)::int AS count FROM sdrs s
         WHERE s.tenant_id = $1 AND s.available = true AND s.state = 'available'
@@ -281,10 +345,14 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
             WHERE c.tenant_id = s.tenant_id AND c.sdr_id = s.id AND c.status IN ('reserved', 'dialing', 'media_active')
           )
       `, [tenantId]),
-      this.db.query(`SELECT status, count(*)::int AS count FROM leads WHERE tenant_id = $1 GROUP BY status`, [tenantId]),
+      this.db.query(`SELECT l.status, count(*)::int AS count FROM leads l JOIN lead_folders f ON f.tenant_id = l.tenant_id AND f.id = l.folder_id WHERE l.tenant_id = $1 AND f.is_active = true GROUP BY l.status`, [tenantId]),
       this.db.query(`
         SELECT n.id, n.label, n.status, n.max_concurrent_calls, n.cooldown_seconds,
-          n.last_call_ended_at,
+          n.last_call_ended_at, n.flagged_until,
+          (n.flagged_until IS NOT NULL AND n.flagged_until > now()) AS flagged,
+          CASE WHEN n.flagged_until IS NULL OR n.flagged_until <= now() THEN 0
+            ELSE GREATEST(0, CEIL(EXTRACT(EPOCH FROM (n.flagged_until - now())))::int)
+          END AS flagged_remaining_seconds,
           COUNT(c.id)::int AS active_calls,
           CASE WHEN n.last_call_ended_at IS NULL THEN 0
             ELSE GREATEST(0, CEIL(EXTRACT(EPOCH FROM ((n.last_call_ended_at + n.cooldown_seconds * interval '1 second') - now())))::int)
@@ -300,15 +368,15 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
           COUNT(*)::int AS total,
           COUNT(*) FILTER (WHERE next_eligible_at <= now())::int AS ready,
           COUNT(*) FILTER (WHERE next_eligible_at > now())::int AS waiting
-        FROM leads
-        WHERE tenant_id = $1 AND do_not_call = false AND status IN ('queued', 'retry_wait') AND attempts < $2
+        FROM leads l JOIN lead_folders f ON f.tenant_id = l.tenant_id AND f.id = l.folder_id
+        WHERE l.tenant_id = $1 AND f.is_active = true AND l.do_not_call = false AND l.status IN ('queued', 'retry_wait') AND l.attempts < $2
       `, [tenantId, settings.max_attempts_per_lead]),
       this.db.query(`
-        SELECT id, name, phone, status, attempts, next_eligible_at,
-          ROW_NUMBER() OVER (ORDER BY next_eligible_at ASC, created_at ASC)::int AS queue_position
-        FROM leads
-        WHERE tenant_id = $1 AND do_not_call = false AND status IN ('queued', 'retry_wait') AND attempts < $2
-        ORDER BY next_eligible_at ASC, created_at ASC
+        SELECT l.id, l.name, l.phone, l.status, l.attempts, l.next_eligible_at, f.name AS folder_name,
+          ROW_NUMBER() OVER (ORDER BY l.next_eligible_at ASC, l.created_at ASC)::int AS queue_position
+        FROM leads l JOIN lead_folders f ON f.tenant_id = l.tenant_id AND f.id = l.folder_id
+        WHERE l.tenant_id = $1 AND f.is_active = true AND l.do_not_call = false AND l.status IN ('queued', 'retry_wait') AND l.attempts < $2
+        ORDER BY l.next_eligible_at ASC, l.created_at ASC
         LIMIT 12
       `, [tenantId, settings.max_attempts_per_lead]),
       this.db.query(`
@@ -335,16 +403,32 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
         WHERE s.tenant_id = $1
         ORDER BY s.name
       `, [tenantId]),
+      this.db.query(`
+        SELECT f.id AS folder_id, f.name, f.is_active,
+          COUNT(l.id)::int AS lead_count,
+          COUNT(l.id) FILTER (WHERE l.do_not_call = false AND l.status IN ('queued', 'retry_wait') AND l.attempts < ds.max_attempts_per_lead AND l.next_eligible_at <= now())::int AS ready_count,
+          COUNT(l.id) FILTER (WHERE l.do_not_call = false AND l.status IN ('queued', 'retry_wait') AND l.attempts < ds.max_attempts_per_lead)::int AS queue_count
+        FROM lead_folders f
+        LEFT JOIN dialer_settings ds ON ds.tenant_id = f.tenant_id
+        LEFT JOIN leads l ON l.tenant_id = f.tenant_id AND l.folder_id = f.id
+        WHERE f.tenant_id = $1
+        GROUP BY f.id, f.name, f.is_active, ds.max_attempts_per_lead, f.sort_order, f.created_at
+        ORDER BY f.sort_order ASC, f.created_at ASC
+      `, [tenantId]),
     ]);
     const queue = queueSummary.rows[0] ?? { total: 0, ready: 0, waiting: 0 };
     const nextLead = queuePreview.rows[0] ?? null;
     const connectedNumbers = numberDetails.rows.filter((row: any) => ['connected', 'online', 'ready', 'authenticated'].includes(String(row.status).toLowerCase()));
-    const readyNumbers = connectedNumbers.filter((row: any) => Number(row.cooldown_remaining_seconds) === 0);
+    const dialableNumbers = connectedNumbers.filter((row: any) => !row.flagged);
+    const readyNumbers = dialableNumbers.filter((row: any) => Number(row.cooldown_remaining_seconds) === 0);
+    const activeFolders = folderSummary.rows.filter((row: any) => row.is_active);
     let nextAction = 'Pronto para discar';
     if (!settings.running) nextAction = 'Discador pausado';
+    else if (!activeFolders.length) nextAction = 'Nenhuma pasta ativa';
     else if (!Number(queue.total)) nextAction = 'Fila vazia';
     else if (!Number(available.rows[0].count)) nextAction = 'Aguardando SDR disponível';
     else if (!connectedNumbers.length) nextAction = 'Aguardando número WhatsApp conectado';
+    else if (!dialableNumbers.length) nextAction = 'Linhas pausadas pelo limite do WhatsApp';
     else if (!readyNumbers.length) nextAction = 'Aguardando cooldown dos números';
     else if (!Number(queue.ready)) nextAction = 'Aguardando horário da próxima tentativa';
     return {
@@ -363,6 +447,10 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
       active_calls_detail: activeCalls.rows,
       next_action: nextAction,
       next_lead: nextLead,
+      active_folder_count: activeFolders.length,
+      active_folder_ids: activeFolders.map((row: any) => row.folder_id),
+      queued_leads_active_folders: Number(queue.total),
+      folder_queue_summary: folderSummary.rows,
     };
   }
 
@@ -371,7 +459,7 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
       this.getSettings(tenantId),
       this.db.query(`SELECT id, name, available, state, current_pause_id FROM sdrs WHERE tenant_id = $1 AND user_id = $2 LIMIT 1`, [tenantId, userId]),
       // Shared number pool: expose only whether a line is available, never how many.
-      this.db.query(`SELECT EXISTS (SELECT 1 FROM whatsapp_numbers WHERE status IN ('connected', 'online', 'ready', 'authenticated')) AS ready`),
+      this.db.query(`SELECT EXISTS (SELECT 1 FROM whatsapp_numbers WHERE status IN ('connected', 'online', 'ready', 'authenticated') AND (flagged_until IS NULL OR flagged_until <= now())) AS ready`),
     ]);
     return { running: Boolean(settings?.running), sdr: sdr.rows[0] ?? null, line_ready: Boolean(pool.rows[0]?.ready) };
   }
@@ -391,7 +479,7 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
       }
       const settings = await this.getSettings(tenantId);
       if (!settings?.running) return;
-      const [sdrs, numbers, leads] = await Promise.all([
+      const [sdrs, numbers, leads, activeFolderCount] = await Promise.all([
         this.db.query(`
             SELECT s.* FROM sdrs s
             WHERE s.tenant_id = $1 AND s.available = true AND s.state = 'available'
@@ -401,8 +489,35 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
             )
           ORDER BY s.last_assigned_at NULLS FIRST, s.last_assigned_at ASC
         `, [tenantId]),
-        this.db.query(`SELECT * FROM whatsapp_numbers WHERE status IN ('connected', 'online', 'ready', 'authenticated') AND (last_call_ended_at IS NULL OR last_call_ended_at <= now() - (cooldown_seconds * interval '1 second')) ORDER BY last_call_ended_at NULLS FIRST, last_call_ended_at ASC`),
-        this.db.query(`SELECT * FROM leads WHERE tenant_id = $1 AND do_not_call = false AND status IN ('queued', 'retry_wait') AND attempts < $2 AND next_eligible_at <= now() ORDER BY next_eligible_at ASC, created_at ASC LIMIT 25`, [tenantId, settings.max_attempts_per_lead]),
+        this.db.query(`SELECT * FROM whatsapp_numbers WHERE status IN ('connected', 'online', 'ready', 'authenticated') AND (flagged_until IS NULL OR flagged_until <= now()) AND (last_call_ended_at IS NULL OR last_call_ended_at <= now() - (cooldown_seconds * interval '1 second')) ORDER BY last_call_ended_at NULLS FIRST, last_call_ended_at ASC`),
+          this.db.query(`
+          WITH active_folders AS (
+            SELECT f.id, (ROW_NUMBER() OVER (ORDER BY f.sort_order ASC, f.created_at ASC) - 1)::int AS folder_index,
+              COUNT(*) OVER ()::int AS folder_count
+            FROM lead_folders f
+            WHERE f.tenant_id = $1 AND f.is_active = true
+          ), eligible AS (
+            SELECT l.*, f.name AS folder_name, f.sort_order AS folder_sort_order,
+              af.folder_index, af.folder_count,
+              ROW_NUMBER() OVER (PARTITION BY l.folder_id ORDER BY l.next_eligible_at ASC, l.created_at ASC)::int AS folder_rank
+            FROM leads l
+            JOIN active_folders af ON af.id = l.folder_id
+            JOIN lead_folders f ON f.tenant_id = l.tenant_id AND f.id = l.folder_id
+            WHERE l.tenant_id = $1 AND l.do_not_call = false
+              AND l.status IN ('queued', 'retry_wait') AND l.attempts < $2
+              AND l.last_auto_round < $3 AND l.next_eligible_at <= now()
+              AND NOT EXISTS (
+                SELECT 1 FROM calls active_call
+                WHERE active_call.tenant_id = l.tenant_id AND active_call.lead_id = l.id
+                  AND active_call.status IN ('reserved', 'dialing', 'media_active')
+              )
+          )
+          SELECT * FROM eligible
+          ORDER BY ((folder_index - ($4 % folder_count) + folder_count) % folder_count) ASC,
+            folder_rank ASC, next_eligible_at ASC, created_at ASC
+          LIMIT 25
+        `, [tenantId, settings.max_attempts_per_lead, Number(settings.dialer_round ?? 1), Number(settings.folder_rotation_cursor ?? 0)]),
+        this.db.query(`SELECT count(*)::int AS count FROM lead_folders WHERE tenant_id = $1 AND is_active = true`, [tenantId]),
       ]);
 
       for (let i = 0; i < Math.min(sdrs.rows.length, numbers.rows.length, leads.rows.length); i++) {
@@ -428,6 +543,48 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
           this.logger.error(`Could not reserve call: ${String(error)}`);
         }
       }
+      const round = Number(settings.dialer_round ?? 1);
+      const roundState = await this.db.query(`
+        SELECT
+          EXISTS (
+            SELECT 1
+            FROM leads l
+            JOIN lead_folders f ON f.tenant_id = l.tenant_id AND f.id = l.folder_id
+            WHERE l.tenant_id = $1 AND f.is_active = true AND l.do_not_call = false
+              AND l.status IN ('queued', 'retry_wait') AND l.attempts < $2
+              AND l.last_auto_round < $3 AND l.next_eligible_at <= now()
+              AND NOT EXISTS (
+                SELECT 1 FROM calls active_call
+                WHERE active_call.tenant_id = l.tenant_id AND active_call.lead_id = l.id
+                  AND active_call.status IN ('reserved', 'dialing', 'media_active')
+              )
+          ) AS has_ready_unattempted,
+          EXISTS (
+            SELECT 1
+            FROM leads l
+            JOIN lead_folders f ON f.tenant_id = l.tenant_id AND f.id = l.folder_id
+            WHERE l.tenant_id = $1 AND f.is_active = true AND l.do_not_call = false
+              AND l.status IN ('queued', 'retry_wait', 'reserved', 'dialing', 'media_active')
+              AND l.attempts < $2
+              AND NOT EXISTS (
+                SELECT 1 FROM calls active_call
+                WHERE active_call.tenant_id = l.tenant_id AND active_call.lead_id = l.id
+                  AND active_call.status IN ('reserved', 'dialing', 'media_active')
+              )
+          ) AS has_retryable_leads
+      `, [tenantId, settings.max_attempts_per_lead, round]);
+      const state = roundState.rows[0];
+      if (state?.has_retryable_leads && !state.has_ready_unattempted) {
+        const advanced = await this.db.query(`
+          UPDATE dialer_settings
+          SET dialer_round = dialer_round + 1
+          WHERE tenant_id = $1 AND dialer_round = $2
+          RETURNING dialer_round
+        `, [tenantId, round]);
+        if (advanced.rows[0]) this.log(`Nova rodada automática iniciada: ${advanced.rows[0].dialer_round}`, 'info', undefined, tenantId);
+      }
+      const folderCount = Number(activeFolderCount.rows[0]?.count ?? 0);
+      if (folderCount > 0) await this.db.query('UPDATE dialer_settings SET folder_rotation_cursor = ($1 + 1) % $2 WHERE tenant_id = $3', [Number(settings.folder_rotation_cursor ?? 0), folderCount, tenantId]);
     } catch (error) {
       this.logger.warn(`Dialer tick failed: ${String(error)}`);
     } finally {
@@ -460,10 +617,15 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
   private async startReservedCall(sdr: any, number: any, lead: any, settings: any, token: string, source: string, tenantId = legacyTenantId()) {
     const callId = randomUUID();
     const expires = new Date(Date.now() + Number(settings.ring_timeout_seconds) * 1000);
+    const isAutomatic = source === 'automatico';
     try {
       await this.db.transaction(async (client) => {
-        await client.query(`INSERT INTO calls (id, tenant_id, lead_id, number_id, sdr_id, status, attempt_number, offer_expires_at) VALUES ($1,$2,$3,$4,$5,'reserved',$6,$7)`, [callId, tenantId, lead.id, number.id, sdr.id, Number(lead.attempts) + 1, expires]);
-        await client.query(`UPDATE leads SET status = 'reserved', attempts = attempts + 1 WHERE tenant_id = $1 AND id = $2`, [tenantId, lead.id]);
+        const folder = await client.query('SELECT folder_id, is_active FROM leads l JOIN lead_folders f ON f.tenant_id = l.tenant_id AND f.id = l.folder_id WHERE l.tenant_id = $1 AND l.id = $2 FOR UPDATE', [tenantId, lead.id]);
+        if (!folder.rows[0]?.is_active) throw new Error('A pasta deste lead está inativa');
+        await client.query(`INSERT INTO calls (id, tenant_id, folder_id, lead_id, number_id, sdr_id, status, attempt_number, source, offer_expires_at) VALUES ($1,$2,$3,$4,$5,$6,'reserved',$7,$8,$9)`, [callId, tenantId, folder.rows[0].folder_id, lead.id, number.id, sdr.id, isAutomatic ? Number(lead.attempts) + 1 : 0, source, expires]);
+        if (isAutomatic) {
+          await client.query(`UPDATE leads SET status = 'reserved', attempts = attempts + 1, last_auto_round = $1 WHERE tenant_id = $2 AND id = $3`, [Number(settings.dialer_round ?? 1), tenantId, lead.id]);
+        }
         await client.query(`UPDATE sdrs SET available = false, state = 'in_call', last_assigned_at = now() WHERE tenant_id = $1 AND id = $2`, [tenantId, sdr.id]);
       });
       this.active.set(callId, { tenantId, token, numberId: number.id, leadId: lead.id, sdrId: sdr.id, mediaActive: false });
@@ -525,17 +687,30 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
       const settings = await this.getSettings(tenantId);
       let recipient: string;
       try {
-        recipient = await this.waxum.resolveCallRecipient(call.rows[0].waxum_session_id, call.rows[0].phone);
+        recipient = await this.resolveRecipient(call.rows[0].waxum_session_id, call.rows[0].phone);
         this.log(`Destinatario VoIP resolvido para ${recipient}`, 'info', callId);
       } catch (error) {
-        const message = String((error as Error).message ?? error);
-        this.log(`Waxum nao conseguiu preparar o destinatario: ${message}`, 'error', callId);
-        await this.finishCall(callId, 'failed', `waxum_recipient_error:${message}`);
+        const err = error as Error & { statusCode?: number };
+        const message = String(err.message ?? error);
+        // A 429 while learning the LID is transient: back the line off instead
+        // of failing the lead, so we don't burn its attempt budget.
+        if (err.statusCode === 429 || /\b429\b/.test(message)) {
+          const wait = Number(message.match(/wait for\s+(\d+)/i)?.[1]);
+          this.applyRateLimitBackoff(callId, resource, Number.isFinite(wait) ? wait : undefined);
+          return;
+        }
+        // not_on_whatsapp / lid_unavailable: the number cannot receive a VoIP
+        // call. Do not retry it in a loop — finish without a retry so it leaves
+        // the queue and the organizer sees why.
+        const uncallable = message === 'not_on_whatsapp' || message === 'lid_unavailable';
+        this.log(uncallable ? `Lead sem WhatsApp disponível para chamada (${message})` : `Waxum nao conseguiu preparar o destinatario: ${message}`, uncallable ? 'warning' : 'error', callId);
+        await this.finishCall(callId, 'failed', uncallable ? `sem_whatsapp:${message}` : `waxum_recipient_error:${message}`, uncallable);
         return;
       }
       if (resource.finishing) return;
       const media = this.waxum.openMedia(call.rows[0].waxum_session_id, recipient);
       resource.media = media;
+      resource.callPlacedAt = Date.now();
       resource.ringTimeout = setTimeout(() => {
         if (!resource.mediaActive && !resource.answerSignalReceived) void this.finishCall(callId, 'no_answer', 'ring_timeout').catch((error) => this.logger.error(`Could not finish timed out call ${callId}: ${String(error)}`));
       }, Number(settings.ring_timeout_seconds) * 1000);
@@ -573,6 +748,9 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
           }
           return;
         }
+        // Any media frame means the relay attached endpoints — the call
+        // reached the ringing/media stage, so the line is NOT reachout-blocked.
+        resource.receivedAnyFrame = true;
         // Um frame de mídia pode chegar enquanto o WhatsApp ainda está tocando.
         // Ele não confirma atendimento e não deve chegar ao SDR.
         if (!resource.answerSignalReceived) {
@@ -598,9 +776,7 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
       });
       media.on('error', (error) => {
         if (/unexpected server response:\s*429/i.test(error.message)) {
-          this.log('Waxum temporariamente ocupado (limite 429); tentativa devolvida ao lead', 'warning', callId);
-          void this.finishCall(callId, 'cancelled', 'waxum_rate_limited')
-            .catch((finishError) => this.logger.error(`Could not finish Waxum rate limit for ${callId}: ${String(finishError)}`));
+          this.applyRateLimitBackoff(callId, resource);
           return;
         }
         this.log(`Erro no Waxum: ${error.message}`, 'error', callId);
@@ -608,20 +784,35 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
       });
       media.on('unexpected-response', (_request, response) => {
         const statusCode = response.statusCode;
+        const chunks: Buffer[] = [];
+        response.on('data', (chunk: Buffer) => { if (chunks.length < 8) chunks.push(chunk); });
+        response.on('end', () => {
+          const body = Buffer.concat(chunks).toString();
+          if (statusCode === 429) {
+            const waitSeconds = Number(body.match(/wait for\s+(\d+)\s*s/i)?.[1]);
+            this.applyRateLimitBackoff(callId, resource, Number.isFinite(waitSeconds) ? waitSeconds : undefined);
+            return;
+          }
+          this.log(`Waxum recusou a conexão de mídia (HTTP ${statusCode})`, 'error', callId);
+          void this.finishCall(callId, 'failed', `waxum_http_error:${statusCode}`)
+            .catch((finishError) => this.logger.error(`Could not finish Waxum HTTP error for ${callId}: ${String(finishError)}`));
+        });
         response.resume();
-        if (statusCode === 429) {
-          this.log('Waxum temporariamente ocupado (limite 429); tentativa devolvida ao lead', 'warning', callId);
-          void this.finishCall(callId, 'cancelled', 'waxum_rate_limited')
-            .catch((finishError) => this.logger.error(`Could not finish Waxum rate limit for ${callId}: ${String(finishError)}`));
-          return;
-        }
-        this.log(`Waxum recusou a conexão de mídia (HTTP ${statusCode})`, 'error', callId);
-        void this.finishCall(callId, 'failed', `waxum_http_error:${statusCode}`)
-          .catch((finishError) => this.logger.error(`Could not finish Waxum HTTP error for ${callId}: ${String(finishError)}`));
       });
       media.on('close', (code, reason) => {
         const detail = reason.toString().trim();
         const closeReason = detail ? `waxum_closed:${code}:${detail}` : `waxum_closed:${code}`;
+        const gotSignal = resource.mediaActive || resource.receivedAnyFrame || resource.answerSignalReceived;
+        const elapsed = Date.now() - (resource.callPlacedAt ?? Date.now());
+        if (gotSignal) {
+          // Healthy call (audio/answer reached) — the line is fine; clear any
+          // instant-failure streak.
+          this.lineFailures.delete(resource.numberId);
+        } else if (elapsed < this.FLAG_FAST_FAIL_MS) {
+          // Opened then died instantly with no audio: reachout-block signature.
+          void this.registerLineInstantFailure(resource.numberId, resource.tenantId, callId)
+            .catch((error) => this.logger.error(`Could not register line failure for ${callId}: ${String(error)}`));
+        }
         void this.finishCall(callId, resource.mediaActive ? 'completed' : 'no_answer', resource.mediaActive ? 'remote_hangup' : closeReason)
           .catch((error) => this.logger.error(`Could not finish closed call ${callId}: ${String(error)}`));
       });
@@ -671,6 +862,40 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
     await this.db.query(`UPDATE sdrs SET available = false, state = CASE WHEN current_pause_id IS NULL THEN 'offline' ELSE 'post_call' END WHERE tenant_id = $1 AND id = $2`, [tenantId, sdrId]);
   }
 
+  private applyRateLimitBackoff(callId: string, resource: CallResource | undefined, waitSeconds?: number) {
+    // WhatsApp/Waxum throttles outbound call initiation. When it answers 429
+    // ("wait for Ns"), honor that window on the WhatsApp line instead of
+    // re-dialing every tick. Re-dialing immediately keeps the rate-limit
+    // window permanently open, so no call ever gets to ring.
+    // Floor the backoff ABOVE WhatsApp's largest observed call-rate window
+    // (~177s). If we retry a line before its penalty window clears, the attempt
+    // just refreshes the window and the session never recovers. 180s+ ensures
+    // the window expires before we dial that line again, so it self-heals.
+    const backoff = Math.min(600, Math.max(180, Math.round(waitSeconds ?? 180)));
+    if (resource) resource.rateLimitBackoffSeconds = backoff;
+    this.log(`Waxum limitou a linha (429); aguardando ${backoff}s antes de discar novamente nela`, 'warning', callId);
+    void this.finishCall(callId, 'cancelled', 'waxum_rate_limited')
+      .catch((finishError) => this.logger.error(`Could not finish Waxum rate limit for ${callId}: ${String(finishError)}`));
+  }
+
+  // A call that opens the media socket but closes almost immediately with no
+  // audio and no answer is the signature of a WhatsApp reachout timelock
+  // (463 MissingTcToken): the relay attaches no endpoints. After a couple of
+  // these in a row on the same line, quarantine it so the dialer routes to
+  // healthy lines instead of hammering (and deepening the penalty on) a
+  // flagged account. A single call that produces audio resets the counter.
+  private async registerLineInstantFailure(numberId: string, tenantId: string, callId: string) {
+    const count = (this.lineFailures.get(numberId) ?? 0) + 1;
+    this.lineFailures.set(numberId, count);
+    if (count < this.FLAG_FAILURE_THRESHOLD) return;
+    this.lineFailures.delete(numberId);
+    const hours = this.flagQuarantineHours;
+    await this.db.query(`UPDATE whatsapp_numbers SET flagged_until = now() + ($1 * interval '1 hour') WHERE id = $2`, [hours, numberId]);
+    const label = await this.db.query(`SELECT label FROM whatsapp_numbers WHERE id = $1`, [numberId]);
+    this.log(`Linha "${label.rows[0]?.label ?? numberId}" parece bloqueada pelo WhatsApp (chamadas caindo na hora, sem tocar); pausada por ${hours}h para proteger a conta. O discador usará as outras linhas.`, 'error', callId, tenantId);
+    this.gateway.broadcast({ type: 'number_flagged', numberId, flaggedHours: hours }, tenantId);
+  }
+
   private async finishCall(callId: string, status: string, reason?: string, forceNoRetry = false, tenantId = legacyTenantId()) {
     if (this.finishingCalls.has(callId)) return;
     this.finishingCalls.add(callId);
@@ -686,13 +911,14 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
         if (resource.browser && resource.browserErrorHandler) resource.browser.off('error', resource.browserErrorHandler);
         if (resource.media && resource.media.readyState === WebSocket.OPEN) resource.media.close();
       }
-      const call = await this.db.query(`SELECT c.*, s.id AS sdr_id, n.id AS number_id, l.attempts, ds.max_attempts_per_lead, ds.retry_delay_minutes FROM calls c JOIN sdrs s ON s.tenant_id = c.tenant_id AND s.id = c.sdr_id JOIN whatsapp_numbers n ON n.id = c.number_id JOIN leads l ON l.tenant_id = c.tenant_id AND l.id = c.lead_id JOIN dialer_settings ds ON ds.tenant_id = c.tenant_id WHERE c.tenant_id = $1 AND c.id = $2`, [tenantId, callId]);
+      const call = await this.db.query(`SELECT c.*, s.id AS sdr_id, n.id AS number_id, n.cooldown_seconds, l.attempts, ds.max_attempts_per_lead, ds.retry_delay_minutes FROM calls c JOIN sdrs s ON s.tenant_id = c.tenant_id AND s.id = c.sdr_id JOIN whatsapp_numbers n ON n.id = c.number_id JOIN leads l ON l.tenant_id = c.tenant_id AND l.id = c.lead_id JOIN dialer_settings ds ON ds.tenant_id = c.tenant_id WHERE c.tenant_id = $1 AND c.id = $2`, [tenantId, callId]);
       if (!call.rows[0]) return;
       const row = call.rows[0];
       if (['completed', 'no_answer', 'failed', 'cancelled'].includes(row.status)) return;
       const outcome = reason ?? status;
       const transientRateLimit = outcome === 'waxum_rate_limited';
-      const retryable = !transientRateLimit && ['no_answer', 'failed'].includes(status) && !forceNoRetry && Number(row.attempts) < Number(row.max_attempts_per_lead);
+      const isAutomatic = row.source !== 'manual';
+      const retryable = isAutomatic && !transientRateLimit && ['no_answer', 'failed'].includes(status) && !forceNoRetry && Number(row.attempts) < Number(row.max_attempts_per_lead);
       const finalCallStatus = transientRateLimit ? 'cancelled' : retryable ? 'retry_wait' : status;
       const leadStatus = transientRateLimit ? 'queued' : retryable ? 'retry_wait' : status === 'completed' ? 'completed' : status === 'cancelled' ? 'queued' : status;
       const requiresPostCall = Boolean(row.connected_at);
@@ -700,7 +926,9 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
       this.log(`Chamada encerrada: ${finalCallStatus} (${outcome})`, transientRateLimit ? 'warning' : finalCallStatus === 'failed' ? 'error' : 'info', callId);
       await this.db.transaction(async (client) => {
         await client.query(`UPDATE calls SET status = $1, ended_at = now(), duration_seconds = CASE WHEN COALESCE(connected_at, started_at) IS NULL THEN 0 ELSE EXTRACT(EPOCH FROM (now() - COALESCE(connected_at, started_at)))::int END, outcome = $2, failure_reason = CASE WHEN $4 IN ('failed','no_answer') OR $2 = 'waxum_rate_limited' THEN $2 ELSE failure_reason END WHERE tenant_id = $5 AND id = $3 AND status NOT IN ('completed','no_answer','failed','cancelled')`, [finalCallStatus, outcome, callId, status, tenantId]);
-        if (transientRateLimit) {
+        if (!isAutomatic) {
+          // Manual calls must not alter the automatic queue or attempt budget.
+        } else if (transientRateLimit) {
           await client.query(`UPDATE leads SET status = 'queued', attempts = GREATEST(0, attempts - 1), next_eligible_at = now() + interval '10 seconds' WHERE tenant_id = $1 AND id = $2`, [tenantId, row.lead_id]);
         } else if (retryable) {
           await client.query(`UPDATE leads SET status = $2, next_eligible_at = now() + ($1::int * interval '1 minute') WHERE tenant_id = $3 AND id = $4`, [row.retry_delay_minutes, leadStatus, tenantId, row.lead_id]);
@@ -728,7 +956,17 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
         } else {
           await client.query(`UPDATE sdrs SET available = true, state = 'available', current_pause_id = NULL WHERE tenant_id = $1 AND id = $2`, [tenantId, row.sdr_id]);
         }
-        if (!transientRateLimit) await client.query(`UPDATE whatsapp_numbers SET last_call_ended_at = now() WHERE id = $1`, [row.number_id]);
+        if (transientRateLimit) {
+          // WhatsApp rate-limited this line. Push its next-eligible time out by
+          // the requested backoff so the dialer stops hammering it every tick.
+          // The eligibility gate is `last_call_ended_at <= now() - cooldown`, so
+          // future-dating it by (backoff - cooldown) makes the line eligible
+          // again only after `backoff` seconds.
+          const backoff = Math.min(600, Math.max(Number(row.cooldown_seconds ?? 60), Number(resource?.rateLimitBackoffSeconds ?? 180)));
+          await client.query(`UPDATE whatsapp_numbers SET last_call_ended_at = now() + (($1::int - cooldown_seconds) * interval '1 second') WHERE id = $2`, [backoff, row.number_id]);
+        } else {
+          await client.query(`UPDATE whatsapp_numbers SET last_call_ended_at = now() WHERE id = $1`, [row.number_id]);
+        }
       });
       if (resource) await this.redis.release({ tenantId: resource.tenantId, token: resource.token, numberId: resource.numberId, leadId: resource.leadId, sdrId: resource.sdrId });
       this.gateway.sendToSdr(row.sdr_id, { type: 'call_finished', callId, status: finalCallStatus, outcome, pause });

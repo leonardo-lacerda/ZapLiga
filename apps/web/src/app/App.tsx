@@ -19,14 +19,18 @@ import { RegisterPage } from '../features/auth/RegisterPage';
 import { useAuth } from '../features/auth/AuthProvider';
 
 const pauseFromSdr = (sdr: AnyRow) => sdr?.current_pause_id && sdr.pause_started_at ? ({ id: sdr.current_pause_id, pause_type: sdr.pause_type ?? 'post_call', started_at: sdr.pause_started_at, call_id: sdr.pause_call_id, lead_name: sdr.pause_lead_name, lead_phone: sdr.pause_lead_phone, call_started_at: sdr.pause_call_started_at, pause_elapsed_seconds: sdr.pause_elapsed_seconds }) : null;
+const isoDate = (date: Date) => date.toISOString().slice(0, 10);
 
 function AuthenticatedApp() {
   const { session, activeTenantId, selectTenant, reload } = useAuth();
-  const apiBaseUrl = '';
   const fetch = apiFetch;
   const [status, setStatus] = useState<AnyRow>({});
   const [numbers, setNumbers] = useState<AnyRow[]>([]);
   const [leads, setLeads] = useState<AnyRow[]>([]);
+  const [leadFolders, setLeadFolders] = useState<AnyRow[]>([]);
+  const [selectedFolderId, setSelectedFolderId] = useState('');
+  const [folderMetrics, setFolderMetrics] = useState<AnyRow | null>(null);
+  const [metricsRange, setMetricsRange] = useState({ from: isoDate(new Date(Date.now() - 29 * 24 * 60 * 60 * 1000)), to: isoDate(new Date()) });
   const [sdrs, setSdrs] = useState<AnyRow[]>([]);
   const [calls, setCalls] = useState<AnyRow[]>([]);
   const [logs, setLogs] = useState<AnyRow[]>([]);
@@ -58,19 +62,29 @@ function AuthenticatedApp() {
 
   const load = useCallback(async () => {
     try {
-      const [nextStatus, nextNumbers, nextLeads, nextSdrs, nextCalls, events] = isSdr
+      const [nextStatus, nextNumbers, nextFolders, nextSdrs, nextCalls, events] = isSdr
         ? [await json('/api/dialer/sdr-status'), [], [], [await json('/api/me/sdr')], [], []]
-        : await Promise.all([json('/api/dialer/status'), json('/api/numbers'), json('/api/leads'), json('/api/sdrs'), json('/api/calls'), json('/api/dialer/logs')]);
+        : await Promise.all([json('/api/dialer/status'), json('/api/numbers'), json('/api/lead-folders'), json('/api/sdrs'), json('/api/calls'), json('/api/dialer/logs')]);
+      const folderId = !isSdr ? (nextFolders.find((folder: AnyRow) => folder.id === selectedFolderId)?.id ?? nextFolders.find((folder: AnyRow) => folder.is_active)?.id ?? nextFolders[0]?.id ?? '') : '';
+      const [nextLeads, nextMetrics] = !isSdr && folderId
+        ? await Promise.all([json(`/api/lead-folders/${folderId}/leads`), json(`/api/lead-folders/${folderId}/metrics?from=${metricsRange.from}&to=${metricsRange.to}`)])
+        : [[], null];
+      if (folderId && folderId !== selectedFolderId) setSelectedFolderId(folderId);
       setStatus(nextStatus); setNumbers(nextNumbers); setLeads(nextLeads); setSdrs(nextSdrs); setCalls(nextCalls); setLogs(events); setError('');
-      const ownSdr = nextSdrs.find((item: AnyRow) => item.id === sdrId);
+      setLeadFolders(nextFolders); setFolderMetrics(nextMetrics);
+      // A pending post-call pause belongs exclusively to the authenticated SDR.
+      // Leaders and the super admin may see all SDRs, but must never inherit an
+      // SDR's wrap-up state in their own panel.
+      const ownSdr = isSdr ? nextSdrs[0] : null;
       const currentPause = ownSdr ? pauseFromSdr(ownSdr) : null;
       if (currentPause && !postCall) setPostCall(currentPause);
+      if (!isSdr && postCall) setPostCall(null);
     } catch (e) {
       setError(e instanceof TypeError ? 'API temporariamente indisponível. Tentando reconectar...' : String(e));
     }
-  }, [sdrId, postCall, activeTenantId, isSdr]);
+  }, [sdrId, postCall, activeTenantId, isSdr, selectedFolderId, metricsRange.from, metricsRange.to]);
 
-  useEffect(() => { if (!sdrId && sdrs[0]?.id) setSdrId(sdrs[0].id); }, [sdrId, sdrs]);
+  useEffect(() => { if (!isSdr) { if (sdrId) setSdrId(''); return; } if (!sdrId && sdrs[0]?.id) setSdrId(sdrs[0].id); }, [isSdr, sdrId, sdrs]);
   useEffect(() => { setSdrId(''); setActiveCall(null); setPostCall(null); setQr(null); setQrNumberId(''); }, [activeTenantId]);
   useEffect(() => { if (isSdr && tab !== 'dashboard') setTab('dashboard'); }, [isSdr, tab]);
   useEffect(() => { if (!isSuperAdmin && tab === 'numbers') setTab('dashboard'); }, [isSuperAdmin, tab]);
@@ -134,8 +148,12 @@ function AuthenticatedApp() {
   const finishPostCall = async (input: AnyRow) => { if (!sdrId || !postCall?.id) return; setFinishingPause(true); setError(''); try { await json(`/api/sdrs/${sdrId}/pauses/${postCall.id}/finish`, { method: 'POST', body: JSON.stringify(input) }); setPostCall(null); setAvailable(true); await load(); } catch (e) { setError(e instanceof Error ? e.message : String(e)); } finally { setFinishingPause(false); } };
   const hangup = () => { if (!activeCall) return; const answered = activeCall.phase === 'answered' || activeCall.mediaActive; control.current?.send(JSON.stringify({ type: 'outcome', callId: activeCall.callId, outcome: answered ? 'sdr_hangup' : 'sdr_cancelled' })); };
   const createNumber = async (event: React.FormEvent) => { event.preventDefault(); try { await json('/api/numbers', { method: 'POST', body: JSON.stringify(numberForm) }); setNumberForm({ label: '', phone: '' }); await load(); } catch (e) { setError(String(e)); } };
-  const createLead = async (event: React.FormEvent) => { event.preventDefault(); try { await json('/api/leads', { method: 'POST', body: JSON.stringify(leadForm) }); setLeadForm({ name: '', phone: '' }); await load(); } catch (e) { setError(String(e)); } };
-  const importCsv = async (event: React.ChangeEvent<HTMLInputElement>) => { const file = event.target.files?.[0]; if (!file) return; const data = new FormData(); data.append('file', file); setImportResult(''); try { const response = await fetch(`${apiBaseUrl}/api/leads/import`, { method: 'POST', body: data }); const result = await response.json().catch(() => ({})); if (!response.ok) throw new Error(result.message ?? 'Não foi possível importar o CSV'); setImportResult(`${result.imported} contatos importados${result.skipped ? ` · ${result.skipped} linhas ignoradas` : ''}`); event.target.value = ''; await load(); } catch (e) { setError(e instanceof Error ? e.message : String(e)); } };
+  const createFolder = async (name: string) => { try { const folder = await json('/api/lead-folders', { method: 'POST', body: JSON.stringify({ name, isActive: true }) }); setSelectedFolderId(folder.id); await load(); } catch (e) { setError(e instanceof Error ? e.message : String(e)); } };
+  const updateFolder = async (id: string, input: AnyRow) => { try { await json(`/api/lead-folders/${id}`, { method: 'PATCH', body: JSON.stringify(input) }); await load(); } catch (e) { setError(e instanceof Error ? e.message : String(e)); } };
+  const removeFolder = async (id: string, name: string) => { if (!window.confirm(`Excluir a pasta ${name}? Ela precisa estar vazia para ser excluída.`)) return; try { await json(`/api/lead-folders/${id}`, { method: 'DELETE' }); if (selectedFolderId === id) setSelectedFolderId(''); await load(); } catch (e) { setError(e instanceof Error ? e.message : String(e)); } };
+  const createLead = async (event: React.FormEvent) => { event.preventDefault(); if (!selectedFolderId) { setError('Crie ou selecione uma pasta antes de adicionar um lead.'); return; } try { await json(`/api/lead-folders/${selectedFolderId}/leads`, { method: 'POST', body: JSON.stringify(leadForm) }); setLeadForm({ name: '', phone: '' }); await load(); } catch (e) { setError(String(e)); } };
+  const importCsv = async (file: File) => { if (!selectedFolderId) { setError('Selecione uma pasta antes de importar o CSV.'); return; } const data = new FormData(); data.append('file', file); setImportResult(''); try { const response = await fetch(`/api/lead-folders/${selectedFolderId}/import`, { method: 'POST', body: data }); const result = await response.json().catch(() => ({})); if (!response.ok) throw new Error(result.message ?? 'Não foi possível importar o CSV'); setImportResult(`${result.imported ?? 0} novos · ${result.updated ?? 0} atualizados · ${result.duplicated ?? 0} duplicados · ${result.skipped ?? 0} ignorados`); await load(); } catch (e) { setError(e instanceof Error ? e.message : String(e)); } };
+  const clearFolder = async () => { const folder = leadFolders.find((item) => item.id === selectedFolderId); if (!folder) return; if (!window.confirm(`Limpar todos os leads da pasta ${folder.name}? O histórico dessa pasta também será excluído.`)) return; try { await json(`/api/lead-folders/${selectedFolderId}/leads`, { method: 'DELETE' }); await load(); } catch (e) { setError(e instanceof Error ? e.message : String(e)); } };
   const toggleDialer = async () => { try { await json(status.running ? '/api/dialer/pause' : '/api/dialer/start', { method: 'POST' }); await load(); } catch (e) { setError(String(e)); } };
   const showQr = async (id: string) => { if (qrBusy.current) return; qrBusy.current = true; setQrLoading(true); setQr({ qr_codes: [], status: 'loading', timeout_seconds: 60 }); setQrNumberId(id); try { setQr(await json(`/api/numbers/${id}/qr`)); setQrNumberId(id); } catch (e) { setError(String(e)); } finally { qrBusy.current = false; setQrLoading(false); } };
   const closeQr = () => { setQr(null); setQrNumberId(''); };
@@ -160,9 +178,9 @@ function AuthenticatedApp() {
       <aside className="context-sidebar" aria-label="Status da operação"><div className="context-title"><div className="context-icon"><Icon name="chart" size={16} /></div><div><strong>Status da operação</strong><small>Indicadores em tempo real</small></div></div><div className="context-status"><div><span className="status-line"><i className={status.running ? 'on' : ''}></i>Discador</span><small className="context-status-detail">{status.running ? 'Processando a fila' : 'Operação pausada'}</small></div><Badge tone={status.running ? 'success' : 'neutral'}>{status.running ? 'Operando' : 'Pausado'}</Badge></div><div className="context-metrics"><div className="context-metric"><span>Contatos na fila</span><strong>{queuedLeads}</strong><small>aguardando discagem</small></div><div className="context-metric"><span>{isSdr ? 'Linha do WhatsApp' : 'Números conectados'}</span><strong>{isSdr ? (status.line_ready ? 'Ligada' : 'Offline') : connectedNumbers}</strong><small>{isSdr ? (status.line_ready ? 'pronta para chamadas' : 'aguardando conexão') : 'prontos para uso'}</small></div><div className="context-metric"><span>SDRs disponíveis</span><strong>{availableSdrs}</strong><small>equipe online</small></div></div><div className="context-note"><Icon name="headset" size={15} /><div><strong>Central de operação</strong><small>Use o menu ao lado para acessar cada área.</small></div></div></aside>
       <main className="main-content"><div className="module-header"><div className="breadcrumb"><Icon name="chart" size={17} /><strong>{moduleTitle}</strong><span>/</span><span>Central de operação</span></div><div className="header-actions"><button className="date-filter"><Icon name="calendar" size={15} />29 jul 2026 – 27 ago 2026<Icon name="chevron" size={14} /></button>{!isSdr && <Button variant={status.running ? 'danger' : 'primary'} icon={status.running ? 'pause' : 'play'} onClick={() => void toggleDialer()}>{status.running ? 'Pausar discador' : 'Iniciar discador'}</Button>}</div></div>
         {activeCall?.lead && (() => { const answered = activeCall.phase === 'answered' || activeCall.mediaActive; return <div className={`answered-call-banner${answered ? '' : ' is-ringing'}`} role="status"><div className="answered-call-contact"><span className={`answered-call-icon${answered ? '' : ' is-ringing'}`}><Icon name="phone" size={18} /></span><div><span>{answered ? 'CLIENTE ATENDEU' : 'CHAMANDO…'}</span><strong>{activeCall.lead.name}</strong><small>{activeCall.lead.phone} · {answered ? <LiveTimer startedAt={activeCall.connectedAt ?? activeCall.connected_at ?? activeCall.callStartedAt} /> : 'Tocando no WhatsApp…'}</small></div></div><Button variant="danger" icon="close" onClick={hangup}>{answered ? 'Encerrar chamada' : 'Desligar'}</Button></div>; })()}
-        {postCall && <PostCallPanel pause={postCall} onFinish={finishPostCall} submitting={finishingPause} />}
+        {isSdr && postCall && <PostCallPanel pause={postCall} onFinish={finishPostCall} submitting={finishingPause} />}
         {error && <div className="alert" role="alert"><Icon name="alert" size={17} /><span>{error}</span><button onClick={() => setError('')} aria-label="Fechar erro"><Icon name="close" size={16} /></button></div>}
-        <div className="page-content">{tab === 'dashboard' && <Dashboard isSdr={isSdr} status={status} available={available} connected={connected} sdrReady={sdrReady} sdrs={sdrs} connectSdr={connectSdr} setAvailability={setAvailability} manualDial={manualDial} manualPhone={manualPhone} setManualPhone={setManualPhone} manualName={manualName} setManualName={setManualName} manualCalling={manualCalling} logs={logs} activeCall={activeCall} hangup={hangup} connectedNumbers={connectedNumbers} postCall={postCall} />}{tab === 'numbers' && <NumbersPage numbers={numbers} numberForm={numberForm} setNumberForm={setNumberForm} createNumber={createNumber} showQr={showQr} reconnectNumber={reconnectNumber} removeNumber={removeNumber} qrLoading={qrLoading} qr={qr} closeQr={closeQr} canManageNumbers={isSuperAdmin} />}{tab === 'leads' && <LeadsPage leads={leads} leadForm={leadForm} setLeadForm={setLeadForm} createLead={createLead} importCsv={importCsv} importResult={importResult} clearLeads={clearLeads} manualCall={manualCall} resetLead={resetLead} removeLead={removeLead} />}{tab === 'sdrs' && <SdrsPage tenantId={activeTenantId} sdrs={sdrs} />}{tab === 'calls' && <CallsPage calls={calls} />}{tab === 'access' && activeTenantId && <AccessPage tenantId={activeTenantId} role={isSuperAdmin ? 'super_admin' : activeTenant?.role ?? ''} />}{tab === 'admin' && isSuperAdmin && <AdminPage onChanged={reload} onOpenTenant={(tenantId) => { selectTenant(tenantId); setTab('dashboard'); }} />}</div>
+        <div className="page-content">{tab === 'dashboard' && <Dashboard isSdr={isSdr} status={status} available={available} connected={connected} sdrReady={sdrReady} sdrs={sdrs} connectSdr={connectSdr} setAvailability={setAvailability} manualDial={manualDial} manualPhone={manualPhone} setManualPhone={setManualPhone} manualName={manualName} setManualName={setManualName} manualCalling={manualCalling} logs={logs} activeCall={activeCall} hangup={hangup} connectedNumbers={connectedNumbers} postCall={postCall} />}{tab === 'numbers' && <NumbersPage numbers={numbers} numberForm={numberForm} setNumberForm={setNumberForm} createNumber={createNumber} showQr={showQr} reconnectNumber={reconnectNumber} removeNumber={removeNumber} qrLoading={qrLoading} qr={qr} closeQr={closeQr} canManageNumbers={isSuperAdmin} />}{tab === 'leads' && <LeadsPage leads={leads} folders={leadFolders} selectedFolderId={selectedFolderId} selectedFolder={leadFolders.find((folder) => folder.id === selectedFolderId)} metrics={folderMetrics} metricsRange={metricsRange} setMetricsRange={setMetricsRange} setSelectedFolderId={setSelectedFolderId} createFolder={createFolder} updateFolder={updateFolder} removeFolder={removeFolder} leadForm={leadForm} setLeadForm={setLeadForm} createLead={createLead} importCsv={importCsv} importResult={importResult} clearFolder={clearFolder} manualCall={manualCall} resetLead={resetLead} removeLead={removeLead} />}{tab === 'sdrs' && <SdrsPage tenantId={activeTenantId} sdrs={sdrs} />}{tab === 'calls' && <CallsPage calls={calls} />}{tab === 'access' && activeTenantId && <AccessPage tenantId={activeTenantId} role={isSuperAdmin ? 'super_admin' : activeTenant?.role ?? ''} />}{tab === 'admin' && isSuperAdmin && <AdminPage onChanged={reload} onOpenTenant={(tenantId) => { selectTenant(tenantId); setTab('dashboard'); }} />}</div>
       </main></div>
   </div></>;
 }
