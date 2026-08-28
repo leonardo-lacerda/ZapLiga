@@ -45,13 +45,10 @@ jobs:
     environment:
       name: production
     steps:
-      - name: Configurar chave SSH
-        env:
-          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
-        run: |
-          set -euo pipefail
-          eval "$(ssh-agent -s)"
-          printf '%s\n' "$DEPLOY_SSH_KEY" | ssh-add -
+      - name: Baixar código para deploy
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
 
       - name: Verificar host SSH
         env:
@@ -79,30 +76,17 @@ jobs:
           deploy_key="$RUNNER_TEMP/zapliga-deploy-key"
           printf '%s\n' "$DEPLOY_SSH_KEY" > "$deploy_key"
           chmod 600 "$deploy_key"
+
+          tar --exclude=.git --exclude=.env -czf - . | ssh -i "$deploy_key" -p "${DEPLOY_PORT:-22}" -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes "$DEPLOY_USER@$DEPLOY_HOST" 'mkdir -p /opt/zapliga && tar -xzf - -C /opt/zapliga'
+
           ssh -i "$deploy_key" -p "${DEPLOY_PORT:-22}" -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes "$DEPLOY_USER@$DEPLOY_HOST" 'bash -se' <<'REMOTE'
           set -Eeuo pipefail
 
           APP_DIR=/opt/zapliga
-          REPOSITORY=https://github.com/leonardo-lacerda/ZapLiga.git
 
-          if ! command -v git >/dev/null 2>&1; then
-            echo "Git não está instalado no servidor" >&2
-            exit 1
-          fi
           if ! command -v docker >/dev/null 2>&1; then
             echo "Docker não está instalado no servidor" >&2
             exit 1
-          fi
-
-          if [ ! -d "$APP_DIR/.git" ]; then
-            mkdir -p "$APP_DIR"
-            git -C "$APP_DIR" init
-            git -C "$APP_DIR" remote add origin "$REPOSITORY"
-            git -C "$APP_DIR" fetch --prune origin main
-            git -C "$APP_DIR" checkout -B main origin/main
-          else
-            git -C "$APP_DIR" fetch --prune origin main
-            git -C "$APP_DIR" checkout -B main origin/main
           fi
 
           cd "$APP_DIR"
