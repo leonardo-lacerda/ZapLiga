@@ -26,8 +26,8 @@ export class AdminService {
           (SELECT count(*)::int FROM calls WHERE status = 'failed' AND created_at >= date_trunc('day', now()) AND ($1::text IS NULL OR tenant_id = $1)) AS failed_calls_today,
           (SELECT count(*)::int FROM leads WHERE status IN ('queued','retry_wait') AND do_not_call = false AND ($1::text IS NULL OR tenant_id = $1)) AS queued_leads,
           (SELECT count(*)::int FROM sdrs WHERE available = true AND state = 'available' AND ($1::text IS NULL OR tenant_id = $1)) AS available_sdrs,
-          (SELECT count(*)::int FROM whatsapp_numbers WHERE status IN ('connected','online','ready','authenticated') AND ($1::text IS NULL OR tenant_id = $1)) AS connected_numbers,
-          (SELECT count(*)::int FROM whatsapp_numbers WHERE status NOT IN ('connected','online','ready','authenticated','removed') AND ($1::text IS NULL OR tenant_id = $1)) AS disconnected_numbers
+          (SELECT count(*)::int FROM whatsapp_numbers WHERE status IN ('connected','online','ready','authenticated')) AS connected_numbers,
+          (SELECT count(*)::int FROM whatsapp_numbers WHERE status NOT IN ('connected','online','ready','authenticated','removed')) AS disconnected_numbers
       `, [scope]),
       this.db.query(`SELECT status, count(*)::int AS count FROM tenants WHERE ($1::text IS NULL OR id = $1) GROUP BY status ORDER BY status`, [scope]),
       this.db.query(`
@@ -60,8 +60,8 @@ export class AdminService {
         (SELECT count(*)::int FROM tenant_memberships tm WHERE tm.tenant_id = t.id AND tm.status <> 'removed') AS member_count,
         (SELECT count(*)::int FROM leads l WHERE l.tenant_id = t.id) AS lead_count,
         (SELECT count(*)::int FROM sdrs s WHERE s.tenant_id = t.id) AS sdr_count,
-        (SELECT count(*)::int FROM whatsapp_numbers n WHERE n.tenant_id = t.id AND n.status <> 'removed') AS number_count,
-        (SELECT count(*)::int FROM whatsapp_numbers n WHERE n.tenant_id = t.id AND n.status IN ('connected','online','ready','authenticated')) AS connected_numbers,
+        (SELECT count(*)::int FROM whatsapp_numbers n WHERE n.status <> 'removed') AS number_count,
+        (SELECT count(*)::int FROM whatsapp_numbers n WHERE n.status IN ('connected','online','ready','authenticated')) AS connected_numbers,
         (SELECT count(*)::int FROM calls c WHERE c.tenant_id = t.id AND c.created_at >= date_trunc('day', now())) AS calls_today,
         COALESCE((SELECT running FROM dialer_settings d WHERE d.tenant_id = t.id), false) AS dialer_running
       FROM tenants t ${clause}
@@ -79,8 +79,8 @@ export class AdminService {
           (SELECT count(*)::int FROM leads l WHERE l.tenant_id = t.id AND l.status IN ('queued','retry_wait') AND l.do_not_call = false) AS queued_leads,
           (SELECT count(*)::int FROM sdrs s WHERE s.tenant_id = t.id) AS sdr_count,
           (SELECT count(*)::int FROM sdrs s WHERE s.tenant_id = t.id AND s.available = true) AS available_sdrs,
-          (SELECT count(*)::int FROM whatsapp_numbers n WHERE n.tenant_id = t.id AND n.status <> 'removed') AS number_count,
-          (SELECT count(*)::int FROM whatsapp_numbers n WHERE n.tenant_id = t.id AND n.status IN ('connected','online','ready','authenticated')) AS connected_numbers,
+          (SELECT count(*)::int FROM whatsapp_numbers n WHERE n.status <> 'removed') AS number_count,
+          (SELECT count(*)::int FROM whatsapp_numbers n WHERE n.status IN ('connected','online','ready','authenticated')) AS connected_numbers,
           (SELECT count(*)::int FROM calls c WHERE c.tenant_id = t.id AND c.created_at >= date_trunc('day', now())) AS calls_today,
           (SELECT count(*)::int FROM calls c WHERE c.tenant_id = t.id AND c.status IN ('reserved','dialing','media_active')) AS active_calls,
           row_to_json(ds) AS dialer_settings
@@ -89,7 +89,7 @@ export class AdminService {
       `, [tenantId]),
       this.db.query(`SELECT tm.user_id, tm.role, tm.status, u.name, u.email, u.status AS user_status, u.last_login_at FROM tenant_memberships tm JOIN users u ON u.id = tm.user_id WHERE tm.tenant_id = $1 AND tm.status <> 'removed' ORDER BY tm.role, u.name LIMIT 100`, [tenantId]),
       this.db.query(`SELECT id, invited_email, invitee_name, role, expires_at, created_at FROM invitations WHERE tenant_id = $1 AND accepted_at IS NULL AND revoked_at IS NULL AND expires_at > now() ORDER BY created_at DESC LIMIT 50`, [tenantId]),
-      this.db.query(`SELECT c.id, c.status, c.created_at, c.duration_seconds, l.name AS lead_name, s.name AS sdr_name, n.label AS number_label FROM calls c JOIN leads l ON l.tenant_id = c.tenant_id AND l.id = c.lead_id JOIN sdrs s ON s.tenant_id = c.tenant_id AND s.id = c.sdr_id JOIN whatsapp_numbers n ON n.tenant_id = c.tenant_id AND n.id = c.number_id WHERE c.tenant_id = $1 ORDER BY c.created_at DESC LIMIT 20`, [tenantId]),
+      this.db.query(`SELECT c.id, c.status, c.created_at, c.duration_seconds, l.name AS lead_name, s.name AS sdr_name, n.label AS number_label FROM calls c JOIN leads l ON l.tenant_id = c.tenant_id AND l.id = c.lead_id JOIN sdrs s ON s.tenant_id = c.tenant_id AND s.id = c.sdr_id JOIN whatsapp_numbers n ON n.id = c.number_id WHERE c.tenant_id = $1 ORDER BY c.created_at DESC LIMIT 20`, [tenantId]),
     ]);
     if (!tenant.rows[0]) throw new NotFoundException('Empresa não encontrada');
     return { tenant: tenant.rows[0], members: members.rows, invitations: invitations.rows, recentCalls: calls.rows };
@@ -126,13 +126,13 @@ export class AdminService {
           (SELECT count(*)::int FROM calls c WHERE c.tenant_id = t.id AND c.status IN ('reserved','dialing','media_active')) AS active_calls,
           (SELECT count(*)::int FROM leads l WHERE l.tenant_id = t.id AND l.status IN ('queued','retry_wait') AND l.do_not_call = false) AS queued_leads,
           (SELECT count(*)::int FROM sdrs s WHERE s.tenant_id = t.id AND s.available = true AND s.state = 'available') AS available_sdrs,
-          (SELECT count(*)::int FROM whatsapp_numbers n WHERE n.tenant_id = t.id AND n.status IN ('connected','online','ready','authenticated')) AS connected_numbers
+          (SELECT count(*)::int FROM whatsapp_numbers n WHERE n.status IN ('connected','online','ready','authenticated')) AS connected_numbers
         FROM tenants t
         WHERE ($1::text IS NULL OR t.id = $1)
         ORDER BY active_calls DESC, queued_leads DESC, t.name LIMIT 100
       `, [scope]),
-      this.db.query(`SELECT c.id, c.tenant_id, t.name AS tenant_name, c.status, c.created_at, c.duration_seconds, l.name AS lead_name, s.name AS sdr_name, n.label AS number_label FROM calls c JOIN tenants t ON t.id = c.tenant_id JOIN leads l ON l.tenant_id = c.tenant_id AND l.id = c.lead_id JOIN sdrs s ON s.tenant_id = c.tenant_id AND s.id = c.sdr_id JOIN whatsapp_numbers n ON n.tenant_id = c.tenant_id AND n.id = c.number_id WHERE ($1::text IS NULL OR c.tenant_id = $1) ORDER BY c.created_at DESC LIMIT 30`, [scope]),
-      this.db.query(`SELECT n.id, n.tenant_id, t.name AS tenant_name, n.label, n.phone, n.status, n.max_concurrent_calls, n.cooldown_seconds FROM whatsapp_numbers n JOIN tenants t ON t.id = n.tenant_id WHERE n.status <> 'removed' AND ($1::text IS NULL OR n.tenant_id = $1) ORDER BY CASE WHEN n.status IN ('connected','online','ready','authenticated') THEN 1 ELSE 0 END, n.created_at DESC LIMIT 50`, [scope]),
+      this.db.query(`SELECT c.id, c.tenant_id, t.name AS tenant_name, c.status, c.created_at, c.duration_seconds, l.name AS lead_name, s.name AS sdr_name, n.label AS number_label FROM calls c JOIN tenants t ON t.id = c.tenant_id JOIN leads l ON l.tenant_id = c.tenant_id AND l.id = c.lead_id JOIN sdrs s ON s.tenant_id = c.tenant_id AND s.id = c.sdr_id JOIN whatsapp_numbers n ON n.id = c.number_id WHERE ($1::text IS NULL OR c.tenant_id = $1) ORDER BY c.created_at DESC LIMIT 30`, [scope]),
+      this.db.query(`SELECT n.id, n.tenant_id, 'Pool global' AS tenant_name, n.label, n.phone, n.status, n.max_concurrent_calls, n.cooldown_seconds FROM whatsapp_numbers n WHERE n.status <> 'removed' ORDER BY CASE WHEN n.status IN ('connected','online','ready','authenticated') THEN 1 ELSE 0 END, n.created_at DESC LIMIT 50`),
       this.db.query(`SELECT s.id, s.tenant_id, t.name AS tenant_name, s.name, s.available, s.state, s.last_assigned_at FROM sdrs s JOIN tenants t ON t.id = s.tenant_id WHERE ($1::text IS NULL OR s.tenant_id = $1) ORDER BY CASE s.state WHEN 'in_call' THEN 0 WHEN 'post_call' THEN 1 WHEN 'available' THEN 2 ELSE 3 END, s.name LIMIT 50`, [scope]),
     ]);
     return { tenants: tenants.rows, recentCalls: calls.rows, numbers: numbers.rows, sdrs: sdrs.rows, generatedAt: new Date().toISOString() };

@@ -177,7 +177,7 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
       `, [tenantId]),
       // Manual calls intentionally bypass the number cooldown for the MVP.
       // Redis still enforces the global and per-number concurrent limits.
-      this.db.query(`SELECT * FROM whatsapp_numbers WHERE tenant_id = $1 AND status IN ('connected', 'online', 'ready', 'authenticated') ORDER BY last_call_ended_at NULLS FIRST, last_call_ended_at ASC`, [tenantId]),
+      this.db.query(`SELECT * FROM whatsapp_numbers WHERE status IN ('connected', 'online', 'ready', 'authenticated') ORDER BY last_call_ended_at NULLS FIRST, last_call_ended_at ASC`),
       this.db.query(`SELECT * FROM leads WHERE tenant_id = $1 AND id = $2 AND do_not_call = false AND status IN ('queued', 'retry_wait') AND attempts < $3`, [tenantId, leadId, settings.max_attempts_per_lead]),
     ]);
     const sdr = sdrs.rows.find((row: any) => this.gateway.isConnected(row.id));
@@ -226,11 +226,11 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
             ELSE GREATEST(0, CEIL(EXTRACT(EPOCH FROM ((n.last_call_ended_at + n.cooldown_seconds * interval '1 second') - now())))::int)
           END AS cooldown_remaining_seconds
         FROM whatsapp_numbers n
-        LEFT JOIN calls c ON c.tenant_id = n.tenant_id AND c.number_id = n.id AND c.status IN ('reserved', 'dialing', 'media_active')
-        WHERE n.tenant_id = $1 AND n.status <> 'removed'
+        LEFT JOIN calls c ON c.number_id = n.id AND c.status IN ('reserved', 'dialing', 'media_active')
+        WHERE n.status <> 'removed'
         GROUP BY n.id
         ORDER BY n.created_at DESC
-      `, [tenantId]),
+      `),
       this.db.query(`
         SELECT
           COUNT(*)::int AS total,
@@ -253,7 +253,7 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
           l.name AS lead_name, l.phone AS lead_phone, n.label AS number_label, s.name AS sdr_name
         FROM calls c
         JOIN leads l ON l.tenant_id = c.tenant_id AND l.id = c.lead_id
-        JOIN whatsapp_numbers n ON n.tenant_id = c.tenant_id AND n.id = c.number_id
+        JOIN whatsapp_numbers n ON n.id = c.number_id
         JOIN sdrs s ON s.tenant_id = c.tenant_id AND s.id = c.sdr_id
         WHERE c.tenant_id = $1 AND c.status IN ('reserved', 'dialing', 'media_active')
         ORDER BY c.created_at ASC
@@ -335,7 +335,7 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
             )
           ORDER BY s.last_assigned_at NULLS FIRST, s.last_assigned_at ASC
         `, [tenantId]),
-        this.db.query(`SELECT * FROM whatsapp_numbers WHERE tenant_id = $1 AND status IN ('connected', 'online', 'ready', 'authenticated') AND (last_call_ended_at IS NULL OR last_call_ended_at <= now() - (cooldown_seconds * interval '1 second')) ORDER BY last_call_ended_at NULLS FIRST, last_call_ended_at ASC`, [tenantId]),
+        this.db.query(`SELECT * FROM whatsapp_numbers WHERE status IN ('connected', 'online', 'ready', 'authenticated') AND (last_call_ended_at IS NULL OR last_call_ended_at <= now() - (cooldown_seconds * interval '1 second')) ORDER BY last_call_ended_at NULLS FIRST, last_call_ended_at ASC`),
         this.db.query(`SELECT * FROM leads WHERE tenant_id = $1 AND do_not_call = false AND status IN ('queued', 'retry_wait') AND attempts < $2 AND next_eligible_at <= now() ORDER BY next_eligible_at ASC, created_at ASC LIMIT 25`, [tenantId, settings.max_attempts_per_lead]),
       ]);
 
@@ -373,14 +373,14 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
   }
 
   private async syncNumberStatuses(tenantId = legacyTenantId()) {
-    const result = await this.db.query("SELECT id, tenant_id, waxum_session_id FROM whatsapp_numbers WHERE tenant_id = $1 AND status <> 'removed'", [tenantId]);
+    const result = await this.db.query("SELECT id, tenant_id, waxum_session_id FROM whatsapp_numbers WHERE status <> 'removed'");
     for (const number of result.rows) {
       try {
         const status = normalizeWaxumStatus(await this.waxum.getStatus(number.waxum_session_id));
-        await this.db.query('UPDATE whatsapp_numbers SET status = $1, phone = COALESCE($2, phone) WHERE tenant_id = $3 AND id = $4', [status.status, status.phone, tenantId, number.id]);
+        await this.db.query('UPDATE whatsapp_numbers SET status = $1, phone = COALESCE($2, phone) WHERE id = $3', [status.status, status.phone, number.id]);
       } catch (error) {
         if ((error as Error & { statusCode?: number }).statusCode === 404) {
-          await this.db.query(`UPDATE whatsapp_numbers SET status = 'disconnected' WHERE tenant_id = $1 AND id = $2`, [tenantId, number.id]);
+          await this.db.query(`UPDATE whatsapp_numbers SET status = 'disconnected' WHERE id = $1`, [number.id]);
         }
         // Waxum may be temporarily unavailable; keep the last status unless
         // the session is definitively missing.
@@ -448,7 +448,7 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
   async attachMedia(callId: string, sdrId: string, browser: WebSocket, tenantId = legacyTenantId()) {
     const resource = this.active.get(callId);
     if (!resource || resource.tenantId !== tenantId || resource.sdrId !== sdrId) return browser.close(1008, 'call not assigned');
-    const call = await this.db.query(`SELECT c.*, n.waxum_session_id, n.label, l.name, l.phone FROM calls c JOIN whatsapp_numbers n ON n.tenant_id = c.tenant_id AND n.id = c.number_id JOIN leads l ON l.tenant_id = c.tenant_id AND l.id = c.lead_id WHERE c.tenant_id = $1 AND c.id = $2`, [tenantId, callId]);
+    const call = await this.db.query(`SELECT c.*, n.waxum_session_id, n.label, l.name, l.phone FROM calls c JOIN whatsapp_numbers n ON n.id = c.number_id JOIN leads l ON l.tenant_id = c.tenant_id AND l.id = c.lead_id WHERE c.tenant_id = $1 AND c.id = $2`, [tenantId, callId]);
     if (!call.rows[0]) return browser.close(1008, 'call not found');
     resource.browser = browser;
     resource.answerAbort = new AbortController();
@@ -616,7 +616,7 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
         if (resource.browser && resource.browserErrorHandler) resource.browser.off('error', resource.browserErrorHandler);
         if (resource.media && resource.media.readyState === WebSocket.OPEN) resource.media.close();
       }
-      const call = await this.db.query(`SELECT c.*, s.id AS sdr_id, n.id AS number_id, l.attempts, ds.max_attempts_per_lead, ds.retry_delay_minutes FROM calls c JOIN sdrs s ON s.tenant_id = c.tenant_id AND s.id = c.sdr_id JOIN whatsapp_numbers n ON n.tenant_id = c.tenant_id AND n.id = c.number_id JOIN leads l ON l.tenant_id = c.tenant_id AND l.id = c.lead_id JOIN dialer_settings ds ON ds.tenant_id = c.tenant_id WHERE c.tenant_id = $1 AND c.id = $2`, [tenantId, callId]);
+      const call = await this.db.query(`SELECT c.*, s.id AS sdr_id, n.id AS number_id, l.attempts, ds.max_attempts_per_lead, ds.retry_delay_minutes FROM calls c JOIN sdrs s ON s.tenant_id = c.tenant_id AND s.id = c.sdr_id JOIN whatsapp_numbers n ON n.id = c.number_id JOIN leads l ON l.tenant_id = c.tenant_id AND l.id = c.lead_id JOIN dialer_settings ds ON ds.tenant_id = c.tenant_id WHERE c.tenant_id = $1 AND c.id = $2`, [tenantId, callId]);
       if (!call.rows[0]) return;
       const row = call.rows[0];
       if (['completed', 'no_answer', 'failed', 'cancelled'].includes(row.status)) return;
@@ -658,7 +658,7 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
         } else {
           await client.query(`UPDATE sdrs SET available = true, state = 'available', current_pause_id = NULL WHERE tenant_id = $1 AND id = $2`, [tenantId, row.sdr_id]);
         }
-        if (!transientRateLimit) await client.query(`UPDATE whatsapp_numbers SET last_call_ended_at = now() WHERE tenant_id = $1 AND id = $2`, [tenantId, row.number_id]);
+        if (!transientRateLimit) await client.query(`UPDATE whatsapp_numbers SET last_call_ended_at = now() WHERE id = $1`, [row.number_id]);
       });
       if (resource) await this.redis.release({ tenantId: resource.tenantId, token: resource.token, numberId: resource.numberId, leadId: resource.leadId, sdrId: resource.sdrId });
       this.gateway.sendToSdr(row.sdr_id, { type: 'call_finished', callId, status: finalCallStatus, outcome, pause });

@@ -70,6 +70,7 @@ function AuthenticatedApp() {
   useEffect(() => { if (!selectedSdr && sdrs[0]?.id) setSelectedSdr(sdrs[0].id); }, [selectedSdr, sdrs]);
   useEffect(() => { setSelectedSdr(''); setActiveCall(null); setPostCall(null); setQr(null); setQrNumberId(''); }, [activeTenantId]);
   useEffect(() => { if (isSdr && tab !== 'dashboard') setTab('dashboard'); }, [isSdr, tab]);
+  useEffect(() => { if (!isSuperAdmin && tab === 'numbers') setTab('dashboard'); }, [isSuperAdmin, tab]);
 
   useEffect(() => { void load(); const timer = setInterval(() => void load(), 3000); return () => clearInterval(timer); }, [load]);
   useEffect(() => {
@@ -141,6 +142,7 @@ function AuthenticatedApp() {
   const clearLeads = async () => { if (!window.confirm('Limpar todos os contatos e o histórico de chamadas? Esta ação não pode ser desfeita.')) return; try { await json('/api/leads', { method: 'DELETE' }); await load(); } catch (e) { setError(String(e)); } };
   const navItems: { key: TabKey; label: string; icon: string; group: 'Operação' | 'Configuração' | 'Administração' }[] = [{ key: 'dashboard', label: 'Visão geral', icon: 'dashboard', group: 'Operação' }, { key: 'leads', label: 'Leads', icon: 'users', group: 'Operação' }, { key: 'calls', label: 'Histórico', icon: 'history', group: 'Operação' }, { key: 'numbers', label: 'Números', icon: 'phone', group: 'Configuração' }, { key: 'sdrs', label: 'SDRs', icon: 'headset', group: 'Configuração' }, { key: 'access', label: 'Acesso', icon: 'users', group: 'Configuração' }];
   if (isSuperAdmin) navItems.push({ key: 'admin', label: 'Admin', icon: 'settings', group: 'Administração' });
+  if (!isSuperAdmin) navItems.splice(navItems.findIndex((item) => item.key === 'numbers'), 1);
   const connectedNumbers = (status.numbers ?? []).filter((number: AnyRow) => ['connected', 'online', 'ready', 'authenticated'].includes(String(number.status).toLowerCase())).length;
   const navigationGroups = (['Operação', 'Configuração', 'Administração'] as const).map((group) => ({ label: group, items: navItems.filter((item) => item.group === group && (!isSdr || item.key === 'dashboard')) })).filter((group) => group.items.length > 0);
   const moduleTitle = navItems.find((item) => item.key === tab)?.label ?? 'Visão geral';

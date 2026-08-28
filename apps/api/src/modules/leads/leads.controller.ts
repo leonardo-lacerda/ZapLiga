@@ -90,7 +90,7 @@ export class LeadsController {
       LEFT JOIN LATERAL (
         SELECT c.status, c.outcome, c.failure_reason, c.created_at, n.label AS number_label
         FROM calls c
-        LEFT JOIN whatsapp_numbers n ON n.tenant_id = c.tenant_id AND n.id = c.number_id
+        LEFT JOIN whatsapp_numbers n ON n.id = c.number_id
         WHERE c.tenant_id = l.tenant_id AND c.lead_id = l.id
         ORDER BY c.created_at DESC
         LIMIT 1

@@ -48,15 +48,17 @@ export class RedisService implements OnModuleInit, OnModuleDestroy {
   async reserve(resources: { tenantId: string; token: string; globalMax: number; numberMax: number; numberId: string; leadId: string; sdrId: string; ttlMs: number }) {
     const now = Date.now();
     const expires = now + resources.ttlMs;
-    const prefix = `zapcall:tenant:${resources.tenantId}`;
-    const keys = [`${prefix}:active:global`, `${prefix}:active:number:${resources.numberId}`, `${prefix}:lock:lead:${resources.leadId}`, `${prefix}:lock:sdr:${resources.sdrId}`, `${prefix}:lock:number:${resources.numberId}`];
+    const tenantPrefix = `zapcall:tenant:${resources.tenantId}`;
+    const globalPrefix = 'zapcall:global';
+    const keys = [`${tenantPrefix}:active:global`, `${globalPrefix}:active:number:${resources.numberId}`, `${tenantPrefix}:lock:lead:${resources.leadId}`, `${tenantPrefix}:lock:sdr:${resources.sdrId}`, `${globalPrefix}:lock:number:${resources.numberId}`];
     const result = await this.client.eval(reserveScript, keys.length, ...keys, resources.globalMax, resources.numberMax, now, expires, resources.token, resources.ttlMs);
     return Number(result) === 1;
   }
 
   async release(resources: { tenantId: string; token: string; numberId: string; leadId: string; sdrId: string }) {
-    const prefix = `zapcall:tenant:${resources.tenantId}`;
-    const keys = [`${prefix}:active:global`, `${prefix}:active:number:${resources.numberId}`, `${prefix}:lock:lead:${resources.leadId}`, `${prefix}:lock:sdr:${resources.sdrId}`, `${prefix}:lock:number:${resources.numberId}`];
+    const tenantPrefix = `zapcall:tenant:${resources.tenantId}`;
+    const globalPrefix = 'zapcall:global';
+    const keys = [`${tenantPrefix}:active:global`, `${globalPrefix}:active:number:${resources.numberId}`, `${tenantPrefix}:lock:lead:${resources.leadId}`, `${tenantPrefix}:lock:sdr:${resources.sdrId}`, `${globalPrefix}:lock:number:${resources.numberId}`];
     await this.client.eval(releaseScript, keys.length, ...keys, resources.token);
   }
 }

@@ -16,7 +16,7 @@ export class CallsController {
   list(@Query('limit') limit = '100', @Query('offset') offset = '0', @CurrentTenant() tenantId: string) {
     const safeLimit = Math.min(500, Math.max(1, Number(limit) || 100));
     const safeOffset = Math.max(0, Number(offset) || 0);
-    return this.db.query(`SELECT c.*, l.name AS lead_name, l.phone AS lead_phone, l.pipeline_stage AS lead_pipeline_stage, n.label AS number_label, s.name AS sdr_name FROM calls c JOIN leads l ON l.tenant_id = c.tenant_id AND l.id = c.lead_id JOIN whatsapp_numbers n ON n.tenant_id = c.tenant_id AND n.id = c.number_id JOIN sdrs s ON s.tenant_id = c.tenant_id AND s.id = c.sdr_id WHERE c.tenant_id = $1 ORDER BY c.created_at DESC LIMIT $2 OFFSET $3`, [tenantId, safeLimit, safeOffset]).then((result) => result.rows);
+    return this.db.query(`SELECT c.*, l.name AS lead_name, l.phone AS lead_phone, l.pipeline_stage AS lead_pipeline_stage, n.label AS number_label, s.name AS sdr_name FROM calls c JOIN leads l ON l.tenant_id = c.tenant_id AND l.id = c.lead_id JOIN whatsapp_numbers n ON n.id = c.number_id JOIN sdrs s ON s.tenant_id = c.tenant_id AND s.id = c.sdr_id WHERE c.tenant_id = $1 ORDER BY c.created_at DESC LIMIT $2 OFFSET $3`, [tenantId, safeLimit, safeOffset]).then((result) => result.rows);
   }
 
   @Post(['/api/calls/manual', '/api/tenants/:tenantId/calls/manual'])
