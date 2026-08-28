@@ -1,0 +1,125 @@
+name: ZapLiga CI/CD
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: zapliga-production
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    name: Validar projeto
+    runs-on: ubuntu-latest
+    steps:
+      - name: Baixar código
+        uses: actions/checkout@v4
+
+      - name: Configurar Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Instalar dependências
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Testes
+        run: npm test -- --runInBand
+
+      - name: Build
+        run: npm run build
+
+  deploy:
+    name: Deploy produção
+    needs: validate
+    runs-on: ubuntu-latest
+    environment:
+      name: production
+    steps:
+      - name: Configurar chave SSH
+        env:
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+        run: |
+          set -euo pipefail
+          eval "$(ssh-agent -s)"
+          printf '%s\n' "$DEPLOY_SSH_KEY" | ssh-add -
+
+      - name: Verificar host SSH
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_PORT: ${{ secrets.DEPLOY_PORT }}
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+          install -m 700 -d "$HOME/.ssh"
+          if [ -n "$DEPLOY_KNOWN_HOSTS" ]; then
+            printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
+          else
+            ssh-keyscan -H -p "${DEPLOY_PORT:-22}" "$DEPLOY_HOST" > "$HOME/.ssh/known_hosts"
+          fi
+          chmod 600 "$HOME/.ssh/known_hosts"
+
+      - name: Atualizar servidor e recriar stack
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_PORT: ${{ secrets.DEPLOY_PORT }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+        run: |
+          set -euo pipefail
+          ssh -p "${DEPLOY_PORT:-22}" -o BatchMode=yes -o StrictHostKeyChecking=yes "$DEPLOY_USER@$DEPLOY_HOST" 'bash -se' <<'REMOTE'
+          set -Eeuo pipefail
+
+          APP_DIR=/opt/zapliga
+          REPOSITORY=https://github.com/leonardo-lacerda/ZapLiga.git
+
+          if ! command -v git >/dev/null 2>&1; then
+            echo "Git não está instalado no servidor" >&2
+            exit 1
+          fi
+          if ! command -v docker >/dev/null 2>&1; then
+            echo "Docker não está instalado no servidor" >&2
+            exit 1
+          fi
+
+          if [ ! -d "$APP_DIR/.git" ]; then
+            mkdir -p "$(dirname "$APP_DIR")"
+            git clone "$REPOSITORY" "$APP_DIR"
+          else
+            git -C "$APP_DIR" fetch --prune origin main
+            git -C "$APP_DIR" checkout -B main origin/main
+          fi
+
+          cd "$APP_DIR"
+          if [ ! -f .env ]; then
+            echo "Crie /opt/zapliga/.env antes do primeiro deploy" >&2
+            exit 1
+          fi
+
+          docker compose up -d postgres redis nats waxum
+          docker compose build api web
+          docker compose up -d --remove-orphans api web
+
+          for attempt in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:3000/health >/dev/null; then
+              echo "API saudável"
+              break
+            fi
+            if [ "$attempt" -eq 30 ]; then
+              echo "API não ficou saudável a tempo" >&2
+              docker compose logs --tail=80 api >&2 || true
+              exit 1
+            fi
+            sleep 2
+          done
+
+          docker compose ps
+          REMOTE

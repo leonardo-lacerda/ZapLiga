@@ -9,7 +9,7 @@ const rootFiles = new Set([
   'sobre.html', 'termos-de-uso.html',
 ]);
 const entries = await readdir('.');
-const unexpected = entries.filter((entry) => !rootFiles.has(entry) && entry !== 'apps' && entry !== 'node_modules' && entry !== 'scripts' && entry !== 'docs' && entry !== 'services' && entry !== 'backups' && entry !== 'Nova pasta' && entry !== '.git');
+const unexpected = entries.filter((entry) => !rootFiles.has(entry) && entry !== 'apps' && entry !== 'node_modules' && entry !== 'scripts' && entry !== 'docs' && entry !== 'services' && entry !== 'backups' && entry !== 'Nova pasta' && entry !== '.git' && entry !== '.github');
 if (unexpected.length) throw new Error(`Arquivos inesperados na raiz: ${unexpected.join(', ')}`);
 
 for (const path of ['apps/api/src', 'apps/web/src']) {

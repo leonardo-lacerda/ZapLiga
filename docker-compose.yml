@@ -2,15 +2,15 @@ services:
   postgres:
     image: postgres:16-alpine
     environment:
-      POSTGRES_DB: zapcall
-      POSTGRES_USER: zapcall
-      POSTGRES_PASSWORD: zapcall
+      POSTGRES_DB: ${POSTGRES_DB:-zapcall}
+      POSTGRES_USER: ${POSTGRES_USER:-zapcall}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-zapcall}
     ports:
-      - "5432:5432"
+      - "127.0.0.1:5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U zapcall -d zapcall"]
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER:-zapcall} -d $${POSTGRES_DB:-zapcall}"]
       interval: 5s
       timeout: 5s
       retries: 10
@@ -18,7 +18,7 @@ services:
   redis:
     image: redis:7-alpine
     ports:
-      - "6379:6379"
+      - "127.0.0.1:6379:6379"
     volumes:
       - redis_data:/data
     healthcheck:
@@ -41,7 +41,7 @@ services:
     image: fdciabdul/waxum:0.12.2@sha256:b939815637dc8f382504083fcc83b8b8e66577adfd6e0aee60025feac548122b
     restart: unless-stopped
     ports:
-      - "3451:3451"
+      - "127.0.0.1:3451:3451"
     environment:
       PORT: 3451
       RUST_LOG: info
@@ -64,7 +64,7 @@ services:
     environment:
       NODE_ENV: ${NODE_ENV:-development}
       PORT: 3000
-      DATABASE_URL: postgres://zapcall:zapcall@postgres:5432/zapcall
+      DATABASE_URL: postgres://${POSTGRES_USER:-zapcall}:${POSTGRES_PASSWORD:-zapcall}@postgres:5432/${POSTGRES_DB:-zapcall}
       REDIS_URL: redis://redis:6379
       WAXUM_URL: http://waxum:3451
       WAXUM_API_KEY: ${WAXUM_API_KEY:-zapcall-local-waxum-token}
@@ -86,7 +86,7 @@ services:
       BCRYPT_ROUNDS: ${BCRYPT_ROUNDS:-12}
       AUTH_COOKIE_SAME_SITE: ${AUTH_COOKIE_SAME_SITE:-lax}
       AUTH_COOKIE_SECURE: ${AUTH_COOKIE_SECURE:-false}
-      WEB_ORIGIN: http://localhost:5173
+      WEB_ORIGIN: ${WEB_ORIGIN:-http://localhost:5173}
     depends_on:
       postgres:
         condition: service_healthy
@@ -103,17 +103,19 @@ services:
       timeout: 5s
       retries: 3
     ports:
-      - "3000:3000"
+      - "127.0.0.1:3000:3000"
 
   web:
     build:
       context: .
       dockerfile: apps/web/Dockerfile
+      args:
+        VITE_API_URL: ${VITE_API_URL:-http://localhost:3000}
     depends_on:
       - api
     restart: unless-stopped
     ports:
-      - "5173:80"
+      - "127.0.0.1:5173:80"
 
 volumes:
   postgres_data:
