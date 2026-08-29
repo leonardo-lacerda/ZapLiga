@@ -1,4 +1,4 @@
-import { Body, Controller, Delete, ForbiddenException, Get, Param, Post, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, ForbiddenException, Get, Param, Post, Query, UseGuards } from '@nestjs/common';
 import { AuthGuard, CurrentUser, Roles, RolesGuard, TenantMembershipGuard } from '../auth/auth.guards';
 import { CreateInvitationDto } from './dto/create-invitation.dto';
 import { CreateSdrInvitationDto } from './dto/create-sdr-invitation.dto';
@@ -37,7 +37,7 @@ export class InvitationsController {
   @Get('/api/tenants/:tenantId/invitations')
   @UseGuards(AuthGuard, TenantMembershipGuard, RolesGuard)
   @Roles('leader', 'super_admin')
-  list(@Param('tenantId') tenantId: string) { return this.invitations.list(tenantId); }
+  list(@Param('tenantId') tenantId: string, @Query('role') role?: 'leader' | 'sdr', @Query('limit') limit?: string, @Query('offset') offset?: string) { return this.invitations.list(tenantId, role, Number(limit), Number(offset)); }
 
   @Get('/api/invitations/:token')
   preview(@Param('token') token: string) { return this.invitations.preview(token); }

@@ -111,11 +111,15 @@ export class LeadFoldersService {
     await this.get(folderId, tenantId);
     const safeLimit = Math.min(500, Math.max(1, Number(limit) || 100));
     const safeOffset = Math.max(0, Number(offset) || 0);
-    const params = status ? [tenantId, folderId, status, safeLimit, safeOffset] : [tenantId, folderId, safeLimit, safeOffset];
+    const baseParams = status ? [tenantId, folderId, status] : [tenantId, folderId];
     const statusClause = status ? 'AND l.status = $3' : '';
     const limitParam = status ? '$4' : '$3';
     const offsetParam = status ? '$5' : '$4';
-    return (await this.db.query(`
+    const total = await this.db.query(`
+      SELECT count(*)::int AS total FROM leads l
+      WHERE l.tenant_id = $1 AND l.folder_id = $2 ${statusClause}
+    `, baseParams);
+    const items = await this.db.query(`
       SELECT l.*, f.name AS folder_name, f.is_active AS folder_is_active,
         latest.status AS last_call_status, latest.outcome AS last_outcome,
         COALESCE(latest.failure_reason, latest.outcome) AS last_failure_reason,
@@ -130,7 +134,8 @@ export class LeadFoldersService {
       ) latest ON true
       WHERE l.tenant_id = $1 AND l.folder_id = $2 ${statusClause}
       ORDER BY l.created_at DESC LIMIT ${limitParam} OFFSET ${offsetParam}
-    `, params)).rows;
+    `, [...baseParams, safeLimit, safeOffset]);
+    return { items: items.rows, total: Number(total.rows[0]?.total ?? 0), limit: safeLimit, offset: safeOffset };
   }
 
   async createLead(folderId: string, input: { name: string; phone: string }, tenantId: string, userId: string) {

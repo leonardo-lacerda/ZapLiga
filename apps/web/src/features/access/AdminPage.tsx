@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import type React from 'react';
-import { Badge, Button, EmptyState, Icon, Panel, SectionHeader } from '../../components/ui';
+import { Badge, Button, EmptyState, Icon, Pagination, Panel, SectionHeader } from '../../components/ui';
 import { json } from '../../services/api';
+import { PAGE_SIZE, formatNumber } from '../../shared/format';
 import type { AnyRow } from '../../types';
 
 type AdminSection = 'overview' | 'tenants' | 'users' | 'operations' | 'audit' | 'health';
@@ -15,7 +16,7 @@ const sections: Array<{ key: AdminSection; label: string; icon: string }> = [
   { key: 'health', label: 'Saúde', icon: 'settings' },
 ];
 
-const fmt = (value: unknown) => new Intl.NumberFormat('pt-BR').format(Number(value ?? 0));
+const fmt = formatNumber;
 const dateTime = (value: unknown) => value ? new Date(String(value)).toLocaleString('pt-BR') : 'Nunca';
 const statusLabel = (value: unknown) => ({ active: 'Ativa', blocked: 'Bloqueada', archived: 'Arquivada', connected: 'Conectado', available: 'Disponível', offline: 'Offline', in_call: 'Em chamada', post_call: 'Pós-atendimento', failed: 'Falhou', completed: 'Concluída', no_answer: 'Não atendida', cancelled: 'Cancelada', reserved: 'Reservada', dialing: 'Discando', media_active: 'Em chamada' }[String(value)] ?? String(value ?? '—'));
 const statusTone = (value: unknown) => ['active', 'connected', 'online', 'ready', 'authenticated', 'available', 'completed'].includes(String(value)) ? 'success' : ['blocked', 'failed', 'disconnected', 'offline', 'archived', 'cancelled'].includes(String(value)) ? 'warning' : 'info';
@@ -33,13 +34,20 @@ export function AdminPage({ onChanged, onOpenTenant }: { onChanged?: () => Promi
   const [tenantPage, setTenantPage] = useState<AnyRow>({ items: [], total: 0 });
   const [userPage, setUserPage] = useState<AnyRow>({ items: [], total: 0 });
   const [operations, setOperations] = useState<AnyRow>({ tenants: [], recentCalls: [], numbers: [], sdrs: [] });
-  const [audit, setAudit] = useState<AnyRow[]>([]);
+  const [auditPage, setAuditPage] = useState<AnyRow>({ items: [], total: 0 });
   const [health, setHealth] = useState<AnyRow>({});
   const [scopeTenantId, setScopeTenantId] = useState('');
   const [tenantSearch, setTenantSearch] = useState('');
   const [tenantStatus, setTenantStatus] = useState('');
+  const [tenantOffset, setTenantOffset] = useState(0);
   const [userSearch, setUserSearch] = useState('');
+  const [userRoleFilter, setUserRoleFilter] = useState('');
+  const [userStatusFilter, setUserStatusFilter] = useState('');
+  const [userOffset, setUserOffset] = useState(0);
+  const [memberEmail, setMemberEmail] = useState('');
+  const [memberRole, setMemberRole] = useState<'sdr' | 'leader'>('sdr');
   const [auditSearch, setAuditSearch] = useState('');
+  const [auditOffset, setAuditOffset] = useState(0);
   const [selectedTenant, setSelectedTenant] = useState<AnyRow | null>(null);
   const [limits, setLimits] = useState({ maxLeads: '', maxNumbers: '', maxSdrs: '' });
   const [name, setName] = useState('');
@@ -51,19 +59,22 @@ export function AdminPage({ onChanged, onOpenTenant }: { onChanged?: () => Promi
 
   const tenants = tenantPage.items as AnyRow[];
   const users = userPage.items as AnyRow[];
+  const audit = auditPage.items as AnyRow[];
   const scopeQuery = scopeTenantId ? `tenantId=${encodeURIComponent(scopeTenantId)}` : '';
 
   const load = useCallback(async (quiet = false) => {
     if (!quiet) setLoading(true);
     setMessage('');
     try {
-      const tenantParams = new URLSearchParams({ limit: '100' });
+      const tenantParams = new URLSearchParams({ limit: String(PAGE_SIZE), offset: String(tenantOffset) });
       if (tenantSearch.trim()) tenantParams.set('search', tenantSearch.trim());
       if (tenantStatus) tenantParams.set('status', tenantStatus);
-      const userParams = new URLSearchParams({ limit: '100' });
+      const userParams = new URLSearchParams({ limit: String(PAGE_SIZE), offset: String(userOffset) });
       if (userSearch.trim()) userParams.set('search', userSearch.trim());
       if (scopeTenantId) userParams.set('tenantId', scopeTenantId);
-      const auditParams = new URLSearchParams({ limit: '100' });
+      if (userRoleFilter) userParams.set('role', userRoleFilter);
+      if (userStatusFilter) userParams.set('status', userStatusFilter);
+      const auditParams = new URLSearchParams({ limit: String(PAGE_SIZE), offset: String(auditOffset) });
       if (scopeTenantId) auditParams.set('tenantId', scopeTenantId);
       if (auditSearch.trim()) auditParams.set('search', auditSearch.trim());
       const [nextOverview, nextTenants, nextUsers, nextOperations, nextAudit, nextHealth] = await Promise.all([
@@ -74,12 +85,15 @@ export function AdminPage({ onChanged, onOpenTenant }: { onChanged?: () => Promi
         json(`/api/admin/audit?${auditParams}`),
         json('/api/admin/health'),
       ]);
-      setOverview(nextOverview); setTenantPage(nextTenants); setUserPage(nextUsers); setOperations(nextOperations); setAudit(nextAudit); setHealth(nextHealth);
+      setOverview(nextOverview); setTenantPage(nextTenants); setUserPage(nextUsers); setOperations(nextOperations); setAuditPage(nextAudit); setHealth(nextHealth);
     } catch (error) { setMessage(error instanceof Error ? error.message : String(error)); }
     finally { setLoading(false); }
-  }, [scopeTenantId, scopeQuery, tenantSearch, tenantStatus, userSearch, auditSearch]);
+  }, [scopeTenantId, scopeQuery, tenantSearch, tenantStatus, tenantOffset, userSearch, userRoleFilter, userStatusFilter, userOffset, auditSearch, auditOffset]);
 
   useEffect(() => { void load(); }, [load]);
+  useEffect(() => { setTenantOffset(0); }, [tenantSearch, tenantStatus]);
+  useEffect(() => { setUserOffset(0); }, [userSearch, userRoleFilter, userStatusFilter, scopeTenantId]);
+  useEffect(() => { setAuditOffset(0); }, [auditSearch, scopeTenantId]);
 
   const act = async (key: string, action: () => Promise<unknown>, done: string, refreshSession = false) => {
     setBusy(key); setMessage(''); setSuccess('');
@@ -120,6 +134,35 @@ export function AdminPage({ onChanged, onOpenTenant }: { onChanged?: () => Promi
     await openTenantDetails(tenantId);
   };
 
+  const createMembership = async (event: React.FormEvent) => {
+    event.preventDefault();
+    if (!selectedTenant?.tenant?.id) return;
+    const tenantId = selectedTenant.tenant.id;
+    await act(`member-create-${tenantId}`, () => tenantJson(tenantId, `/api/tenants/${tenantId}/members`, { method: 'POST', body: JSON.stringify({ email: memberEmail, role: memberRole }) }), 'Membro adicionado à empresa.');
+    setMemberEmail('');
+    await openTenantDetails(tenantId);
+  };
+
+  const toggleMembershipStatus = async (tenantId: string, member: AnyRow) => {
+    const status = member.status === 'active' ? 'blocked' : 'active';
+    if (status === 'blocked' && !window.confirm(`Bloquear ${member.name} nesta empresa?`)) return;
+    await act(`member-status-${member.user_id}`, () => tenantJson(tenantId, `/api/tenants/${tenantId}/members/${member.user_id}/status`, { method: 'PATCH', body: JSON.stringify({ status }) }), `Membro ${status === 'active' ? 'ativado' : 'bloqueado'}.`);
+    await openTenantDetails(tenantId);
+  };
+
+  const toggleMembershipRole = async (tenantId: string, member: AnyRow) => {
+    const role = member.role === 'leader' ? 'sdr' : 'leader';
+    if (!window.confirm(`Alterar papel de ${member.name} para ${role === 'leader' ? 'Líder' : 'SDR'}?`)) return;
+    await act(`member-role-${member.user_id}`, () => tenantJson(tenantId, `/api/tenants/${tenantId}/members/${member.user_id}/role`, { method: 'PATCH', body: JSON.stringify({ role }) }), 'Papel do membro atualizado.');
+    await openTenantDetails(tenantId);
+  };
+
+  const removeMembership = async (tenantId: string, member: AnyRow) => {
+    if (!window.confirm(`Remover ${member.name} desta empresa?`)) return;
+    await act(`member-remove-${member.user_id}`, () => tenantJson(tenantId, `/api/tenants/${tenantId}/members/${member.user_id}`, { method: 'DELETE' }), 'Membro removido da empresa.');
+    await openTenantDetails(tenantId);
+  };
+
   const revokeTenantSessions = async (tenant: AnyRow) => {
     if (!window.confirm(`Encerrar todas as sessões de ${tenant.name}?`)) return;
     const reason = window.prompt('Motivo da revogação de sessões:')?.trim();
@@ -138,6 +181,24 @@ export function AdminPage({ onChanged, onOpenTenant }: { onChanged?: () => Promi
     const reason = window.prompt('Motivo da revogação de sessões:')?.trim();
     if (!reason) return;
     await act(`user-sessions-${user.id}`, () => json(`/api/admin/users/${user.id}/revoke-sessions`, { method: 'POST', body: JSON.stringify({ reason }) }), 'Sessões do usuário revogadas.');
+  };
+
+  const resetUserPassword = async (user: AnyRow) => {
+    if (!window.confirm(`Gerar uma nova senha temporária para ${user.name}? As sessões ativas serão encerradas.`)) return;
+    setBusy(`user-reset-${user.id}`); setMessage(''); setSuccess('');
+    try {
+      const result = await json(`/api/users/${user.id}/reset-password`, { method: 'POST' });
+      setSuccess(`Senha temporária de ${user.name}: ${result.temporaryPassword} — copie agora, ela não será exibida novamente.`);
+      await load(true);
+    } catch (error) { setMessage(error instanceof Error ? error.message : String(error)); }
+    finally { setBusy(''); }
+  };
+
+  const toggleSuperAdmin = async (user: AnyRow) => {
+    const platformRole = user.platform_role === 'super_admin' ? 'user' : 'super_admin';
+    const verb = platformRole === 'super_admin' ? 'promover a Admin supremo' : 'remover o acesso de Admin supremo de';
+    if (!window.confirm(`Confirma ${verb} ${user.name}?`)) return;
+    await act(`user-role-${user.id}`, () => json(`/api/users/${user.id}/platform-role`, { method: 'PATCH', body: JSON.stringify({ platformRole }) }), `Perfil de ${user.name} atualizado.`);
   };
 
   const toggleDialer = async (tenant: AnyRow) => {
@@ -178,11 +239,12 @@ export function AdminPage({ onChanged, onOpenTenant }: { onChanged?: () => Promi
         <Panel><SectionHeader title="Nova empresa" description="Crie uma operação isolada e configure os limites antes do uso." /><form className="form-row" onSubmit={createTenant}><input placeholder="Nome da empresa" value={name} onChange={(event) => setName(event.target.value)} required /><input placeholder="slug-opcional" value={slug} onChange={(event) => setSlug(event.target.value)} /><Button icon="plus" disabled={busy === 'create-tenant'}>{busy === 'create-tenant' ? 'Criando...' : 'Criar empresa'}</Button></form></Panel>
         <Panel><SectionHeader title="Empresas cadastradas" description={`${fmt(tenantPage.total)} registros`} action={<div className="admin-filters"><div className="admin-search"><Icon name="search" size={14} /><input aria-label="Buscar empresas" placeholder="Buscar nome ou slug" value={tenantSearch} onChange={(event) => setTenantSearch(event.target.value)} /></div><select value={tenantStatus} onChange={(event) => setTenantStatus(event.target.value)}><option value="">Todos os status</option><option value="active">Ativas</option><option value="blocked">Bloqueadas</option><option value="archived">Arquivadas</option></select></div>} />
           <div className="table-scroll"><table className="admin-table"><thead><tr><th>Empresa</th><th>Uso</th><th>Números</th><th>Chamadas hoje</th><th>Status</th><th>Ações</th></tr></thead><tbody>{filteredTenants.map((tenant) => <tr key={tenant.id}><td><strong>{tenant.name}</strong><small>{tenant.slug}</small></td><td><span>{fmt(tenant.lead_count)} leads · {fmt(tenant.sdr_count)} SDRs</span></td><td><span>{fmt(tenant.connected_numbers)}/{fmt(tenant.number_count)} conectados</span></td><td>{fmt(tenant.calls_today)}</td><td><Badge tone={statusTone(tenant.status)}>{statusLabel(tenant.status)}</Badge></td><td><div className="table-actions"><Button variant="ghost" onClick={() => void openTenantDetails(tenant.id)} disabled={busy === `details-${tenant.id}`}>Detalhes</Button><Button variant="ghost" onClick={() => onOpenTenant?.(tenant.id)} disabled={tenant.status !== 'active'}>Abrir</Button><Button variant={tenant.status === 'active' ? 'danger' : 'secondary'} onClick={() => void setTenantStatusAction(tenant)} disabled={busy === `tenant-status-${tenant.id}`}>{tenant.status === 'active' ? 'Bloquear' : 'Ativar'}</Button></div></td></tr>)}</tbody></table>{!filteredTenants.length && <EmptyState title="Nenhuma empresa encontrada" description="Ajuste os filtros ou crie uma nova empresa." />}</div>
+          <Pagination offset={tenantOffset} limit={PAGE_SIZE} total={tenantPage.total} onChange={setTenantOffset} />
         </Panel>
-        {selectedTenant && <div className="admin-drawer-backdrop" onMouseDown={() => setSelectedTenant(null)}><aside className="admin-drawer" onMouseDown={(event) => event.stopPropagation()} aria-label="Detalhes da empresa"><button className="admin-drawer-close" onClick={() => setSelectedTenant(null)} aria-label="Fechar"><Icon name="close" /></button><span className="eyebrow">EMPRESA</span><h2>{selectedTenant.tenant.name}</h2><p>{selectedTenant.tenant.slug} · criada em {dateTime(selectedTenant.tenant.created_at)}</p><div className="admin-summary-grid"><div><span>Leads</span><strong>{fmt(selectedTenant.tenant.lead_count)}</strong><small>{percent(selectedTenant.tenant.lead_count, selectedTenant.tenant.max_leads)}% do limite</small></div><div><span>SDRs</span><strong>{fmt(selectedTenant.tenant.sdr_count)}</strong><small>{fmt(selectedTenant.tenant.available_sdrs)} disponíveis</small></div><div><span>Números</span><strong>{fmt(selectedTenant.tenant.number_count)}</strong><small>{fmt(selectedTenant.tenant.connected_numbers)} conectados</small></div><div><span>Chamadas hoje</span><strong>{fmt(selectedTenant.tenant.calls_today)}</strong><small>{fmt(selectedTenant.tenant.active_calls)} ativas</small></div></div><form className="admin-limit-form" onSubmit={saveLimits}><h3>Limites da empresa</h3><label>Leads<input type="number" min="1" value={limits.maxLeads} onChange={(event) => setLimits((current) => ({ ...current, maxLeads: event.target.value }))} /></label><label>Números<input type="number" min="1" value={limits.maxNumbers} onChange={(event) => setLimits((current) => ({ ...current, maxNumbers: event.target.value }))} /></label><label>SDRs<input type="number" min="1" value={limits.maxSdrs} onChange={(event) => setLimits((current) => ({ ...current, maxSdrs: event.target.value }))} /></label><Button disabled={busy === `limits-${selectedTenant.tenant.id}`}>Salvar limites</Button></form><div className="admin-drawer-section"><h3>Membros</h3>{selectedTenant.members.map((member: AnyRow) => <div className="admin-compact-row" key={member.user_id}><div><strong>{member.name}</strong><small>{member.email}</small></div><Badge tone={member.role === 'leader' ? 'purple' : 'info'}>{member.role === 'leader' ? 'Líder' : 'SDR'}</Badge></div>)}</div><div className="admin-danger-zone"><h3>Ações de segurança</h3><Button variant="danger" onClick={() => void revokeTenantSessions(selectedTenant.tenant)}>Revogar todas as sessões</Button></div></aside></div>}
+        {selectedTenant && <div className="admin-drawer-backdrop" onMouseDown={() => setSelectedTenant(null)}><aside className="admin-drawer" onMouseDown={(event) => event.stopPropagation()} aria-label="Detalhes da empresa"><button className="admin-drawer-close" onClick={() => setSelectedTenant(null)} aria-label="Fechar"><Icon name="close" /></button><span className="eyebrow">EMPRESA</span><h2>{selectedTenant.tenant.name}</h2><p>{selectedTenant.tenant.slug} · criada em {dateTime(selectedTenant.tenant.created_at)}</p><div className="admin-summary-grid"><div><span>Leads</span><strong>{fmt(selectedTenant.tenant.lead_count)}</strong><small>{percent(selectedTenant.tenant.lead_count, selectedTenant.tenant.max_leads)}% do limite</small></div><div><span>SDRs</span><strong>{fmt(selectedTenant.tenant.sdr_count)}</strong><small>{fmt(selectedTenant.tenant.available_sdrs)} disponíveis</small></div><div><span>Números</span><strong>{fmt(selectedTenant.tenant.number_count)}</strong><small>{fmt(selectedTenant.tenant.connected_numbers)} conectados</small></div><div><span>Chamadas hoje</span><strong>{fmt(selectedTenant.tenant.calls_today)}</strong><small>{fmt(selectedTenant.tenant.active_calls)} ativas</small></div></div><form className="admin-limit-form" onSubmit={saveLimits}><h3>Limites da empresa</h3><label>Leads<input type="number" min="1" value={limits.maxLeads} onChange={(event) => setLimits((current) => ({ ...current, maxLeads: event.target.value }))} /></label><label>Números<input type="number" min="1" value={limits.maxNumbers} onChange={(event) => setLimits((current) => ({ ...current, maxNumbers: event.target.value }))} /></label><label>SDRs<input type="number" min="1" value={limits.maxSdrs} onChange={(event) => setLimits((current) => ({ ...current, maxSdrs: event.target.value }))} /></label><Button disabled={busy === `limits-${selectedTenant.tenant.id}`}>Salvar limites</Button></form><div className="admin-drawer-section"><h3>Membros</h3><form className="form-row" onSubmit={createMembership}><input type="email" placeholder="e-mail de um usuário existente" value={memberEmail} onChange={(event) => setMemberEmail(event.target.value)} required /><select value={memberRole} onChange={(event) => setMemberRole(event.target.value as 'sdr' | 'leader')}><option value="sdr">SDR</option><option value="leader">Líder</option></select><Button icon="plus" disabled={busy === `member-create-${selectedTenant.tenant.id}`}>Adicionar</Button></form>{selectedTenant.members.map((member: AnyRow) => <div className="admin-compact-row" key={member.user_id}><div><strong>{member.name}</strong><small>{member.email}</small></div><Badge tone={member.role === 'leader' ? 'purple' : 'info'}>{member.role === 'leader' ? 'Líder' : 'SDR'}</Badge><Badge tone={member.status === 'active' ? 'success' : 'warning'}>{member.status === 'active' ? 'Ativo' : 'Bloqueado'}</Badge><div className="table-actions"><Button variant="ghost" onClick={() => void toggleMembershipRole(selectedTenant.tenant.id, member)} disabled={busy === `member-role-${member.user_id}`}>{member.role === 'leader' ? 'Tornar SDR' : 'Tornar líder'}</Button><Button variant="ghost" onClick={() => void toggleMembershipStatus(selectedTenant.tenant.id, member)} disabled={busy === `member-status-${member.user_id}`}>{member.status === 'active' ? 'Bloquear' : 'Ativar'}</Button><Button variant="danger" onClick={() => void removeMembership(selectedTenant.tenant.id, member)} disabled={busy === `member-remove-${member.user_id}`}>Remover</Button></div></div>)}{!selectedTenant.members.length && <p className="text-muted">Nenhum membro cadastrado.</p>}</div><div className="admin-danger-zone"><h3>Ações de segurança</h3><Button variant="danger" onClick={() => void revokeTenantSessions(selectedTenant.tenant)}>Revogar todas as sessões</Button></div></aside></div>}
       </>}
 
-      {section === 'users' && <Panel><SectionHeader title="Usuários globais" description={`${fmt(userPage.total)} contas cadastradas`} action={<div className="admin-search"><Icon name="search" size={14} /><input aria-label="Buscar usuários" placeholder="Buscar nome ou e-mail" value={userSearch} onChange={(event) => setUserSearch(event.target.value)} /></div>} /><div className="table-scroll"><table className="admin-table"><thead><tr><th>Usuário</th><th>Perfil</th><th>Empresas</th><th>Sessões</th><th>Último acesso</th><th>Ações</th></tr></thead><tbody>{users.map((user) => <tr key={user.id}><td><strong>{user.name}</strong><small>{user.email}</small></td><td><Badge tone={user.platform_role === 'super_admin' ? 'purple' : statusTone(user.status)}>{user.platform_role === 'super_admin' ? 'Admin supremo' : statusLabel(user.status)}</Badge></td><td><div className="admin-memberships">{(user.memberships ?? []).slice(0, 2).map((membership: AnyRow) => <span key={`${user.id}-${membership.tenantId}`}>{membership.tenantName} · {membership.role}</span>)}{(user.memberships ?? []).length > 2 && <small>+{(user.memberships ?? []).length - 2} empresas</small>}</div></td><td>{fmt(user.active_sessions)}</td><td>{dateTime(user.last_login_at)}</td><td><div className="table-actions"><Button variant="ghost" onClick={() => void revokeUserSessions(user)} disabled={!Number(user.active_sessions) || busy === `user-sessions-${user.id}`}>Revogar sessões</Button><Button variant={user.status === 'active' ? 'danger' : 'secondary'} onClick={() => void toggleUser(user)} disabled={busy === `user-status-${user.id}`}>{user.status === 'active' ? 'Bloquear' : 'Ativar'}</Button></div></td></tr>)}</tbody></table>{!users.length && <EmptyState title="Nenhum usuário encontrado" />}</div></Panel>}
+      {section === 'users' && <Panel><SectionHeader title="Usuários globais" description={`${fmt(userPage.total)} contas cadastradas`} action={<div className="admin-filters"><div className="admin-search"><Icon name="search" size={14} /><input aria-label="Buscar usuários" placeholder="Buscar nome ou e-mail" value={userSearch} onChange={(event) => setUserSearch(event.target.value)} /></div><select aria-label="Filtrar por perfil" value={userRoleFilter} onChange={(event) => setUserRoleFilter(event.target.value)}><option value="">Todos os perfis</option><option value="user">Usuário</option><option value="super_admin">Admin supremo</option></select><select aria-label="Filtrar por status" value={userStatusFilter} onChange={(event) => setUserStatusFilter(event.target.value)}><option value="">Todos os status</option><option value="active">Ativos</option><option value="blocked">Bloqueados</option></select></div>} /><div className="table-scroll"><table className="admin-table"><thead><tr><th>Usuário</th><th>Perfil</th><th>Empresas</th><th>Sessões</th><th>Último acesso</th><th>Ações</th></tr></thead><tbody>{users.map((user) => <tr key={user.id}><td><strong>{user.name}</strong><small>{user.email}</small></td><td><Badge tone={user.platform_role === 'super_admin' ? 'purple' : statusTone(user.status)}>{user.platform_role === 'super_admin' ? 'Admin supremo' : statusLabel(user.status)}</Badge></td><td><div className="admin-memberships">{(user.memberships ?? []).slice(0, 2).map((membership: AnyRow) => <span key={`${user.id}-${membership.tenantId}`}>{membership.tenantName} · {membership.role}</span>)}{(user.memberships ?? []).length > 2 && <small>+{(user.memberships ?? []).length - 2} empresas</small>}</div></td><td>{fmt(user.active_sessions)}</td><td>{dateTime(user.last_login_at)}</td><td><div className="table-actions"><Button variant="ghost" onClick={() => void revokeUserSessions(user)} disabled={!Number(user.active_sessions) || busy === `user-sessions-${user.id}`}>Revogar sessões</Button><Button variant="ghost" onClick={() => void resetUserPassword(user)} disabled={busy === `user-reset-${user.id}`}>Redefinir senha</Button><Button variant="ghost" onClick={() => void toggleSuperAdmin(user)} disabled={busy === `user-role-${user.id}`}>{user.platform_role === 'super_admin' ? 'Remover admin supremo' : 'Promover a admin supremo'}</Button><Button variant={user.status === 'active' ? 'danger' : 'secondary'} onClick={() => void toggleUser(user)} disabled={busy === `user-status-${user.id}`}>{user.status === 'active' ? 'Bloquear' : 'Ativar'}</Button></div></td></tr>)}</tbody></table>{!users.length && <EmptyState title="Nenhum usuário encontrado" />}<Pagination offset={userOffset} limit={PAGE_SIZE} total={userPage.total} onChange={setUserOffset} /></div></Panel>}
 
       {section === 'operations' && <>
         <Panel><SectionHeader title="Controle por empresa" description="Estado do discador e capacidade disponível em tempo real." /><div className="admin-operation-grid">{(operations.tenants ?? []).map((tenant: AnyRow) => <article key={tenant.id}><div className="admin-operation-title"><div><strong>{tenant.name}</strong><small>{statusLabel(tenant.status)}</small></div><Badge tone={tenant.dialer_running ? 'success' : 'warning'}>{tenant.dialer_running ? 'Discador ativo' : 'Pausado'}</Badge></div><dl><div><dt>Fila</dt><dd>{fmt(tenant.queued_leads)}</dd></div><div><dt>SDRs livres</dt><dd>{fmt(tenant.available_sdrs)}</dd></div><div><dt>Números</dt><dd>{fmt(tenant.connected_numbers)}</dd></div><div><dt>Chamadas</dt><dd>{fmt(tenant.active_calls)}</dd></div></dl><div className="panel-actions"><Button variant={tenant.dialer_running ? 'danger' : 'success'} icon={tenant.dialer_running ? 'pause' : 'play'} onClick={() => void toggleDialer(tenant)} disabled={busy === `dialer-${tenant.id}` || tenant.status !== 'active'}>{tenant.dialer_running ? 'Pausar discador' : 'Iniciar discador'}</Button><Button variant="ghost" onClick={() => onOpenTenant?.(tenant.id)}>Abrir operação</Button></div></article>)}</div></Panel>
@@ -190,7 +252,7 @@ export function AdminPage({ onChanged, onOpenTenant }: { onChanged?: () => Promi
         <Panel><SectionHeader title="Chamadas recentes" /><div className="table-scroll"><table className="admin-table"><thead><tr><th>Empresa</th><th>Lead</th><th>SDR</th><th>Número</th><th>Status</th><th>Data</th></tr></thead><tbody>{(operations.recentCalls ?? []).map((call: AnyRow) => <tr key={call.id}><td>{call.tenant_name}</td><td>{call.lead_name}</td><td>{call.sdr_name}</td><td>{call.number_label}</td><td><Badge tone={statusTone(call.status)}>{statusLabel(call.status)}</Badge></td><td>{dateTime(call.created_at)}</td></tr>)}</tbody></table></div></Panel>
       </>}
 
-      {section === 'audit' && <Panel><SectionHeader title="Auditoria global" description="Ações administrativas e operacionais registradas pela API." action={<div className="admin-search"><Icon name="search" size={14} /><input aria-label="Buscar auditoria" placeholder="Ação, pessoa ou entidade" value={auditSearch} onChange={(event) => setAuditSearch(event.target.value)} /></div>} /><div className="admin-audit-list">{audit.map((entry) => <article key={entry.id}><div className="admin-audit-icon"><Icon name="history" size={15} /></div><div><strong>{entry.action}</strong><span>{entry.actor_name ?? 'Sistema'} · {entry.tenant_name ?? 'Global'}</span><small>{entry.entity_type ? `${entry.entity_type}${entry.entity_id ? ` · ${entry.entity_id}` : ''}` : 'Ação de plataforma'}</small></div><time>{dateTime(entry.created_at)}</time></article>)}{!audit.length && <EmptyState title="Nenhum evento encontrado" />}</div></Panel>}
+      {section === 'audit' && <Panel><SectionHeader title="Auditoria global" description="Ações administrativas e operacionais registradas pela API." action={<div className="admin-search"><Icon name="search" size={14} /><input aria-label="Buscar auditoria" placeholder="Ação, pessoa ou entidade" value={auditSearch} onChange={(event) => setAuditSearch(event.target.value)} /></div>} /><div className="admin-audit-list">{audit.map((entry) => <article key={entry.id}><div className="admin-audit-icon"><Icon name="history" size={15} /></div><div><strong>{entry.action}</strong><span>{entry.actor_name ?? 'Sistema'} · {entry.tenant_name ?? 'Global'}</span><small>{entry.entity_type ? `${entry.entity_type}${entry.entity_id ? ` · ${entry.entity_id}` : ''}` : 'Ação de plataforma'}</small></div><time>{dateTime(entry.created_at)}</time></article>)}{!audit.length && <EmptyState title="Nenhum evento encontrado" />}</div><Pagination offset={auditOffset} limit={PAGE_SIZE} total={auditPage.total} onChange={setAuditOffset} /></Panel>}
 
       {section === 'health' && <>
         <div className="admin-health-grid">{Object.entries(health.services ?? {}).map(([key, service]) => { const item = service as AnyRow; const verified = typeof item.ok === 'boolean'; const ok = item.ok === true; const label = verified ? (ok ? 'Operacional' : 'Indisponível') : 'Configurado, não verificado'; return <article key={key}><div className={`admin-health-icon ${ok || !verified ? 'ok' : 'error'}`}><Icon name={ok || !verified ? 'check' : 'alert'} /></div><div><strong>{{ api: 'API', database: 'PostgreSQL', redis: 'Redis', waxum: 'Waxum' }[key] ?? key}</strong><small>{label}{item.error ? ` · ${item.error}` : ''}</small></div><Badge tone={ok ? 'success' : verified ? 'warning' : 'neutral'}>{ok ? 'OK' : verified ? 'Erro' : 'Config.'}</Badge></article>; })}</div>

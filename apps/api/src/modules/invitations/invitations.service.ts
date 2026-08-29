@@ -120,7 +120,21 @@ export class InvitationsService {
     return { ok: true, id: invitationId };
   }
 
-  async list(tenantId: string) {
-    return (await this.db.query(`SELECT id, tenant_id, invited_email, invitee_name, role, expires_at, accepted_at, revoked_at, created_at FROM invitations WHERE tenant_id = $1 ORDER BY created_at DESC`, [tenantId])).rows;
+  async list(tenantId: string, role?: MembershipRole, limit = 100, offset = 0) {
+    const safeLimit = Math.min(500, Math.max(1, Math.floor(Number(limit) || 100)));
+    const safeOffset = Math.max(0, Math.floor(Number(offset) || 0));
+    const values: unknown[] = [tenantId];
+    let roleClause = '';
+    if (role) { values.push(role); roleClause = `AND role = $${values.length}`; }
+    const total = await this.db.query(`SELECT count(*)::int AS total FROM invitations WHERE tenant_id = $1 ${roleClause}`, values);
+    values.push(safeLimit, safeOffset);
+    const items = await this.db.query(`
+      SELECT id, tenant_id, invited_email, invitee_name, role, expires_at, accepted_at, revoked_at, created_at
+      FROM invitations
+      WHERE tenant_id = $1 ${roleClause}
+      ORDER BY created_at DESC
+      LIMIT $${values.length - 1} OFFSET $${values.length}
+    `, values);
+    return { items: items.rows, total: Number(total.rows[0]?.total ?? 0), limit: safeLimit, offset: safeOffset };
   }
 }

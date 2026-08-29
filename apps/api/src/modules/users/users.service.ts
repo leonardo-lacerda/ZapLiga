@@ -1,5 +1,5 @@
 import { ConflictException, Injectable, NotFoundException } from '@nestjs/common';
-import { randomUUID } from 'node:crypto';
+import { randomBytes, randomUUID } from 'node:crypto';
 import * as bcrypt from 'bcryptjs';
 import { DatabaseService } from '../../database/database.service';
 import { normalizeEmail, publicUser } from './users.utils';
@@ -77,6 +77,28 @@ export class UsersService {
     });
     if (!result.rows[0]) throw new NotFoundException('Usuário não encontrado');
     return result.rows[0];
+  }
+
+  async setPlatformRole(id: string, platformRole: 'user' | 'super_admin') {
+    if (platformRole !== 'super_admin') {
+      const remaining = await this.db.query(`SELECT count(*)::int AS count FROM users WHERE platform_role = 'super_admin' AND status = 'active' AND id <> $1`, [id]);
+      if (Number(remaining.rows[0]?.count ?? 0) < 1) throw new ConflictException('É necessário manter ao menos um Admin supremo ativo');
+    }
+    const result = await this.db.query('UPDATE users SET platform_role = $1, updated_at = now() WHERE id = $2 RETURNING *', [platformRole, id]);
+    if (!result.rows[0]) throw new NotFoundException('Usuário não encontrado');
+    return result.rows[0];
+  }
+
+  async resetPassword(id: string) {
+    const temporaryPassword = randomBytes(9).toString('base64url');
+    const passwordHash = await this.hashPassword(temporaryPassword);
+    const result = await this.db.transaction(async (client) => {
+      const updated = await client.query('UPDATE users SET password_hash = $1, updated_at = now() WHERE id = $2 RETURNING *', [passwordHash, id]);
+      if (updated.rows[0]) await client.query('UPDATE user_sessions SET revoked_at = COALESCE(revoked_at, now()) WHERE user_id = $1 AND revoked_at IS NULL', [id]);
+      return updated;
+    });
+    if (!result.rows[0]) throw new NotFoundException('Usuário não encontrado');
+    return { user: result.rows[0], temporaryPassword };
   }
 
   sanitize(user: any) { return publicUser(user); }

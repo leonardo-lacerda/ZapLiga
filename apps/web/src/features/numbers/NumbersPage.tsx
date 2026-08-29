@@ -1,15 +1,15 @@
 import { QRCodeSVG } from 'qrcode.react';
 import type { AnyRow } from '../../types';
-import { Badge, Button, EmptyState, Icon, Panel, SectionHeader } from '../../components/ui';
-import { labelStatus } from '../../shared/format';
+import { Badge, Button, EmptyState, Icon, Pagination, Panel, SectionHeader } from '../../components/ui';
+import { PAGE_SIZE, formatNumber, labelStatus } from '../../shared/format';
 
 const connectedStatuses = ['connected', 'online', 'ready', 'authenticated', 'logged_in'];
 
-export function NumbersPage({ numbers, numberForm, setNumberForm, createNumber, showQr, reconnectNumber, removeNumber, qrLoading, qr, closeQr, canManageNumbers = false }: AnyRow) {
+export function NumbersPage({ numbers, numbersTotal, numbersOffset, onNumbersPageChange, numberForm, setNumberForm, createNumber, showQr, reconnectNumber, removeNumber, qrLoading, qr, closeQr, canManageNumbers = false }: AnyRow) {
   return <>
     <div className="page-heading">
       <div><span className="eyebrow">WHATSAPP</span><h1>Numeros</h1><p>{canManageNumbers ? 'Gerencie as sessoes conectadas a sua operacao.' : 'Consulte as sessoes conectadas a sua operacao.'}</p></div>
-      <Badge tone="info">{numbers.length} sessoes</Badge>
+      <Badge tone="info">{formatNumber(numbersTotal)} sessoes</Badge>
     </div>
     {canManageNumbers && <Panel>
       <SectionHeader title="Adicionar numero" description="Crie uma sessao para conectar um numero autorizado." />
@@ -28,6 +28,7 @@ export function NumbersPage({ numbers, numberForm, setNumberForm, createNumber, 
       </div>)}
       {!numbers.length && <div className="full-span"><EmptyState title="Nenhum numero cadastrado" description={canManageNumbers ? 'Adicione uma sessao para conectar seu WhatsApp.' : 'Os numeros serao configurados pelo administrador da plataforma.'} /></div>}
     </div>
+    <Pagination offset={numbersOffset} limit={PAGE_SIZE} total={numbersTotal} onChange={onNumbersPageChange} />
     {qr && <QrModal qr={qr} closeQr={closeQr} />}
   </>;
 }

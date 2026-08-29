@@ -1,14 +1,27 @@
 const API = import.meta.env.VITE_API_URL ?? 'http://localhost:3000';
 let accessToken = '';
 let activeTenantId = '';
+let refreshInFlight: Promise<boolean> | null = null;
+let accessTokenRevision = 0;
+const refreshChannel = typeof BroadcastChannel !== 'undefined' ? new BroadcastChannel('zapliga-auth') : null;
 
 export const apiBaseUrl = API;
 export const wsUrl = () => { const api = new URL(API); return `${api.protocol === 'https:' ? 'wss' : 'ws'}://${api.host}`; };
 
-export const setAccessToken = (token: string) => { accessToken = token; };
+export const setAccessToken = (token: string, broadcast = true) => {
+  accessToken = token;
+  accessTokenRevision += 1;
+  if (broadcast) refreshChannel?.postMessage({ type: 'access-token-updated', token });
+};
 export const clearAccessToken = () => { accessToken = ''; };
 export const setActiveTenantId = (tenantId: string) => { activeTenantId = tenantId; };
 export const clearActiveTenantId = () => { activeTenantId = ''; };
+
+refreshChannel?.addEventListener('message', (event) => {
+  if (event.data?.type === 'access-token-updated' && typeof event.data.token === 'string') {
+    setAccessToken(event.data.token, false);
+  }
+});
 
 const tenantRoute = (path: string) => {
   if (!activeTenantId || path.startsWith('/api/tenants/')) return path;
@@ -31,7 +44,7 @@ const fetchJson = async (path: string, init?: RequestInit) => {
 
 export const apiFetch = fetchJson;
 
-export const refreshAccessToken = async () => {
+const rotateRefreshToken = async () => {
   const response = await fetch(`${API}/api/auth/refresh`, { method: 'POST', credentials: 'include' });
   const body = await response.json().catch(() => ({}));
   if (!response.ok || !body.accessToken) { clearAccessToken(); return false; }
@@ -39,9 +52,34 @@ export const refreshAccessToken = async () => {
   return true;
 };
 
+export const refreshAccessToken = () => {
+  // Several API calls can receive 401 at the same time (for example when a
+  // dashboard refreshes all of its widgets). Since refresh tokens rotate,
+  // those calls must share one rotation instead of racing with each other.
+  if (refreshInFlight) return refreshInFlight;
+  const revisionAtStart = accessTokenRevision;
+  refreshInFlight = (async () => {
+    // The refresh cookie is shared by tabs. The Web Locks API serializes
+    // rotations across them, while BroadcastChannel shares the new in-memory
+    // access token without persisting credentials in localStorage.
+    const locks = typeof navigator !== 'undefined' ? navigator.locks : undefined;
+    const rotate = async () => {
+      if (accessToken && accessTokenRevision !== revisionAtStart) return true;
+      return rotateRefreshToken();
+    };
+    if (locks) return locks.request('zapliga-auth-refresh', rotate);
+    return rotate();
+  })().finally(() => { refreshInFlight = null; });
+  return refreshInFlight;
+};
+
 export const json = async (path: string, init?: RequestInit, retry = true): Promise<any> => {
+  const tokenAtRequest = accessToken;
   const response = await fetchJson(path, init);
   if (response.status === 401 && retry && !path.startsWith('/api/auth/')) {
+    // Another request/tab may already have completed the rotation while this
+    // request was in flight. Reuse that token before attempting another one.
+    if (tokenAtRequest !== accessToken && accessToken) return json(path, init, false);
     if (await refreshAccessToken()) return json(path, init, false);
   }
   const body = await response.json().catch(() => ({}));

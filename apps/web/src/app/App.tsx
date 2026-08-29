@@ -4,6 +4,7 @@ import { AudioBridge } from '../audio/AudioBridge';
 import { apiFetch, json, wsUrl } from '../services/api';
 import type { AnyRow, TabKey } from '../types';
 import { Badge, Button, Icon } from '../components/ui';
+import { PAGE_SIZE } from '../shared/format';
 import { LiveTimer } from '../components/LiveTimer';
 import { DateRangePopover } from '../components/DateRangePopover';
 import { Dashboard } from '../features/dashboard/Dashboard';
@@ -27,13 +28,19 @@ function AuthenticatedApp() {
   const fetch = apiFetch;
   const [status, setStatus] = useState<AnyRow>({});
   const [numbers, setNumbers] = useState<AnyRow[]>([]);
+  const [numbersTotal, setNumbersTotal] = useState(0);
+  const [numbersOffset, setNumbersOffset] = useState(0);
   const [leads, setLeads] = useState<AnyRow[]>([]);
+  const [leadsTotal, setLeadsTotal] = useState(0);
+  const [leadsOffset, setLeadsOffset] = useState(0);
   const [leadFolders, setLeadFolders] = useState<AnyRow[]>([]);
   const [selectedFolderId, setSelectedFolderId] = useState('');
   const [folderMetrics, setFolderMetrics] = useState<AnyRow | null>(null);
   const [dateRange, setDateRange] = useState({ from: isoDate(new Date(Date.now() - 29 * 24 * 60 * 60 * 1000)), to: isoDate(new Date()) });
   const [sdrs, setSdrs] = useState<AnyRow[]>([]);
   const [calls, setCalls] = useState<AnyRow[]>([]);
+  const [callsTotal, setCallsTotal] = useState(0);
+  const [callsOffset, setCallsOffset] = useState(0);
   const [logs, setLogs] = useState<AnyRow[]>([]);
   const [tab, setTab] = useState<TabKey>('dashboard');
   const [error, setError] = useState('');
@@ -63,15 +70,15 @@ function AuthenticatedApp() {
 
   const load = useCallback(async () => {
     try {
-      const [nextStatus, nextNumbers, nextFolders, nextSdrs, nextCalls, events] = isSdr
-        ? [await json('/api/dialer/sdr-status'), [], [], [await json('/api/me/sdr')], [], []]
-        : await Promise.all([json(`/api/dialer/status?from=${dateRange.from}&to=${dateRange.to}`), json('/api/numbers'), json('/api/lead-folders'), json('/api/sdrs'), json(`/api/calls?from=${dateRange.from}&to=${dateRange.to}`), json('/api/dialer/logs')]);
+      const [nextStatus, numbersPage, nextFolders, nextSdrs, callsPage, events] = isSdr
+        ? [await json('/api/dialer/sdr-status'), { items: [], total: 0 }, [], [await json('/api/me/sdr')], { items: [], total: 0 }, []]
+        : await Promise.all([json(`/api/dialer/status?from=${dateRange.from}&to=${dateRange.to}`), json(`/api/numbers?limit=${PAGE_SIZE}&offset=${numbersOffset}`), json('/api/lead-folders'), json('/api/sdrs?limit=500').then((page) => page.items), json(`/api/calls?from=${dateRange.from}&to=${dateRange.to}&limit=${PAGE_SIZE}&offset=${callsOffset}`), json('/api/dialer/logs')]);
       const folderId = !isSdr ? (nextFolders.find((folder: AnyRow) => folder.id === selectedFolderId)?.id ?? nextFolders.find((folder: AnyRow) => folder.is_active)?.id ?? nextFolders[0]?.id ?? '') : '';
-      const [nextLeads, nextMetrics] = !isSdr && folderId
-        ? await Promise.all([json(`/api/lead-folders/${folderId}/leads`), json(`/api/lead-folders/${folderId}/metrics?from=${dateRange.from}&to=${dateRange.to}`)])
-        : [[], null];
+      const [leadsPage, nextMetrics] = !isSdr && folderId
+        ? await Promise.all([json(`/api/lead-folders/${folderId}/leads?limit=${PAGE_SIZE}&offset=${leadsOffset}`), json(`/api/lead-folders/${folderId}/metrics?from=${dateRange.from}&to=${dateRange.to}`)])
+        : [{ items: [], total: 0 }, null];
       if (folderId && folderId !== selectedFolderId) setSelectedFolderId(folderId);
-      setStatus(nextStatus); setNumbers(nextNumbers); setLeads(nextLeads); setSdrs(nextSdrs); setCalls(nextCalls); setLogs(events); setError('');
+      setStatus(nextStatus); setNumbers(numbersPage.items); setNumbersTotal(numbersPage.total); setLeads(leadsPage.items); setLeadsTotal(leadsPage.total); setSdrs(nextSdrs); setCalls(callsPage.items); setCallsTotal(callsPage.total); setLogs(events); setError('');
       setLeadFolders(nextFolders); setFolderMetrics(nextMetrics);
       // A pending post-call pause belongs exclusively to the authenticated SDR.
       // Leaders and the super admin may see all SDRs, but must never inherit an
@@ -83,11 +90,13 @@ function AuthenticatedApp() {
     } catch (e) {
       setError(e instanceof TypeError ? 'API temporariamente indisponível. Tentando reconectar...' : String(e));
     }
-  }, [sdrId, postCall, activeTenantId, isSdr, selectedFolderId, dateRange.from, dateRange.to]);
+  }, [sdrId, postCall, activeTenantId, isSdr, selectedFolderId, dateRange.from, dateRange.to, leadsOffset, callsOffset, numbersOffset]);
 
   useEffect(() => { if (!isSdr) { if (sdrId) setSdrId(''); return; } if (!sdrId && sdrs[0]?.id) setSdrId(sdrs[0].id); }, [isSdr, sdrId, sdrs]);
   useEffect(() => { setSdrId(''); setActiveCall(null); setPostCall(null); setQr(null); setQrNumberId(''); }, [activeTenantId]);
   useEffect(() => { if (isSdr && tab !== 'dashboard') setTab('dashboard'); }, [isSdr, tab]);
+  useEffect(() => { setLeadsOffset(0); }, [selectedFolderId]);
+  useEffect(() => { setCallsOffset(0); }, [dateRange.from, dateRange.to]);
 
   useEffect(() => { void load(); const timer = setInterval(() => void load(), 3000); return () => clearInterval(timer); }, [load]);
   useEffect(() => {
@@ -173,13 +182,13 @@ function AuthenticatedApp() {
   const availableSdrs = isSdr ? (status.sdr?.available ? 1 : 0) : (status.available_sdrs ?? 0);
 
   return <><div className="app-shell">
-    <div className="app-layout"><aside className="main-sidebar"><div className="brand"><div className="brand-mark"><Icon name="phone" size={17} /></div><div><strong>Zap<span>Liga</span></strong><small>Operação SDR</small></div></div><div className="workspace-switcher"><span className="workspace-avatar">Z</span><div><strong>Minha operação</strong><small>Workspace local</small></div><Icon name="chevron" size={14} /></div><nav className="sidebar-nav" aria-label="Navegação principal">{navigationGroups.map((group) => <div className="sidebar-group" key={group.label}><span className="sidebar-label">{group.label}</span>{group.items.map((item) => <button key={item.key} className={`sidebar-item ${tab === item.key ? 'active' : ''}`} onClick={() => setTab(item.key)}><Icon name={item.icon} /><span>{item.label}</span>{item.key === 'calls' && calls.length > 0 && <em>{calls.length}</em>}</button>)}</div>)}</nav></aside>
+    <div className="app-layout"><aside className="main-sidebar"><div className="brand"><div className="brand-mark"><Icon name="phone" size={17} /></div><div><strong>Zap<span>Liga</span></strong><small>Operação SDR</small></div></div><div className="workspace-switcher"><span className="workspace-avatar">Z</span><div><strong>Minha operação</strong><small>Workspace local</small></div><Icon name="chevron" size={14} /></div><nav className="sidebar-nav" aria-label="Navegação principal">{navigationGroups.map((group) => <div className="sidebar-group" key={group.label}><span className="sidebar-label">{group.label}</span>{group.items.map((item) => <button key={item.key} className={`sidebar-item ${tab === item.key ? 'active' : ''}`} onClick={() => setTab(item.key)}><Icon name={item.icon} /><span>{item.label}</span>{item.key === 'calls' && callsTotal > 0 && <em>{callsTotal}</em>}</button>)}</div>)}</nav></aside>
       <aside className="context-sidebar" aria-label="Status da operação"><div className="context-title"><div className="context-icon"><Icon name="chart" size={16} /></div><div><strong>Status da operação</strong><small>Indicadores em tempo real</small></div></div><div className="context-status"><div><span className="status-line"><i className={status.running ? 'on' : ''}></i>Discador</span><small className="context-status-detail">{status.running ? 'Processando a fila' : 'Operação pausada'}</small></div><Badge tone={status.running ? 'success' : 'neutral'}>{status.running ? 'Operando' : 'Pausado'}</Badge></div><div className="context-metrics"><div className="context-metric"><span>Contatos na fila</span><strong>{queuedLeads}</strong><small>aguardando discagem</small></div><div className="context-metric"><span>{isSdr ? 'Linha do WhatsApp' : 'Números conectados'}</span><strong>{isSdr ? (status.line_ready ? 'Ligada' : 'Offline') : connectedNumbers}</strong><small>{isSdr ? (status.line_ready ? 'pronta para chamadas' : 'aguardando conexão') : 'prontos para uso'}</small></div><div className="context-metric"><span>SDRs disponíveis</span><strong>{availableSdrs}</strong><small>equipe online</small></div></div><div className="context-note"><Icon name="headset" size={15} /><div><strong>Central de operação</strong><small>Use o menu ao lado para acessar cada área.</small></div></div></aside>
       <main className="main-content"><div className="module-header"><div className="breadcrumb"><Icon name="chart" size={17} /><strong>{moduleTitle}</strong><span>/</span><span>Central de operação</span></div><div className="header-actions">{!isSdr && <DateRangePopover value={dateRange} onChange={setDateRange} />}{!isSdr && <Button variant={status.running ? 'danger' : 'primary'} icon={status.running ? 'pause' : 'play'} onClick={() => void toggleDialer()}>{status.running ? 'Pausar discador' : 'Iniciar discador'}</Button>}</div></div>
         {activeCall?.lead && (() => { const answered = activeCall.phase === 'answered' || activeCall.mediaActive; const blind = !answered && !activeCall.lead.name; return <div className={`answered-call-banner${answered ? '' : ' is-ringing'}`} role="status"><div className="answered-call-contact"><span className={`answered-call-icon${answered ? '' : ' is-ringing'}`}><Icon name="phone" size={18} /></span><div><span>{answered ? 'CLIENTE ATENDEU' : 'CHAMANDO…'}</span><strong>{blind ? 'Discando para um contato da fila…' : activeCall.lead.name}</strong><small>{blind ? 'O nome aparece assim que o lead atender' : <>{activeCall.lead.phone} · {answered ? <LiveTimer startedAt={activeCall.connectedAt ?? activeCall.connected_at ?? activeCall.callStartedAt} /> : 'Tocando no WhatsApp…'}</>}</small></div></div><Button variant="danger" icon="close" onClick={hangup}>{answered ? 'Encerrar chamada' : 'Desligar'}</Button></div>; })()}
         {isSdr && postCall && <PostCallPanel pause={postCall} onFinish={finishPostCall} submitting={finishingPause} />}
         {error && <div className="alert" role="alert"><Icon name="alert" size={17} /><span>{error}</span><button onClick={() => setError('')} aria-label="Fechar erro"><Icon name="close" size={16} /></button></div>}
-        <div className="page-content">{tab === 'dashboard' && <Dashboard isSdr={isSdr} status={status} available={available} connected={connected} sdrReady={sdrReady} sdrs={sdrs} connectSdr={connectSdr} setAvailability={setAvailability} manualDial={manualDial} manualPhone={manualPhone} setManualPhone={setManualPhone} manualName={manualName} setManualName={setManualName} manualCalling={manualCalling} logs={logs} activeCall={activeCall} hangup={hangup} connectedNumbers={connectedNumbers} postCall={postCall} dateRange={dateRange} />}{tab === 'numbers' && <NumbersPage numbers={numbers} numberForm={numberForm} setNumberForm={setNumberForm} createNumber={createNumber} showQr={showQr} reconnectNumber={reconnectNumber} removeNumber={removeNumber} qrLoading={qrLoading} qr={qr} closeQr={closeQr} canManageNumbers={!isSdr} />}{tab === 'leads' && <LeadsPage leads={leads} folders={leadFolders} selectedFolderId={selectedFolderId} selectedFolder={leadFolders.find((folder) => folder.id === selectedFolderId)} metrics={folderMetrics} setSelectedFolderId={setSelectedFolderId} createFolder={createFolder} updateFolder={updateFolder} removeFolder={removeFolder} leadForm={leadForm} setLeadForm={setLeadForm} createLead={createLead} importCsv={importCsv} importResult={importResult} clearFolder={clearFolder} manualCall={manualCall} resetLead={resetLead} removeLead={removeLead} />}{tab === 'sdrs' && <SdrsPage tenantId={activeTenantId} sdrs={sdrs} />}{tab === 'calls' && <CallsPage calls={calls} />}{tab === 'access' && activeTenantId && <AccessPage tenantId={activeTenantId} role={isSuperAdmin ? 'super_admin' : activeTenant?.role ?? ''} />}{tab === 'admin' && isSuperAdmin && <AdminPage onChanged={reload} onOpenTenant={(tenantId) => { selectTenant(tenantId); setTab('dashboard'); }} />}</div>
+        <div className="page-content">{tab === 'dashboard' && <Dashboard isSdr={isSdr} status={status} available={available} connected={connected} sdrReady={sdrReady} sdrs={sdrs} connectSdr={connectSdr} setAvailability={setAvailability} manualDial={manualDial} manualPhone={manualPhone} setManualPhone={setManualPhone} manualName={manualName} setManualName={setManualName} manualCalling={manualCalling} logs={logs} activeCall={activeCall} hangup={hangup} connectedNumbers={connectedNumbers} postCall={postCall} dateRange={dateRange} />}{tab === 'numbers' && <NumbersPage numbers={numbers} numbersTotal={numbersTotal} numbersOffset={numbersOffset} onNumbersPageChange={setNumbersOffset} numberForm={numberForm} setNumberForm={setNumberForm} createNumber={createNumber} showQr={showQr} reconnectNumber={reconnectNumber} removeNumber={removeNumber} qrLoading={qrLoading} qr={qr} closeQr={closeQr} canManageNumbers={!isSdr} />}{tab === 'leads' && <LeadsPage leads={leads} leadsTotal={leadsTotal} leadsOffset={leadsOffset} onLeadsPageChange={setLeadsOffset} folders={leadFolders} selectedFolderId={selectedFolderId} selectedFolder={leadFolders.find((folder) => folder.id === selectedFolderId)} metrics={folderMetrics} setSelectedFolderId={setSelectedFolderId} createFolder={createFolder} updateFolder={updateFolder} removeFolder={removeFolder} leadForm={leadForm} setLeadForm={setLeadForm} createLead={createLead} importCsv={importCsv} importResult={importResult} clearFolder={clearFolder} manualCall={manualCall} resetLead={resetLead} removeLead={removeLead} />}{tab === 'sdrs' && <SdrsPage tenantId={activeTenantId} sdrs={sdrs} />}{tab === 'calls' && <CallsPage calls={calls} callsTotal={callsTotal} callsOffset={callsOffset} onCallsPageChange={setCallsOffset} />}{tab === 'access' && activeTenantId && <AccessPage tenantId={activeTenantId} role={isSuperAdmin ? 'super_admin' : activeTenant?.role ?? ''} />}{tab === 'admin' && isSuperAdmin && <AdminPage onChanged={reload} onOpenTenant={(tenantId) => { selectTenant(tenantId); setTab('dashboard'); }} />}</div>
       </main></div>
   </div></>;
 }

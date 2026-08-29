@@ -10,17 +10,23 @@ export class MembershipsService {
   constructor(private readonly db: DatabaseService) {}
 
   async create(tenantId: string, userId: string, role: MembershipRole) {
-    try {
-      const result = await this.db.query(`
-        INSERT INTO tenant_memberships (id, tenant_id, user_id, role)
-        VALUES ($1, $2, $3, $4)
-        RETURNING *
-      `, [randomUUID(), tenantId, userId, role]);
-      return result.rows[0];
-    } catch (error) {
-      if (String(error).includes('tenant_memberships_tenant_id_user_id_key')) throw new ConflictException('Este usuário já possui uma membership nesta empresa');
-      throw error;
-    }
+    return this.db.transaction(async (client) => {
+      const existing = await client.query('SELECT * FROM tenant_memberships WHERE tenant_id = $1 AND user_id = $2 LIMIT 1 FOR UPDATE', [tenantId, userId]);
+      if (existing.rows[0] && existing.rows[0].status !== 'removed') throw new ConflictException('Este usuário já possui uma membership nesta empresa');
+      const membership = existing.rows[0]
+        ? (await client.query('UPDATE tenant_memberships SET role = $1, status = \'active\', updated_at = now() WHERE tenant_id = $2 AND user_id = $3 RETURNING *', [role, tenantId, userId])).rows[0]
+        : (await client.query('INSERT INTO tenant_memberships (id, tenant_id, user_id, role) VALUES ($1, $2, $3, $4) RETURNING *', [randomUUID(), tenantId, userId, role])).rows[0];
+      if (role === 'sdr') {
+        const sdr = await client.query('SELECT id FROM sdrs WHERE tenant_id = $1 AND user_id = $2 LIMIT 1', [tenantId, userId]);
+        if (!sdr.rows[0]) {
+          const quota = await client.query('SELECT t.max_sdrs, count(s.id)::int AS current FROM tenants t LEFT JOIN sdrs s ON s.tenant_id = t.id WHERE t.id = $1 GROUP BY t.id, t.max_sdrs', [tenantId]);
+          if (Number(quota.rows[0]?.current ?? 0) >= Number(quota.rows[0]?.max_sdrs ?? 500)) throw new ConflictException('O limite de SDRs desta empresa foi atingido');
+          const name = await client.query('SELECT name FROM users WHERE id = $1', [userId]);
+          await client.query('INSERT INTO sdrs (id, tenant_id, user_id, name) VALUES ($1, $2, $3, $4)', [randomUUID(), tenantId, userId, name.rows[0]?.name ?? 'SDR']);
+        }
+      }
+      return membership;
+    });
   }
 
   async findForUserInTenant(userId: string, tenantId: string) {
@@ -34,15 +40,28 @@ export class MembershipsService {
     return result.rows[0] ?? null;
   }
 
-  async listForTenant(tenantId: string) {
-    return (await this.db.query(`
+  async listForTenant(tenantId: string, role?: MembershipRole, limit = 100, offset = 0) {
+    const safeLimit = Math.min(500, Math.max(1, Math.floor(Number(limit) || 100)));
+    const safeOffset = Math.max(0, Math.floor(Number(offset) || 0));
+    const values: unknown[] = [tenantId];
+    let roleClause = '';
+    if (role) { values.push(role); roleClause = `AND tm.role = $${values.length}`; }
+    const total = await this.db.query(`
+      SELECT count(*)::int AS total
+      FROM tenant_memberships tm
+      WHERE tm.tenant_id = $1 AND tm.status <> 'removed' ${roleClause}
+    `, values);
+    values.push(safeLimit, safeOffset);
+    const items = await this.db.query(`
       SELECT tm.id, tm.tenant_id, tm.user_id, tm.role, tm.status, tm.created_at, tm.updated_at,
         u.name, u.email, u.status AS user_status, u.last_login_at
       FROM tenant_memberships tm
       JOIN users u ON u.id = tm.user_id
-      WHERE tm.tenant_id = $1 AND tm.status <> 'removed'
+      WHERE tm.tenant_id = $1 AND tm.status <> 'removed' ${roleClause}
       ORDER BY tm.role, u.name
-    `, [tenantId])).rows;
+      LIMIT $${values.length - 1} OFFSET $${values.length}
+    `, values);
+    return { items: items.rows, total: Number(total.rows[0]?.total ?? 0), limit: safeLimit, offset: safeOffset };
   }
 
   async listForUser(userId: string) {

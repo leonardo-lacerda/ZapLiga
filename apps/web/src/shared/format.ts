@@ -1,3 +1,7 @@
+export const PAGE_SIZE = 25;
+
+export const formatNumber = (value: unknown) => new Intl.NumberFormat('pt-BR').format(Number(value ?? 0));
+
 export const statusNames: Record<string, string> = {
   queued: 'Na fila', retry_wait: 'Aguardando retry', reserved: 'Reservada', dialing: 'Discando', media_active: 'Em chamada',
   connected: 'Conectado', disconnected: 'Desconectado', completed: 'Concluída', no_answer: 'Não atendeu', failed: 'Falhou',

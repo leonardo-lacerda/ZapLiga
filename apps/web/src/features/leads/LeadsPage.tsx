@@ -1,13 +1,14 @@
 import { useState } from 'react';
 import type React from 'react';
 import type { AnyRow } from '../../types';
-import { Badge, Button, Icon, Panel, SectionHeader } from '../../components/ui';
+import { Badge, Button, Icon, Pagination, Panel, SectionHeader } from '../../components/ui';
 import { DataTable } from '../../components/DataTable';
+import { PAGE_SIZE } from '../../shared/format';
 
 const metric = (value: unknown) => Number(value ?? 0).toLocaleString('pt-BR');
 
 export function LeadsPage({
-  leads, folders, selectedFolderId, selectedFolder, metrics,
+  leads, leadsTotal, leadsOffset, onLeadsPageChange, folders, selectedFolderId, selectedFolder, metrics,
   setSelectedFolderId, createFolder, updateFolder, removeFolder, leadForm, setLeadForm,
   createLead, importCsv, importResult, clearFolder, manualCall, resetLead, removeLead,
 }: AnyRow) {
@@ -71,6 +72,7 @@ export function LeadsPage({
             const callInProgress = ['reserved', 'dialing', 'media_active'].includes(String(row.status));
             return <><Button variant="success" onClick={() => void manualCall(row.id, row.name)} disabled={!selectedFolder.is_active || row.do_not_call || !['queued', 'retry_wait'].includes(row.status)} title={!selectedFolder.is_active ? 'Ative a pasta para ligar' : undefined}>Ligar agora</Button><Button variant="ghost" onClick={() => void resetLead(row.id)} disabled={callInProgress} title={callInProgress ? 'Aguarde a chamada terminar para resetar' : 'Zerar tentativas e recolocar na fila'}>Resetar</Button><Button variant="danger" icon="close" onClick={() => void removeLead(row.id, row.name, row.phone)} disabled={callInProgress} title={callInProgress ? 'Aguarde a chamada terminar para remover' : 'Remover somente este lead'}>Remover</Button></>;
           }} />
+          <Pagination offset={leadsOffset} limit={PAGE_SIZE} total={leadsTotal} onChange={onLeadsPageChange} />
         </>}
       </div>
     </div>

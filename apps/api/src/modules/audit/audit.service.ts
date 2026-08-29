@@ -34,8 +34,15 @@ export class AuditService {
     if (filters.action?.trim()) { values.push(filters.action.trim()); where.push(`a.action = $${values.length}`); }
     if (filters.search?.trim()) { values.push(`%${filters.search.trim()}%`); where.push(`(a.action ILIKE $${values.length} OR a.entity_type ILIKE $${values.length} OR a.entity_id ILIKE $${values.length} OR u.name ILIKE $${values.length} OR u.email ILIKE $${values.length} OR t.name ILIKE $${values.length})`); }
     const clause = where.length ? `WHERE ${where.join(' AND ')}` : '';
+    const total = await this.db.query(`
+      SELECT count(*)::int AS total
+      FROM audit_logs a
+      LEFT JOIN users u ON u.id = a.actor_user_id
+      LEFT JOIN tenants t ON t.id = a.tenant_id
+      ${clause}
+    `, values);
     values.push(safeLimit, safeOffset);
-    return (await this.db.query(`
+    const items = await this.db.query(`
       SELECT a.*, u.name AS actor_name, u.email AS actor_email, t.name AS tenant_name
       FROM audit_logs a
       LEFT JOIN users u ON u.id = a.actor_user_id
@@ -43,13 +50,15 @@ export class AuditService {
       ${clause}
       ORDER BY a.created_at DESC
       LIMIT $${values.length - 1} OFFSET $${values.length}
-    `, values)).rows;
+    `, values);
+    return { items: items.rows, total: Number(total.rows[0]?.total ?? 0), limit: safeLimit, offset: safeOffset };
   }
 
   async listForTenant(tenantId: string, limit = 100, offset = 0) {
     const safeLimit = Math.min(500, Math.max(1, Math.floor(Number(limit) || 100)));
     const safeOffset = Math.max(0, Math.floor(Number(offset) || 0));
-    return (await this.db.query(`
+    const total = await this.db.query('SELECT count(*)::int AS total FROM audit_logs WHERE tenant_id = $1', [tenantId]);
+    const items = await this.db.query(`
       SELECT a.*, u.name AS actor_name, u.email AS actor_email, t.name AS tenant_name
       FROM audit_logs a
       LEFT JOIN users u ON u.id = a.actor_user_id
@@ -57,6 +66,7 @@ export class AuditService {
       WHERE a.tenant_id = $1
       ORDER BY a.created_at DESC
       LIMIT $2 OFFSET $3
-    `, [tenantId, safeLimit, safeOffset])).rows;
+    `, [tenantId, safeLimit, safeOffset]);
+    return { items: items.rows, total: Number(total.rows[0]?.total ?? 0), limit: safeLimit, offset: safeOffset };
   }
 }

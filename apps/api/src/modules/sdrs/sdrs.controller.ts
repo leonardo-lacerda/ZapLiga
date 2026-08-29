@@ -29,10 +29,11 @@ export class SdrsController {
   }
 
   @Get(['/api/sdrs', '/api/tenants/:tenantId/sdrs'])
-  list(@Query('limit') limit = '100', @Query('offset') offset = '0', @CurrentTenant() tenantId: string) {
+  async list(@Query('limit') limit = '100', @Query('offset') offset = '0', @CurrentTenant() tenantId: string) {
     const safeLimit = Math.min(500, Math.max(1, Number(limit) || 100));
     const safeOffset = Math.max(0, Number(offset) || 0);
-    return this.db.query(`
+    const total = await this.db.query('SELECT count(*)::int AS total FROM sdrs s WHERE s.tenant_id = $1', [tenantId]);
+    const items = await this.db.query(`
       SELECT s.*, u.name AS user_name, u.email AS user_email, u.status AS user_status, u.last_login_at,
         tm.status AS membership_status, p.pause_type, p.started_at AS pause_started_at, p.call_id AS pause_call_id,
         c.lead_id AS pause_lead_id, l.name AS pause_lead_name, l.phone AS pause_lead_phone,
@@ -47,7 +48,8 @@ export class SdrsController {
       WHERE s.tenant_id = $1
       ORDER BY s.name
       LIMIT $2 OFFSET $3
-    `, [tenantId, safeLimit, safeOffset]).then((result) => result.rows);
+    `, [tenantId, safeLimit, safeOffset]);
+    return { items: items.rows, total: Number(total.rows[0]?.total ?? 0), limit: safeLimit, offset: safeOffset };
   }
 
   @Get(['/api/sdrs/:id/state', '/api/tenants/:tenantId/sdrs/:id/state'])

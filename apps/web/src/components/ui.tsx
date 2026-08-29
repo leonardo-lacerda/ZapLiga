@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react';
 import type { ButtonVariant } from '../types';
+import { formatNumber } from '../shared/format';
 
 const iconPaths: Record<string, string> = {
   dashboard: 'M4 13h6V4H4v9Zm10 7h6v-9h-6v9ZM4 20h6v-3H4v3Zm10-12h6V4h-6v4Z',
@@ -21,3 +22,7 @@ export function Badge({ children, tone = 'neutral' }: { children: ReactNode; ton
 export function Panel({ children, className = '' }: { children: ReactNode; className?: string }) { return <section className={`panel ${className}`}>{children}</section>; }
 export function SectionHeader({ eyebrow, title, description, action }: { eyebrow?: string; title: string; description?: string; action?: ReactNode }) { return <div className="section-header"><div>{eyebrow && <span className="eyebrow">{eyebrow}</span>}<h2>{title}</h2>{description && <p>{description}</p>}</div>{action}</div>; }
 export function EmptyState({ title = 'Nada por aqui ainda.', description }: { title?: string; description?: string }) { return <div className="empty-state"><div className="empty-icon"><Icon name="dashboard" size={20} /></div><strong>{title}</strong>{description && <span>{description}</span>}</div>; }
+export function Pagination({ offset, limit, total, onChange }: { offset: number; limit: number; total: number; onChange: (offset: number) => void }) {
+  if (!total) return null;
+  return <div className="admin-pagination"><span>{offset + 1}–{Math.min(offset + limit, total)} de {formatNumber(total)}</span><div className="table-actions"><Button variant="ghost" onClick={() => onChange(Math.max(0, offset - limit))} disabled={offset === 0}>Anterior</Button><Button variant="ghost" onClick={() => onChange(offset + limit)} disabled={offset + limit >= total}>Próxima</Button></div></div>;
+}

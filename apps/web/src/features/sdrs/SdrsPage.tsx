@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import type React from 'react';
-import { Badge, Button, Panel, SectionHeader } from '../../components/ui';
+import { Badge, Button, Pagination, Panel, SectionHeader } from '../../components/ui';
 import { json } from '../../services/api';
+import { PAGE_SIZE } from '../../shared/format';
 import type { AnyRow } from '../../types';
 import { LiveTimer } from '../../components/LiveTimer';
 
@@ -12,7 +13,11 @@ const isPending = (invitation: AnyRow) => !invitation.accepted_at && !invitation
 
 export function SdrsPage({ tenantId, sdrs }: SdrsPageProps) {
   const [members, setMembers] = useState<AnyRow[]>([]);
+  const [membersTotal, setMembersTotal] = useState(0);
+  const [membersOffset, setMembersOffset] = useState(0);
   const [invitations, setInvitations] = useState<AnyRow[]>([]);
+  const [invitationsTotal, setInvitationsTotal] = useState(0);
+  const [invitationsOffset, setInvitationsOffset] = useState(0);
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
   const [message, setMessage] = useState('');
@@ -25,18 +30,19 @@ export function SdrsPage({ tenantId, sdrs }: SdrsPageProps) {
     if (!tenantId) return;
     try {
       const [nextMembers, nextInvitations] = await Promise.all([
-        json(`/api/tenants/${tenantId}/members`),
-        json(`/api/tenants/${tenantId}/invitations`),
+        json(`/api/tenants/${tenantId}/members?role=sdr&limit=${PAGE_SIZE}&offset=${membersOffset}`),
+        json(`/api/tenants/${tenantId}/invitations?role=sdr&limit=${PAGE_SIZE}&offset=${invitationsOffset}`),
       ]);
-      setMembers(nextMembers.filter((member: AnyRow) => member.role === 'sdr'));
-      setInvitations(nextInvitations.filter((invitation: AnyRow) => invitation.role === 'sdr'));
+      setMembers(nextMembers.items); setMembersTotal(nextMembers.total);
+      setInvitations(nextInvitations.items); setInvitationsTotal(nextInvitations.total);
       setMessage('');
     } catch (error) {
       setMessage(error instanceof Error ? error.message : String(error));
     }
-  }, [tenantId]);
+  }, [tenantId, membersOffset, invitationsOffset]);
 
   useEffect(() => { void load(); }, [load]);
+  useEffect(() => { setMembersOffset(0); setInvitationsOffset(0); }, [tenantId]);
 
   const invite = async (event: React.FormEvent) => {
     event.preventDefault(); setBusy(true); setMessage('');
@@ -101,7 +107,7 @@ export function SdrsPage({ tenantId, sdrs }: SdrsPageProps) {
   const pendingInvitations = invitations.filter(isPending);
 
   return <>
-    <div className="page-heading"><div><span className="eyebrow">EQUIPE</span><h1>SDRs</h1><p>Cadastre, convide e acompanhe os operadores da sua empresa.</p></div><Badge tone="info">{members.length} SDRs</Badge></div>
+    <div className="page-heading"><div><span className="eyebrow">EQUIPE</span><h1>SDRs</h1><p>Cadastre, convide e acompanhe os operadores da sua empresa.</p></div><Badge tone="info">{membersTotal} SDRs</Badge></div>
     {message && <div className="alert" role="alert"><span>{message}</span><button type="button" onClick={() => setMessage('')} aria-label="Fechar mensagem">×</button></div>}
     <Panel>
       <SectionHeader title="Cadastrar SDR" description="Informe os dados do operador e gere um link para ele criar a própria senha." />
@@ -132,6 +138,7 @@ export function SdrsPage({ tenantId, sdrs }: SdrsPageProps) {
         })}
         {!members.length && <p className="text-muted">Nenhum SDR aceitou um convite ainda.</p>}
       </div>
+      <Pagination offset={membersOffset} limit={PAGE_SIZE} total={membersTotal} onChange={setMembersOffset} />
     </Panel>
     <Panel>
       <SectionHeader title="Convites de SDR" description="Convites pendentes podem ser reenviados ou revogados." />
@@ -147,6 +154,7 @@ export function SdrsPage({ tenantId, sdrs }: SdrsPageProps) {
         })}
         {!invitations.length && <p className="text-muted">Nenhum convite enviado.</p>}
       </div>
+      <Pagination offset={invitationsOffset} limit={PAGE_SIZE} total={invitationsTotal} onChange={setInvitationsOffset} />
       {pendingInvitations.length > 0 && <p className="form-hint">{pendingInvitations.length} convite(s) aguardando aceite.</p>}
     </Panel>
   </>;
