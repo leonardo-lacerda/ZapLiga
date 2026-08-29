@@ -18,6 +18,7 @@ const requestMeta = (request?: Request) => ({ ipAddress: request?.ip ?? null, us
 export class AuthService {
   private readonly accessTtlSeconds = Math.max(60, Number(process.env.JWT_ACCESS_TTL_SECONDS ?? 900));
   private readonly refreshTtlSeconds = Math.max(300, Number(process.env.REFRESH_TOKEN_TTL_SECONDS ?? 2592000));
+  private readonly refreshRotationGraceSeconds = Math.min(120, Math.max(5, Number(process.env.AUTH_REFRESH_ROTATION_GRACE_SECONDS ?? 60)));
   constructor(private readonly db: DatabaseService, private readonly jwt: JwtService, private readonly users: UsersService, private readonly audit: AuditService, private readonly redis: RedisService) {}
 
   async login(email: string, password: string, request?: Request) {
@@ -88,14 +89,30 @@ export class AuthService {
     const tokenHash = sha256(rawToken);
     const rotated = await this.db.transaction(async (client) => {
       const result = await client.query(`
-        SELECT s.*, u.name, u.email, u.platform_role, u.status AS user_status, u.created_at AS user_created_at, u.last_login_at
+        SELECT s.*, replacement.revoked_at AS replacement_revoked_at,
+          u.name, u.email, u.platform_role, u.status AS user_status,
+          u.created_at AS user_created_at, u.last_login_at
         FROM user_sessions s JOIN users u ON u.id = s.user_id
+        LEFT JOIN user_sessions replacement ON replacement.id = s.replaced_by_session_id
         WHERE s.refresh_token_hash = $1
         FOR UPDATE
       `, [tokenHash]);
       const current = result.rows[0];
       if (!current) throw new UnauthorizedException('Refresh token inválido');
-      if (current.revoked_at || new Date(current.expires_at).getTime() <= Date.now()) {
+      const now = Date.now();
+      const expired = new Date(current.expires_at).getTime() <= now;
+      const rotatedRecently = Boolean(
+        current.revoked_at
+        && current.replaced_by_session_id
+        && current.replacement_revoked_at == null
+        && current.rotation_grace_until
+        && new Date(current.rotation_grace_until).getTime() > now,
+      );
+      if (expired) {
+        await client.query('UPDATE user_sessions SET revoked_at = COALESCE(revoked_at, now()) WHERE family_id = $1 AND revoked_at IS NULL', [current.family_id]);
+        throw new UnauthorizedException('Refresh token expirado ou reutilizado');
+      }
+      if (current.revoked_at && !rotatedRecently) {
         await client.query('UPDATE user_sessions SET revoked_at = COALESCE(revoked_at, now()) WHERE family_id = $1 AND revoked_at IS NULL', [current.family_id]);
         throw new UnauthorizedException('Refresh token expirado ou reutilizado');
       }
@@ -104,7 +121,9 @@ export class AuthService {
       const nextId = randomUUID();
       const expiresAt = new Date(Date.now() + this.refreshTtlSeconds * 1000);
       await client.query(`INSERT INTO user_sessions (id, user_id, family_id, refresh_token_hash, expires_at, ip_address, user_agent) VALUES ($1, $2, $3, $4, $5, $6, $7)`, [nextId, current.user_id, current.family_id, sha256(nextRawToken), expiresAt, requestMeta(request).ipAddress, requestMeta(request).userAgent]);
-      await client.query('UPDATE user_sessions SET revoked_at = now(), replaced_by_session_id = $1, last_used_at = now() WHERE id = $2', [nextId, current.id]);
+      if (!current.revoked_at) {
+        await client.query('UPDATE user_sessions SET revoked_at = now(), replaced_by_session_id = $1, rotation_grace_until = now() + ($3 * interval \'1 second\'), last_used_at = now() WHERE id = $2', [nextId, current.id, this.refreshRotationGraceSeconds]);
+      }
       return {
         user: {
           id: current.user_id,
@@ -118,10 +137,11 @@ export class AuthService {
         refreshToken: nextRawToken,
         id: nextId,
         expiresAt,
+        concurrent: rotatedRecently,
       };
     });
     const result = this.authResponse(rotated.user, rotated.refreshToken, rotated.id, rotated.expiresAt, request);
-    await this.audit.record({ actorUserId: rotated.user.id, action: 'auth.refresh', entityType: 'session', entityId: rotated.id, ...requestMeta(request) });
+    await this.audit.record({ actorUserId: rotated.user.id, action: rotated.concurrent ? 'auth.refresh_concurrent' : 'auth.refresh', entityType: 'session', entityId: rotated.id, ...requestMeta(request) });
     return result;
   }
 

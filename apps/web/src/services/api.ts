@@ -14,6 +14,21 @@ export const setAccessToken = (token: string, broadcast = true) => {
   if (broadcast) refreshChannel?.postMessage({ type: 'access-token-updated', token });
 };
 export const clearAccessToken = () => { accessToken = ''; };
+const accessTokenExpiresAt = (token: string) => {
+  try {
+    const encodedPayload = token.split('.')[1];
+    if (!encodedPayload) return 0;
+    const payload = JSON.parse(atob(encodedPayload.replace(/-/g, '+').replace(/_/g, '/')));
+    return Number(payload.exp) * 1000;
+  } catch {
+    return 0;
+  }
+};
+export const shouldRefreshAccessToken = (leewaySeconds = 120) => {
+  if (!accessToken) return false;
+  const expiresAt = accessTokenExpiresAt(accessToken);
+  return !expiresAt || expiresAt <= Date.now() + leewaySeconds * 1000;
+};
 export const setActiveTenantId = (tenantId: string) => { activeTenantId = tenantId; };
 export const clearActiveTenantId = () => { activeTenantId = ''; };
 

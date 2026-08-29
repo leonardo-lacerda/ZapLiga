@@ -1,5 +1,5 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
-import { clearAccessToken, clearActiveTenantId, json, refreshAccessToken, setAccessToken, setActiveTenantId } from '../../services/api';
+import { clearAccessToken, clearActiveTenantId, json, refreshAccessToken, setAccessToken, setActiveTenantId, shouldRefreshAccessToken } from '../../services/api';
 
 export type AuthUser = {
   id: string;
@@ -61,6 +61,24 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, [applySession]);
 
   useEffect(() => { void reload().finally(() => setLoading(false)); }, [reload]);
+
+  useEffect(() => {
+    if (!session) return undefined;
+    let lastAttemptAt = 0;
+    const refreshOnResume = () => {
+      if (document.visibilityState !== 'visible' || !shouldRefreshAccessToken()) return;
+      const now = Date.now();
+      if (now - lastAttemptAt < 5000) return;
+      lastAttemptAt = now;
+      void reload();
+    };
+    document.addEventListener('visibilitychange', refreshOnResume);
+    window.addEventListener('pageshow', refreshOnResume);
+    return () => {
+      document.removeEventListener('visibilitychange', refreshOnResume);
+      window.removeEventListener('pageshow', refreshOnResume);
+    };
+  }, [reload, session]);
 
   const login = useCallback(async (email: string, password: string) => {
     const result = await json('/api/auth/login', { method: 'POST', body: JSON.stringify({ email, password }) });
