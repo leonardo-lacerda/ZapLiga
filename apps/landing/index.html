@@ -3,619 +3,997 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>ZapLiga · Chamadas automáticas 100% pelo WhatsApp para times de SDR</title>
-<meta name="description" content="Todas as chamadas pelo WhatsApp, sem VoIP, sem linha telefônica e sem apps extras. O ZapLiga disca sozinho a fila de leads e conecta o lead atendido ao SDR livre.">
-<link rel="preconnect" href="https://cdn.jsdelivr.net">
-<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource/space-grotesk@5/500.css">
-<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource/space-grotesk@5/700.css">
-<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource/instrument-sans@5/400.css">
-<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource/instrument-sans@5/500.css">
-<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource/instrument-sans@5/600.css">
-<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource/jetbrains-mono@5/400.css">
-<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource/jetbrains-mono@5/700.css">
-<link rel="stylesheet" href="styles.css">
+<title>ZapLiga — Discagem automática pelo WhatsApp para equipes de SDR</title>
+<meta name="description" content="O ZapLiga automatiza as tentativas de ligação pelo WhatsApp e conecta seus SDRs apenas quando um lead atende. Mais conversas, menos tempo discando.">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource/inter@5.0.20/400.css">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource/inter@5.0.20/500.css">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource/inter@5.0.20/600.css">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource/inter@5.0.20/700.css">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource/inter@5.0.20/800.css">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource/ibm-plex-mono@5.0.14/400.css">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource/ibm-plex-mono@5.0.14/500.css">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%230B7A4B'/%3E%3Cpath d='M22.5 20.2v2.4a1.6 1.6 0 0 1-1.76 1.6 15.9 15.9 0 0 1-6.9-2.47 15.6 15.6 0 0 1-4.8-4.8A15.9 15.9 0 0 1 6.57 9.9 1.6 1.6 0 0 1 8.17 8.3h2.4a1.6 1.6 0 0 1 1.6 1.37c.1.73.26 1.45.5 2.14a1.6 1.6 0 0 1-.36 1.68l-1.02 1.02a12.8 12.8 0 0 0 4.8 4.8l1.02-1.02a1.6 1.6 0 0 1 1.68-.36c.69.24 1.41.4 2.14.5a1.6 1.6 0 0 1 1.37 1.77z' fill='white'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="home.css">
 </head>
 <body>
-<div class="noise" aria-hidden="true"></div>
+<a class="skip" href="#produto">Ir para o conteúdo</a>
+<div id="progress" aria-hidden="true"></div>
 
-<!-- ============ NAV ============ -->
-<header class="nav" id="nav">
-  <div class="wrap nav-in">
-    <a href="#" class="logo" aria-label="ZapLiga início">
-      <span class="logo-ic" aria-hidden="true">
-        <svg width="19" height="19" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2a10 10 0 0 0-8.5 15.3L2 22l4.9-1.4A10 10 0 1 0 12 2zm5.5 14.2c-.24.66-1.36 1.26-1.9 1.3-.5.06-1.13.09-1.83-.12a16 16 0 0 1-1.66-.61c-2.93-1.26-4.84-4.2-4.99-4.4-.14-.19-1.2-1.6-1.2-3.05s.76-2.16 1.03-2.46c.27-.3.6-.37.8-.37h.57c.18 0 .43-.07.67.51.24.6.83 2.03.9 2.17.07.15.12.32.02.51-.1.2-.15.32-.3.5-.15.19-.31.42-.45.56-.15.15-.3.31-.14.6.17.3.76 1.25 1.63 2.02 1.12 1 2.07 1.3 2.36 1.45.3.15.46.13.63-.07.17-.2.73-.85.93-1.15.2-.3.39-.24.66-.14.27.1 1.7.8 2 .95.29.15.48.22.55.34.07.13.07.73-.18 1.38z"/></svg>
-      </span>
-      Zap<span>Liga</span>
+<!-- SVG SPRITE -->
+<svg xmlns="http://www.w3.org/2000/svg" style="display:none" aria-hidden="true">
+  <symbol id="i-call" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6A19.79 19.79 0 0 1 2.08 4.18 2 2 0 0 1 4.06 2h3a2 2 0 0 1 2 1.72c.13.96.36 1.9.7 2.81a2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.22a2 2 0 0 1 2.11-.45c.91.34 1.85.57 2.81.7A2 2 0 0 1 22 16.92z"/></symbol>
+  <symbol id="i-users" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></symbol>
+  <symbol id="i-list" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></symbol>
+  <symbol id="i-clock" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><polyline points="12 7 12 12 15.5 14"/></symbol>
+  <symbol id="i-repeat" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><polyline points="17 1 21 5 17 9"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/><polyline points="7 23 3 19 7 15"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/></symbol>
+  <symbol id="i-hash" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><line x1="4" y1="9" x2="20" y2="9"/><line x1="4" y1="15" x2="20" y2="15"/><line x1="10" y1="3" x2="8" y2="21"/><line x1="16" y1="3" x2="14" y2="21"/></symbol>
+  <symbol id="i-gauge" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M5.6 19a9 9 0 1 1 12.8 0"/><path d="M12 13l4-4"/><circle cx="12" cy="13" r="1.2"/></symbol>
+  <symbol id="i-split" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="18" cy="5" r="2.5"/><circle cx="18" cy="19" r="2.5"/><circle cx="6" cy="12" r="2.5"/><path d="M8.4 10.9c2.6-1.2 4.4-2.9 5.6-4.4"/><path d="M8.4 13.1c2.6 1.2 4.4 2.9 5.6 4.4"/></symbol>
+  <symbol id="i-layers" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 2 7 12 12 22 7 12 2"/><polyline points="2 17 12 22 22 17"/><polyline points="2 12 12 17 22 12"/></symbol>
+  <symbol id="i-activity" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></symbol>
+  <symbol id="i-chart" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/><line x1="2" y1="20" x2="22" y2="20"/></symbol>
+  <symbol id="i-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></symbol>
+  <symbol id="i-x" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><line x1="17" y1="7" x2="7" y2="17"/><line x1="7" y1="7" x2="17" y2="17"/></symbol>
+  <symbol id="i-plus" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></symbol>
+  <symbol id="i-arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="4" y1="12" x2="20" y2="12"/><polyline points="13 5 20 12 13 19"/></symbol>
+  <symbol id="i-headset" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 13a8 8 0 0 1 16 0"/><rect x="2.5" y="13" width="4" height="6" rx="1.6"/><rect x="17.5" y="13" width="4" height="6" rx="1.6"/><path d="M19.5 19v.5a2.5 2.5 0 0 1-2.5 2.5h-4"/></symbol>
+  <symbol id="i-building" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="3" width="12" height="18" rx="1.5"/><path d="M16 9h4v12h-4"/><path d="M8 7h1.5M11 7h1.5M8 11h1.5M11 11h1.5M8 15h1.5M11 15h1.5M9.5 21v-3h2v3"/></symbol>
+  <symbol id="i-mega" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3 11v2a1 1 0 0 0 1 1h2l5 4V6L6 10H4a1 1 0 0 0-1 1z"/><path d="M15 9.5a4 4 0 0 1 0 5"/><path d="M17.7 7a8 8 0 0 1 0 10"/></symbol>
+  <symbol id="i-funnel" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M22 3H2l8 9.46V19l4 2v-8.54L22 3z"/></symbol>
+  <symbol id="i-inbox" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 12 16 12 14 15 10 15 8 12 2 12"/><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/></symbol>
+  <symbol id="i-target" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="4.5"/><circle cx="12" cy="12" r=".8" fill="currentColor"/></symbol>
+  <symbol id="i-shield" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><polyline points="9 11.5 11.2 13.7 15.5 9.4"/></symbol>
+  <symbol id="i-menu" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="4" y1="7" x2="20" y2="7"/><line x1="4" y1="12" x2="20" y2="12"/><line x1="4" y1="17" x2="20" y2="17"/></symbol>
+  <symbol id="i-calendar" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></symbol>
+</svg>
+
+<!-- ============ HEADER ============ -->
+<header class="site-header" id="siteHeader">
+  <div class="container h-inner">
+    <a class="brand" href="#produto" aria-label="ZapLiga — início">
+      <span class="brand-mark"><svg><use href="#i-call"/></svg></span>
+      ZapLiga
     </a>
-    <nav class="nav-links" aria-label="Navegação principal">
-      <a href="#whatsapp">Por que WhatsApp</a>
-      <a href="#como-funciona">Como funciona</a>
-      <a href="#recursos">Recursos</a>
-      <a href="#faq">FAQ</a>
+    <nav class="main-nav" aria-label="Navegação principal">
+      <ul>
+        <li><a href="#produto" data-navlink="produto">Produto</a></li>
+        <li><a href="#como-funciona" data-navlink="como-funciona">Como funciona</a></li>
+        <li><a href="#recursos" data-navlink="recursos">Recursos</a></li>
+        <li><a href="#para-quem" data-navlink="para-quem">Para quem é</a></li>
+        <li><a href="#precos" data-navlink="precos">Preços</a></li>
+      </ul>
     </nav>
-    <div class="nav-actions"><a href="/app/" class="btn btn-ghost">Entrar</a><a href="/app/cadastro" class="btn btn-primary">Criar conta</a></div>
-    <button class="burger" id="burger" aria-label="Abrir menu" aria-expanded="false"><i></i><i></i><i></i></button>
+    <div class="h-actions">
+      <a class="link-login" href="#demo">Entrar</a>
+      <a class="btn btn--primary btn--sm" href="#demo">Solicitar demonstração</a>
+      <button class="h-burger" id="burger" aria-label="Abrir menu" aria-expanded="false">
+        <svg id="burgerIco"><use href="#i-menu"/></svg>
+      </button>
+    </div>
+  </div>
+  <div class="mobile-panel" id="mobilePanel">
+    <a href="#produto">Produto</a>
+    <a href="#como-funciona">Como funciona</a>
+    <a href="#recursos">Recursos</a>
+    <a href="#para-quem">Para quem é</a>
+    <a href="#precos">Preços</a>
+    <a class="btn btn--primary" href="#demo">Solicitar demonstração</a>
   </div>
 </header>
-<nav class="mobile-menu" id="mobileMenu" aria-label="Menu móvel">
-  <a href="#whatsapp">Por que WhatsApp</a>
-  <a href="#como-funciona">Como funciona</a>
-  <a href="#recursos">Recursos</a>
-  <a href="#faq">FAQ</a>
-  <a href="#cta" style="color:var(--green-ink)">Agendar demo →</a>
-</nav>
 
+<main>
 <!-- ============ HERO ============ -->
-<section class="hero" id="hero">
-  <div class="wrap hero-in">
-    <div>
-      <div class="wa-badge"><span class="live-dot"></span> DISCADOR AUTOMÁTICO · 100% PELO WHATSAPP</div>
-      <h1>Ligações automáticas<br><span class="scramble" data-text="pelo WhatsApp.">pelo WhatsApp.</span><br>Mais leads atendem.</h1>
-      <p class="hero-sub">O ZapLiga disca a sua fila de leads <b>automaticamente</b>, com <span class="wa-strong">chamadas de voz pelo WhatsApp</span>. Como o lead atende no app que já usa o dia inteiro, <b>muito mais gente atende</b> e você perde menos leads. Quando alguém atende, a conversa cai na hora com o <b>primeiro SDR livre</b>.</p>
-      <div class="hero-ctas">
-        <a href="#cta" class="btn btn-primary">Agendar demonstração
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
-        </a>
-        <a href="#como-funciona" class="btn btn-ghost">Ver como funciona</a>
+<section class="hero" id="produto">
+  <div class="container hero-grid">
+    <div class="hero-copy">
+      <span class="hero-eyebrow load-fade" style="--md:.02s"><span class="dot"></span>Discagem automática via WhatsApp</span>
+      <h1>
+        <span class="mask"><span style="--md:.08s">Seu SDR falando com leads.</span></span>
+        <span class="mask"><span style="--md:.2s">Não <em class="hl">tentando ligar</em> para eles.</span></span>
+      </h1>
+      <p class="hero-sub load-fade" style="--md:.34s">Automatize as tentativas de ligação pelo WhatsApp e conecte seus SDRs apenas quando um lead atender.</p>
+      <p class="hero-text load-fade" style="--md:.44s">Sua equipe deixa de perder horas escolhendo contatos, discando números e esperando chamadas sem resposta. A plataforma cuida das tentativas enquanto seus SDRs focam no que realmente gera vendas: conversar.</p>
+      <div class="hero-ctas load-fade" style="--md:.54s">
+        <a class="btn btn--primary btn--lg" href="#demo">Solicitar demonstração</a>
+        <a class="btn btn--ghost btn--lg" href="#como-funciona">Ver como funciona <svg><use href="#i-arrow"/></svg></a>
       </div>
-      <div class="hero-micro">
-        <span><i>✓</i> 100% pelo WhatsApp</span>
-        <span><i>✓</i> discagem automática</span>
-        <span><i>✓</i> 3,2× mais leads atendem</span>
-      </div>
+      <p class="hero-tag load-fade" style="--md:.64s"><b>Mais conversas.</b> <i></i> Menos tempo discando.</p>
     </div>
 
-    <div class="console-wrap">
-      <div class="float-chip fc-1">✓ 100% das chamadas <b>via WhatsApp</b></div>
-      <div class="float-chip fc-2">▲ <b>3,2×</b> mais atendimento que ligação comum</div>
-      <div class="console-card" role="img" aria-label="Simulação da central de chamadas pelo WhatsApp ao vivo">
-        <div class="console-top">
-          <div class="ct-left">
-            <span class="ct-avatar" aria-hidden="true">
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2a10 10 0 0 0-8.5 15.3L2 22l4.9-1.4A10 10 0 1 0 12 2zm5.5 14.2c-.24.66-1.36 1.26-1.9 1.3-.5.06-1.13.09-1.83-.12a16 16 0 0 1-1.66-.61c-2.93-1.26-4.84-4.2-4.99-4.4-.14-.19-1.2-1.6-1.2-3.05s.76-2.16 1.03-2.46c.27-.3.6-.37.8-.37h.57c.18 0 .43-.07.67.51.24.6.83 2.03.9 2.17.07.15.12.32.02.51-.1.2-.15.32-.3.5-.15.19-.31.42-.45.56-.15.15-.3.31-.14.6.17.3.76 1.25 1.63 2.02 1.12 1 2.07 1.3 2.36 1.45.3.15.46.13.63-.07.17-.2.73-.85.93-1.15.2-.3.39-.24.66-.14.27.1 1.7.8 2 .95.29.15.48.22.55.34.07.13.07.73-.18 1.38z"/></svg>
-            </span>
-            <div>
-              <b class="ct-name">Central de chamadas</b>
-              <small class="ct-sub"><span class="live-dot"></span> via whatsapp · ao vivo</small>
+    <div class="hero-visual load-fade" style="--md:.3s" id="heroVisual">
+      <div class="float-chip" aria-hidden="true">
+        <span class="fc-dot"></span>
+        <div><p id="chipCalls">12 chamadas em andamento</p><span>limite simultâneo · 20</span></div>
+      </div>
+      <div class="window spot" id="heroWindow" role="img" aria-label="Painel da operação: SDRs disponíveis, chamadas em andamento, fila de leads e pool de números">
+        <div class="window-bar">
+          <span class="wdot"></span><span class="wdot"></span><span class="wdot"></span>
+          <span class="window-url">app.zapliga.com.br/operacao</span>
+          <button class="sim-btn" id="simBtn" type="button"><svg><use href="#i-activity"/></svg>Simular discagem</button>
+          <span class="window-live">AO VIVO</span>
+        </div>
+        <div class="window-body">
+          <div class="win-title">
+            <h3>Operação agora</h3>
+            <span id="heroClock">ter · 14:32</span>
+          </div>
+          <div class="stat-grid">
+            <div class="stat"><span class="lbl">SDRs disponíveis</span><b class="val num count" data-to="8">0</b></div>
+            <div class="stat"><span class="lbl">Chamadas em andamento</span><b class="val num count" id="heroCalls" data-to="12">0</b></div>
+            <div class="stat"><span class="lbl">Tentativas hoje</span><b class="val num pos count" id="heroTentativas" data-to="846">0</b></div>
+            <div class="stat"><span class="lbl">Leads atendidos</span><b class="val num count" id="heroAtend" data-to="137">0</b></div>
+          </div>
+          <div class="mock-cols">
+            <div class="mock-panel">
+              <h4>Fila de leads</h4>
+              <table class="mt">
+                <thead><tr><th>Lead</th><th>Status</th></tr></thead>
+                <tbody>
+                  <tr><td>Carlos Silva</td><td><span class="pill pill--call js-lead" data-off="0">Ligando</span></td></tr>
+                  <tr><td>Fernanda Souza</td><td><span class="pill pill--queue js-lead" data-off="2">Na fila</span></td></tr>
+                  <tr><td>Marcos Lima</td><td><span class="pill pill--retry js-lead" data-off="3">Nova tentativa</span></td></tr>
+                  <tr><td>Ana Santos</td><td><span class="pill pill--ok js-lead" data-off="1">Conectado</span></td></tr>
+                </tbody>
+              </table>
+            </div>
+            <div class="mock-panel">
+              <h4>Pool de números</h4>
+              <table class="mt">
+                <thead><tr><th>Número</th><th>Status</th></tr></thead>
+                <tbody>
+                  <tr><td class="mono">+55 27 ****-1928</td><td><span class="pill pill--ok js-num" data-off="0">Disponível</span></td></tr>
+                  <tr><td class="mono">+55 11 ****-4291</td><td><span class="pill pill--call js-num" data-off="1">Em chamada</span></td></tr>
+                  <tr><td class="mono">+55 21 ****-8821</td><td><span class="pill pill--cool js-num" data-off="2">Cooldown</span></td></tr>
+                  <tr><td class="mono">+55 31 ****-7720</td><td><span class="pill pill--ok js-num" data-off="0">Disponível</span></td></tr>
+                </tbody>
+              </table>
             </div>
           </div>
-          <span class="ct-right">operação: ativa</span>
         </div>
-        <div class="console-stats">
-          <div><span class="cs-num" id="statFila">34</span><span class="cs-lab">na fila</span></div>
-          <div><span class="cs-num" id="statSim">4</span><span class="cs-lab">simultâneas</span></div>
-          <div><span class="cs-num" id="statAtend">412</span><span class="cs-lab">atendidas hoje</span></div>
-        </div>
-        <ul class="call-list" id="callList"></ul>
-        <div class="sdr-strip" id="sdrStrip"></div>
-        <div class="console-bottom" id="consoleMsg">motor ▸ <b>chamadas via WhatsApp</b> · cooldown ok · janela aberta</div>
+      </div>
+      <div class="hero-toast" id="heroToast" aria-hidden="true">
+        <span class="tico"><svg><use href="#i-call"/></svg></span>
+        <div><p id="toastTitle">Carlos Silva atendeu</p><span id="toastSub">Conectado a Ana Prado · agora</span></div>
       </div>
     </div>
   </div>
 </section>
 
-<!-- ============ LOGOS ============ -->
-<div class="logos">
-  <p class="logos-cap">Times de vendas que já ligam só pelo WhatsApp</p>
-  <div class="marquee" aria-hidden="true">
-    <div class="marquee-track" id="mqTrack">
-      <span class="mq-brand">NORTECH SaaS</span>
-      <span class="mq-brand">COBRAFÁCIL</span>
-      <span class="mq-brand">EDUPRO</span>
-      <span class="mq-brand">IMOBX</span>
-      <span class="mq-brand">VELOCORP</span>
-      <span class="mq-brand">LUMEN CRM</span>
-      <span class="mq-brand">DATAVOZ</span>
-      <span class="mq-brand">VENDAMAIS</span>
+<!-- ============ TICKER ============ -->
+<div class="ticker" aria-hidden="true">
+  <div class="ticker-track">
+    <div class="t-group">
+      <span class="t-item"><i></i><b>14:32</b> · Carlos Silva atendeu · conectado a Ana Prado</span>
+      <span class="t-item"><i class="a"></i><b>14:33</b> · número +55 21 ****-8821 em cooldown · 02:00</span>
+      <span class="t-item"><i></i><b>14:34</b> · fila Outbound-SP · 214 leads em processamento</span>
+      <span class="t-item"><i></i><b>14:35</b> · nova tentativa agendada · Marcos Lima · 15 min</span>
+      <span class="t-item"><i></i><b>14:36</b> · SDR Bruno Costa disponível para conexão</span>
+      <span class="t-item"><i></i><b>14:37</b> · taxa de atendimento hoje · 24,3%</span>
+      <span class="t-item"><i></i><b>14:38</b> · chamadas simultâneas · 14 de 20</span>
+      <span class="t-item"><i class="a"></i><b>14:39</b> · tentativa sem resposta · reagendada automaticamente</span>
+      <span class="t-item"><i></i><b>14:40</b> · chamada concluída · Júlia Mendes · 4:12 min</span>
+      <span class="t-item"><i></i><b>14:41</b> · +2 leads adicionados à fila Inbound-Web</span>
+    </div>
+    <div class="t-group">
+      <span class="t-item"><i></i><b>14:32</b> · Carlos Silva atendeu · conectado a Ana Prado</span>
+      <span class="t-item"><i class="a"></i><b>14:33</b> · número +55 21 ****-8821 em cooldown · 02:00</span>
+      <span class="t-item"><i></i><b>14:34</b> · fila Outbound-SP · 214 leads em processamento</span>
+      <span class="t-item"><i></i><b>14:35</b> · nova tentativa agendada · Marcos Lima · 15 min</span>
+      <span class="t-item"><i></i><b>14:36</b> · SDR Bruno Costa disponível para conexão</span>
+      <span class="t-item"><i></i><b>14:37</b> · taxa de atendimento hoje · 24,3%</span>
+      <span class="t-item"><i></i><b>14:38</b> · chamadas simultâneas · 14 de 20</span>
+      <span class="t-item"><i class="a"></i><b>14:39</b> · tentativa sem resposta · reagendada automaticamente</span>
+      <span class="t-item"><i></i><b>14:40</b> · chamada concluída · Júlia Mendes · 4:12 min</span>
+      <span class="t-item"><i></i><b>14:41</b> · +2 leads adicionados à fila Inbound-Web</span>
     </div>
   </div>
 </div>
 
-<!-- ============ POR QUE WHATSAPP ============ -->
-<section class="wa-band" id="whatsapp">
-  <div class="bubble bb-1">📞 Chamada via WhatsApp…</div>
-  <div class="bubble bb-2">O lead atendeu ✓</div>
-  <div class="bubble bb-3">Taxa de atendimento: 57%</div>
-  <div class="wrap wa-grid">
-    <div>
-      <div class="reveal">
-        <span class="kicker">O grande diferencial</span>
-        <h2 class="h2">Por que ligar pelo WhatsApp, e não por telefone?</h2>
-        <p class="lead">Porque a chamada acontece no único canal que o lead já mantém aberto o dia inteiro. Ele reconhece, atende mais, e você deixa de perder lead para a caixa postal. Sem número estranho, sem robô, sem app para instalar.</p>
-      </div>
-      <div class="wa-claims">
-        <div class="wa-claim reveal">
-          <div class="wa-num">98%</div>
-          <div>
-            <h3>O lead está lá, o dia todo</h3>
-            <p>Quase todos os leads brasileiros têm WhatsApp e abrem o app <b>mais de 20 vezes por dia</b>. Sua chamada chega onde a pessoa já está, não para um número que ela ignora.</p>
-          </div>
-        </div>
-        <div class="wa-claim reveal" style="--d:.1s">
-          <div class="wa-num">3,2×</div>
-          <div>
-            <h3>Mais gente atende, menos lead perdido</h3>
-            <p>Quando o celular mostra <b>“chamada via WhatsApp”</b>, o lead reconhece e atende. Nada de 0800, nada de número desconhecido caindo na caixa postal, nada de lead esfriando na fila.</p>
-          </div>
-        </div>
-        <div class="wa-claim reveal" style="--d:.2s">
-          <div class="wa-num">0</div>
-          <div>
-            <h3>Zero app extra, zero atrito</h3>
-            <p>Nem o seu time nem o lead instalam nada. É a <b>chamada de voz nativa do WhatsApp</b>, a partir de números reais gerenciados pelo motor.</p>
-          </div>
-        </div>
-      </div>
+<!-- ============ PROBLEMA ============ -->
+<section class="sec sec--soft" id="problema">
+  <div class="container">
+    <div class="sec-head" data-reveal>
+      <span class="eyebrow">O problema</span>
+      <h2>Quantas horas sua equipe perde apenas tentando falar com alguém?</h2>
+      <p class="lead">Antes de cada conversa existir, existe uma sequência de tarefas operacionais que consomem o dia do SDR.</p>
     </div>
-    <div class="reveal" style="--d:.15s">
-      <div class="phone-mock" aria-hidden="true">
-        <div class="pm-screen">
-          <div class="pm-head">
-            <span class="pm-back">←</span>
-            <div>
-              <b>Nortech SaaS</b>
-              <small>chamada via whatsapp</small>
-            </div>
-          </div>
-          <div class="pm-body">
-            <div class="pm-avatar">
-              <svg width="38" height="38" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2a10 10 0 0 0-8.5 15.3L2 22l4.9-1.4A10 10 0 1 0 12 2zm5.5 14.2c-.24.66-1.36 1.26-1.9 1.3-.5.06-1.13.09-1.83-.12a16 16 0 0 1-1.66-.61c-2.93-1.26-4.84-4.2-4.99-4.4-.14-.19-1.2-1.6-1.2-3.05s.76-2.16 1.03-2.46c.27-.3.6-.37.8-.37h.57c.18 0 .43-.07.67.51.24.6.83 2.03.9 2.17.07.15.12.32.02.51-.1.2-.15.32-.3.5-.15.19-.31.42-.45.56-.15.15-.3.31-.14.6.17.3.76 1.25 1.63 2.02 1.12 1 2.07 1.3 2.36 1.45.3.15.46.13.63-.07.17-.2.73-.85.93-1.15.2-.3.39-.24.66-.14.27.1 1.7.8 2 .95.29.15.48.22.55.34.07.13.07.73-.18 1.38z"/></svg>
-            </div>
-            <div class="pm-name">Nortech SaaS</div>
-            <div class="pm-status">chamando via WhatsApp…</div>
-            <div class="pm-actions">
-              <span class="pm-btn pm-decline"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M22 16.9v3a2 2 0 0 1-2.2 2A19.8 19.8 0 0 1 2.1 4.2 2 2 0 0 1 4.1 2h3a2 2 0 0 1 2 1.7c.13.96.36 1.9.7 2.8a2 2 0 0 1-.45 2.1L8.1 9.9a16 16 0 0 0 6 6l1.3-1.3a2 2 0 0 1 2.1-.45c.9.34 1.85.57 2.8.7a2 2 0 0 1 1.7 2.05z" transform="rotate(135 12 12)"/></svg></span>
-              <span class="pm-btn pm-accept"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M22 16.9v3a2 2 0 0 1-2.2 2 19.8 19.8 0 0 1-8.6-3 19.5 19.5 0 0 1-6-6 19.8 19.8 0 0 1-3-8.7A2 2 0 0 1 4.1 2h3a2 2 0 0 1 2 1.7c.13.96.36 1.9.7 2.8a2 2 0 0 1-.45 2.1L8.1 9.9a16 16 0 0 0 6 6l1.3-1.3a2 2 0 0 1 2.1-.45c.9.34 1.85.57 2.8.7A2 2 0 0 1 22 16.9z"/></svg></span>
-            </div>
-          </div>
+    <div class="prob-grid">
+      <article class="prob-card" data-reveal>
+        <div class="prob-ico"><svg><use href="#i-list"/></svg></div>
+        <h3>Escolher quem ligar</h3>
+        <p>O SDR precisa abrir o CRM, encontrar o próximo lead e iniciar cada tentativa manualmente — um a um, o dia inteiro.</p>
+        <span class="prob-tag">Tempo gasto: seleção</span>
+      </article>
+      <article class="prob-card" data-reveal style="--d:.1s">
+        <div class="prob-ico"><svg><use href="#i-clock"/></svg></div>
+        <h3>Esperar chamadas sem resposta</h3>
+        <p>Boa parte do tempo comercial é consumida ouvindo chamadas tocar que nunca serão atendidas.</p>
+        <span class="prob-tag">Tempo gasto: espera</span>
+      </article>
+      <article class="prob-card" data-reveal style="--d:.2s">
+        <div class="prob-ico"><svg><use href="#i-repeat"/></svg></div>
+        <h3>Repetir tudo novamente</h3>
+        <p>Lead não atendeu? O SDR precisa lembrar, organizar e realizar uma nova tentativa depois — sem nenhum controle central.</p>
+        <span class="prob-tag">Tempo gasto: retrabalho</span>
+      </article>
+    </div>
+
+    <div class="calc" data-reveal>
+      <div class="calc-l">
+        <span class="eyebrow">Simule sua operação</span>
+        <h3>Quanto tempo sua equipe perde só discando e esperando?</h3>
+        <div class="calc-field">
+          <label for="calcRange">SDRs na operação <output id="calcOut">10 SDRs</output></label>
+          <input type="range" id="calcRange" min="2" max="80" value="10" aria-label="Quantidade de SDRs na operação">
         </div>
+        <div class="calc-selects">
+          <label>Tentativas por dia
+            <select id="calcAtt" aria-label="Tentativas por dia por SDR">
+              <option value="30">30 tentativas</option>
+              <option value="40" selected>40 tentativas</option>
+              <option value="60">60 tentativas</option>
+            </select>
+          </label>
+          <label>Tempo por tentativa
+            <select id="calcMin" aria-label="Minutos por tentativa">
+              <option value="1.5">~1,5 minuto</option>
+              <option value="2" selected>~2 minutos</option>
+              <option value="3">~3 minutos</option>
+            </select>
+          </label>
+        </div>
+        <p class="calc-assume">Estimativa ilustrativa baseada nos parâmetros selecionados · 22 dias úteis no mês.</p>
       </div>
-      <p class="pm-cap">É isso que o lead vê: <b>uma chamada normal de WhatsApp</b>.</p>
+      <div class="calc-res">
+        <b class="big num" id="calcHours">293</b>
+        <span class="big-lbl">horas por mês da sua equipe em tentativas de contato</span>
+        <div class="calc-mini">
+          <div><b class="num" id="calcTents">8.800</b><span>tentativas / mês</span></div>
+          <div><b class="num" id="calcDays">37</b><span>dias úteis equivalentes</span></div>
+        </div>
+        <div class="calc-bar"><i id="calcBar"></i></div>
+      </div>
     </div>
   </div>
 </section>
 
-<!-- ============ PROBLEMA ============ -->
-<section class="problema" id="problema">
-  <div class="wrap">
-    <div class="reveal">
-      <span class="kicker">O problema</span>
-      <h2 class="h2">Ligar por telefone do jeito antigo é pedir para não ser atendido.</h2>
+<!-- ============ SOLUÇÃO ============ -->
+<section class="sec" id="solucao">
+  <div class="container">
+    <div class="sec-head sec-head--center" data-reveal>
+      <span class="eyebrow">A solução</span>
+      <h2>A plataforma faz as tentativas.<br>Seu SDR entra quando existe uma conversa.</h2>
     </div>
-    <div class="prob-grid">
-      <div class="prob-copy reveal" style="--d:.1s">
-        <p>Na operação manual, o SDR escolhe o lead, disca por linha ou VoIP, ouve chamar, cai na caixa, anota, rediscar depois… e repete. <b>Centenas de vezes por dia.</b></p>
-        <p>E o pior: ligando de um <b>número que o lead não reconhece</b>, a maioria nem atende. O resultado é uma agenda cheia de tempo mudo, enquanto o lead esfria no WhatsApp, que ele acabou de abrir.</p>
-        <div class="prob-stats">
-          <div class="pstat"><b>2h43</b><span>por dia, por SDR, só discando e ouvindo chamar</span></div>
-          <div class="pstat"><b>7×</b><span>tentativas manuais até conseguir um “alô”</span></div>
-          <div class="pstat"><b>61%</b><span>do expediente sem nenhuma conversa real</span></div>
-        </div>
+
+    <div class="flow-wrap" data-reveal>
+      <div class="flow-track" aria-hidden="true"></div>
+      <div class="flow-dot" aria-hidden="true"></div>
+      <div class="flow">
+        <div class="flow-node"><span class="flow-ico"><svg><use href="#i-layers"/></svg></span><b>Fila de leads</b><small>ordem automática</small></div>
+        <span class="flow-arrow" style="--ai:0"><svg><use href="#i-arrow"/></svg></span>
+        <div class="flow-node"><span class="flow-ico"><svg><use href="#i-hash"/></svg></span><b>Números disponíveis</b><small>pool centralizado</small></div>
+        <span class="flow-arrow" style="--ai:1"><svg><use href="#i-arrow"/></svg></span>
+        <div class="flow-node"><span class="flow-ico"><svg><use href="#i-call"/></svg></span><b>Ligação</b><small>discagem automática</small></div>
+        <span class="flow-arrow" style="--ai:2"><svg><use href="#i-arrow"/></svg></span>
+        <div class="flow-node hot"><span class="flow-ico"><svg><use href="#i-activity"/></svg></span><b>Lead atende</b><small>detecção imediata</small></div>
+        <span class="flow-arrow" style="--ai:3"><svg><use href="#i-arrow"/></svg></span>
+        <div class="flow-node"><span class="flow-ico"><svg><use href="#i-headset"/></svg></span><b>SDR disponível</b><small>sem esforço manual</small></div>
+        <span class="flow-arrow" style="--ai:4"><svg><use href="#i-arrow"/></svg></span>
+        <div class="flow-node hot"><span class="flow-ico"><svg><use href="#i-users"/></svg></span><b>Conversa</b><small>venda acontece</small></div>
       </div>
-      <div class="day-visual reveal" style="--d:.2s">
-        <p class="dv-title">Onde vão as 8 horas de trabalho</p>
-        <div class="day-row">
-          <div class="day-lab">SDR tradicional <small>conversa real: 27%</small></div>
-          <div class="stacked">
-            <span class="seg s-dial" style="--w:40%;--sd:.05s">discando 40%</span>
-            <span class="seg s-wait" style="--w:18%;--sd:.25s">espera 18%</span>
-            <span class="seg s-adm" style="--w:15%;--sd:.45s">adm</span>
-            <span class="seg s-talk" style="--w:27%;--sd:.65s">conversa 27%</span>
-          </div>
-        </div>
-        <div class="day-row">
-          <div class="day-lab">SDR com ZapLiga <small>conversa real: 71%</small></div>
-          <div class="stacked">
-            <span class="seg s-talk" style="--w:71%;--sd:.15s">conversa 71%</span>
-            <span class="seg s-prep" style="--w:21%;--sd:.5s">registro 21%</span>
-            <span class="seg s-ready" style="--w:8%;--sd:.7s">fila 8%</span>
-          </div>
-        </div>
-        <div class="legend">
-          <span><i style="background:var(--amber)"></i>discando / chamando</span>
-          <span><i style="background:#e88a68"></i>esperando rediscar</span>
-          <span><i style="background:#b9ccc1"></i>administrativo</span>
-          <span><i style="background:var(--green)"></i>conversando</span>
-        </div>
-      </div>
+    </div>
+
+    <div class="sol-copy" data-reveal>
+      <p>Os leads entram em uma fila automática. A plataforma distribui as chamadas entre os números disponíveis e respeita todas as regras configuradas — <b>cooldown, limites diários, horários e disponibilidade</b>.</p>
+      <p>Se ninguém atender, uma nova tentativa pode ser programada automaticamente.</p>
+      <p class="rule">Se alguém atender, a chamada é imediatamente direcionada para um SDR livre. O SDR não escolhe lead, não disca e não espera: ele conversa.</p>
     </div>
   </div>
 </section>
 
 <!-- ============ COMO FUNCIONA ============ -->
-<section class="como" id="como-funciona">
-  <div class="wrap">
-    <div class="reveal">
-      <span class="kicker">Como funciona</span>
-      <h2 class="h2">Do lead na fila à conversa no WhatsApp, sem ninguém discar.</h2>
-      <p class="lead">O motor percorre o ciclo inteiro sozinho, sempre pelo WhatsApp. O SDR entra em uma única etapa: a conversa.</p>
+<section class="sec sec--soft" id="como-funciona">
+  <div class="container">
+    <div class="sec-head" data-reveal>
+      <span class="eyebrow">Como funciona</span>
+      <h2>Da lista de leads à conversa em quatro passos.</h2>
     </div>
-    <div class="pipeline reveal" style="--d:.15s">
-      <div class="pipe-line" aria-hidden="true"></div>
-      <div class="pipe-pulse" aria-hidden="true"></div>
-      <div class="pipe-node">
-        <div class="pn-dot"><em>01</em><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/></svg></div>
-        <p class="pn-title">Fila de leads</p>
-        <p class="pn-desc">Leads entram pelo CRM ou planilha e aguardam na ordem certa.</p>
-      </div>
-      <div class="pipe-node">
-        <div class="pn-dot"><em>02</em><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2 2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5M2 12l10 5 10-5"/></svg></div>
-        <p class="pn-title">Pool de números</p>
-        <p class="pn-desc">O motor escolhe o número WhatsApp disponível, respeitando cooldown e limites.</p>
-      </div>
-      <div class="pipe-node">
-        <div class="pn-dot wa-node"><em>03</em><svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2a10 10 0 0 0-8.5 15.3L2 22l4.9-1.4A10 10 0 1 0 12 2zm5.5 14.2c-.24.66-1.36 1.26-1.9 1.3-.5.06-1.13.09-1.83-.12a16 16 0 0 1-1.66-.61c-2.93-1.26-4.84-4.2-4.99-4.4-.14-.19-1.2-1.6-1.2-3.05s.76-2.16 1.03-2.46c.27-.3.6-.37.8-.37h.57c.18 0 .43-.07.67.51.24.6.83 2.03.9 2.17.07.15.12.32.02.51-.1.2-.15.32-.3.5-.15.19-.31.42-.45.56-.15.15-.3.31-.14.6.17.3.76 1.25 1.63 2.02 1.12 1 2.07 1.3 2.36 1.45.3.15.46.13.63-.07.17-.2.73-.85.93-1.15.2-.3.39-.24.66-.14.27.1 1.7.8 2 .95.29.15.48.22.55.34.07.13.07.73-.18 1.38z"/></svg></div>
-        <p class="pn-title">Chamada pelo WhatsApp</p>
-        <p class="pn-desc">Várias chamadas de voz simultâneas, direto no app do lead.</p>
-      </div>
-      <div class="pipe-node">
-        <div class="pn-dot"><em>04</em><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><path d="M22 4 12 14.01l-3-3"/></svg></div>
-        <p class="pn-title">Lead atendeu</p>
-        <p class="pn-desc">O sistema detecta o atendimento em tempo real.</p>
-      </div>
-      <div class="pipe-node">
-        <div class="pn-dot"><em>05</em><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3v12"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="6" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/></svg></div>
-        <p class="pn-title">Rota pro SDR livre</p>
-        <p class="pn-desc">A chamada cai com o SDR disponível há mais tempo.</p>
-      </div>
-      <div class="pipe-node">
-        <div class="pn-dot"><em>06</em><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg></div>
-        <p class="pn-title">Conversa</p>
-        <p class="pn-desc">O SDR só fala. O próximo lead já está sendo chamado.</p>
-      </div>
+    <div class="steps" id="stepsGrid">
+      <button class="step" type="button">
+        <span class="step-num">PASSO 01</span>
+        <h3>Adicione seus leads</h3>
+        <p>Importe ou envie os contatos que sua equipe precisa trabalhar. A fila é organizada automaticamente.</p>
+        <span class="step-prog" aria-hidden="true"></span>
+      </button>
+      <button class="step" type="button">
+        <span class="step-num">PASSO 02</span>
+        <h3>Configure sua operação</h3>
+        <p>Defina números, horários, limites, cooldowns e regras de novas tentativas de acordo com sua realidade.</p>
+        <span class="step-prog" aria-hidden="true"></span>
+      </button>
+      <button class="step" type="button">
+        <span class="step-num">PASSO 03</span>
+        <h3>Deixe a plataforma discar</h3>
+        <p>O sistema organiza e realiza as tentativas automaticamente, distribuindo as chamadas entre os números.</p>
+        <span class="step-prog" aria-hidden="true"></span>
+      </button>
+      <button class="step" type="button">
+        <span class="step-num">PASSO 04</span>
+        <h3>Receba chamadas atendidas</h3>
+        <p>Quando um lead atende, conectamos a chamada a um SDR disponível. Pronto: a conversa começa.</p>
+        <span class="step-prog" aria-hidden="true"></span>
+      </button>
     </div>
-    <p class="pipe-note reveal" style="--d:.25s">Se ninguém atender, o motor não insiste à toa: <b>agenda nova tentativa sozinho</b>, na melhor janela de horário.</p>
-    <div class="checks reveal" style="--d:.3s">
-      <span><i>✓</i>Nenhum lead esquecido</span>
-      <span><i>✓</i>Nenhum SDR ocioso</span>
-      <span><i>✓</i>Nenhum número forçado</span>
+    <p class="steps-hint" id="stepsHint">▸ Avança automaticamente · clique em um passo para pausar</p>
+
+    <div class="sdr-note" data-reveal>
+      <div class="sdr-note-l">
+        <span class="eyebrow">No dia a dia do SDR</span>
+        <h3>O trabalho manual entre o lead e a conversa deixa de existir.</h3>
+      </div>
+      <ul class="sdr-list">
+        <li><span class="ck"><svg><use href="#i-check"/></svg></span>Não precisa escolher quem ligar.</li>
+        <li><span class="ck"><svg><use href="#i-check"/></svg></span>Não precisa clicar em discar.</li>
+        <li><span class="ck"><svg><use href="#i-check"/></svg></span>Não precisa esperar chamadas sem resposta.</li>
+      </ul>
     </div>
   </div>
 </section>
 
-<!-- ============ RECURSOS (sticky) ============ -->
-<section class="recursos" id="recursos">
-  <div class="wrap sticky-wrap">
-    <div class="sticky-left">
-      <span class="kicker">Recursos</span>
-      <h2 class="h2">Um motor de chamadas no WhatsApp com cabeça de operação.</h2>
-      <p>Cada regra que hoje vive em planilha (cooldown, limite diário, janela de contato, retry) passa a ser executada pelo motor, <b>sem depender de ninguém</b>.</p>
-      <nav class="res-nav" aria-label="Recursos">
-        <a class="res-link active" href="#f1"><em>01</em>Pool de números com regras</a>
-        <a class="res-link" href="#f2"><em>02</em>Roteamento para o SDR livre</a>
-        <a class="res-link" href="#f3"><em>03</em>Novas tentativas automáticas</a>
-        <a class="res-link" href="#f4"><em>04</em>Simultaneidade sob medida</a>
-        <a class="res-link" href="#f5"><em>05</em>Desempenho por número</a>
-      </nav>
+<!-- ============ RECURSOS ============ -->
+<section class="sec" id="recursos">
+  <div class="container">
+    <div class="sec-head" data-reveal>
+      <span class="eyebrow">Recursos</span>
+      <h2>Infraestrutura completa para operações de contato.</h2>
+      <p class="lead">Cada componente foi desenhado para uma coisa: manter sua operação discando, distribuindo e conectando — com controle total.</p>
     </div>
-
-    <div>
-      <article class="feat-block reveal" id="f1">
-        <span class="fb-tag">01 · Pool de números WhatsApp</span>
-        <h3>Cada número com suas regras, e todas respeitadas, sempre.</h3>
-        <p>Defina <b>cooldown entre chamadas, teto diário e janelas de disponibilidade</b> por número. O motor alterna o pool automaticamente e protege a saúde de cada conta de WhatsApp.</p>
-        <div class="feat-visual">
-          <div class="num-row">
-            <span class="nr-phone">+55 11 98•••-2214</span>
-            <div class="nr-meta"><div class="nr-bar"><i style="--v:64%"></i></div><span class="nr-note">148 / 230 chamadas hoje</span></div>
-            <span class="nr-tag t-ok">disponível</span>
-          </div>
-          <div class="num-row">
-            <span class="nr-phone">+55 21 97•••-8830</span>
-            <div class="nr-meta"><div class="nr-bar warn"><i style="--v:87%"></i></div><span class="nr-note">cooldown ativo · libera em 04:12</span></div>
-            <span class="nr-tag t-cd">em cooldown</span>
-          </div>
-          <div class="num-row">
-            <span class="nr-phone">+55 31 99•••-1407</span>
-            <div class="nr-meta"><div class="nr-bar"><i style="--v:41%"></i></div><span class="nr-note">94 / 230 chamadas hoje</span></div>
-            <span class="nr-tag t-ok">disponível</span>
-          </div>
-          <div class="num-row">
-            <span class="nr-phone">+55 11 96•••-5529</span>
-            <div class="nr-meta"><div class="nr-bar off"><i style="--v:100%"></i></div><span class="nr-note">teto diário atingido · volta amanhã 08:00</span></div>
-            <span class="nr-tag t-off">limite diário</span>
-          </div>
+    <div class="feat-grid">
+      <article class="feat feat--w4" data-reveal>
+        <span class="feat-ico"><svg><use href="#i-call"/></svg></span>
+        <h3>Discagem automática</h3>
+        <p>Execução automática das tentativas de contato da fila, sem intervenção manual do SDR.</p>
+        <div class="feat-mini mini-queue">
+          <span><i></i>CARLOS.SILVA — ligando…</span>
+          <span><i></i>FERNANDA.SOUZA — próxima</span>
+          <span><i class="off"></i>MARCOS.LIMA — na fila</span>
         </div>
       </article>
-
-      <article class="feat-block reveal" id="f2">
-        <span class="fb-tag">02 · Roteamento</span>
-        <h3>O lead atendeu no WhatsApp? O SDR livre assume em menos de 1 segundo.</h3>
-        <p>Sem fila interna, sem “quem pega?”. Quando o lead atende a chamada de WhatsApp, ela é entregue ao <b>SDR disponível há mais tempo</b>. Se todos estiverem ocupados, o motor segura a discagem e nenhum atendimento é desperdiçado.</p>
-        <div class="feat-visual">
-          <div class="rv-incoming"><span class="live-dot"></span> lead atendeu a chamada de WhatsApp · roteando…</div>
-          <div class="rv-sdrs">
-            <div class="rv-sdr busy">Bruno <span>em conversa · 03:41</span></div>
-            <div class="rv-sdr chosen">Ana <span>livre há 12s · recebendo →</span></div>
-            <div class="rv-sdr busy">Carla <span>em conversa · 01:07</span></div>
-            <div class="rv-sdr">Diego <span>livre há 4s · próximo da fila</span></div>
-          </div>
-          <p class="rv-time">tempo médio entre o “alô” e o SDR na linha: <b>0,9 s</b></p>
+      <article class="feat feat--w4" data-reveal style="--d:.07s">
+        <span class="feat-ico"><svg><use href="#i-hash"/></svg></span>
+        <h3>Pool de números</h3>
+        <p>Distribua as chamadas entre diversos números de WhatsApp, com regras próprias para cada um.</p>
+        <div class="feat-mini mini-pool">
+          <span><i></i>+55 27 ••••</span><span><i></i>+55 11 ••••</span><span><i class="busy"></i>+55 21 ••••</span><span><i></i>+55 31 ••••</span>
         </div>
       </article>
-
-      <article class="feat-block reveal" id="f3">
-        <span class="fb-tag">03 · Novas tentativas</span>
-        <h3>Não atendeu? O motor chama de novo na melhor hora.</h3>
-        <p>Regras de rediscagem por tentativa, resultado e horário. O lead estava ocupado de manhã? Ele volta à fila às 14h <b>com uma nova chamada de WhatsApp</b>, sem planilha, sem post-it e sem esquecimento.</p>
-        <div class="feat-visual">
-          <div class="retry-track">
-            <div class="rt-step"><b>09:12 · tentativa 1</b><span>não atendeu → refileira</span></div>
-            <div class="rt-step"><b>11:47 · tentativa 2</b><span>ocupado → refileira</span></div>
-            <div class="rt-step win"><b>14:32 · tentativa 3</b><span>atendeu ✓ conectado à Ana</span></div>
-          </div>
-          <p class="rt-cap">regra ativa: <b>até 4 tentativas</b> · janelas 9h às 12h e 14h às 19h · intervalo mínimo 2h</p>
+      <article class="feat feat--w4" data-reveal style="--d:.14s">
+        <span class="feat-ico"><svg><use href="#i-split"/></svg></span>
+        <h3>Distribuição entre SDRs</h3>
+        <p>Conecte automaticamente leads atendidos aos vendedores disponíveis, equilibrando a equipe.</p>
+        <div class="feat-mini mini-sdrs">
+          <span class="av" style="background:#14171C">AP</span><span class="av" style="background:#0B7A4B">BC</span><span class="av" style="background:#5A6472">JM</span><span class="av" style="background:#12915C">RS</span><span class="av" style="background:#8A93A0">+4</span>
+          <em>→ lead atendido</em>
         </div>
       </article>
-
-      <article class="feat-block reveal" id="f4">
-        <span class="fb-tag">04 · Simultaneidade</span>
-        <h3>Chamadas simultâneas na medida exata do time.</h3>
-        <p>O limite de chamadas de WhatsApp em paralelo acompanha os <b>SDRs livres em tempo real</b>. Mais gente disponível? Mais linhas chamando. Menos gente? O motor desacelera. Tudo automático.</p>
-        <div class="feat-visual">
-          <div class="sim-visual">
-            <div class="sim-col"><div class="sim-big">6</div><small>chamadas simultâneas</small></div>
-            <div class="sim-eq">=</div>
-            <div class="sim-col"><div class="sim-big">4</div><small>SDRs livres</small></div>
-            <div class="sim-eq">+</div>
-            <div class="sim-col"><div class="sim-big">2</div><small>buffer de discagem</small></div>
-          </div>
-          <div class="sim-dots" aria-hidden="true">
-            <i class="sd-on"></i><i class="sd-on"></i><i class="sd-on"></i><i class="sd-on"></i><i class="sd-on"></i><i class="sd-on"></i><i class="sd-off"></i><i class="sd-off"></i>
-          </div>
-          <p class="sim-cap">6 linhas chamando no WhatsApp · 2 SDRs entram às 14h → o motor já recalcula</p>
-        </div>
+      <article class="feat feat--w3" data-reveal>
+        <span class="feat-ico"><svg><use href="#i-clock"/></svg></span>
+        <h3>Cooldown por número</h3>
+        <p>Controle o intervalo mínimo entre chamadas realizadas por cada número.</p>
       </article>
-
-      <article class="feat-block reveal" id="f5">
-        <span class="fb-tag">05 · Desempenho</span>
-        <h3>Cada número WhatsApp medido. Cada decisão, informada.</h3>
-        <p><b>Taxa de atendimento, duração média, motivos de falha e saúde</b> por número, para escalar as linhas que atendem bem e aposentar as que só gastam lead.</p>
-        <div class="feat-visual">
-          <div class="spark-row">
-            <b>atendimentos · última hora</b>
-            <span class="mono">▲ 23%</span>
-            <svg class="spark" width="150" height="38" viewBox="0 0 150 38" aria-hidden="true">
-              <polyline pathLength="1" points="0,30 15,26 30,28 45,20 60,22 75,14 90,16 105,9 120,12 135,5 150,7"/>
-            </svg>
-          </div>
-          <div class="mini-bars">
-            <div class="mb best"><b>68%</b><i style="--h:92%;--bd:.05s"></i><small>Nº 01</small></div>
-            <div class="mb"><b>61%</b><i style="--h:78%;--bd:.15s"></i><small>Nº 02</small></div>
-            <div class="mb"><b>57%</b><i style="--h:68%;--bd:.25s"></i><small>Nº 03</small></div>
-            <div class="mb"><b>49%</b><i style="--h:52%;--bd:.35s"></i><small>Nº 04</small></div>
-            <div class="mb"><b>38%</b><i style="--h:36%;--bd:.45s"></i><small>Nº 05</small></div>
-          </div>
-          <p class="sim-cap">taxa de atendimento por número · últimos 7 dias</p>
-        </div>
+      <article class="feat feat--w3" data-reveal style="--d:.06s">
+        <span class="feat-ico"><svg><use href="#i-gauge"/></svg></span>
+        <h3>Limites de utilização</h3>
+        <p>Defina limites diários de chamadas de acordo com a capacidade da sua operação.</p>
       </article>
-    </div>
-  </div>
-</section>
-
-<!-- ============ PAINEL ============ -->
-<section class="painel-sec" id="painel">
-  <div class="wrap">
-    <div class="reveal">
-      <span class="kicker">Visão do gestor</span>
-      <h2 class="h2">Todas as chamadas de WhatsApp, em um painel.</h2>
-      <p class="lead">Ligações, atendimentos, tentativas e saúde de cada número, em tempo real, sem pedir relatório para ninguém.</p>
-    </div>
-
-    <div class="panel reveal" style="--d:.15s">
-      <div class="panel-head">
-        <span class="ph-title"><span class="live-dot"></span> painel operacional · whatsapp</span>
-        <div class="tabs" role="tablist" aria-label="Período do painel">
-          <button class="tab active" data-key="hoje" role="tab" aria-selected="true">Hoje</button>
-          <button class="tab" data-key="semana" role="tab" aria-selected="false">Últimos 7 dias</button>
-        </div>
-      </div>
-      <div class="kpis">
-        <div class="kpi"><div class="kpi-v">412</div><div class="kpi-l">chamadas conectadas</div><div class="kpi-d up">▲ 18% vs. ontem</div></div>
-        <div class="kpi"><div class="kpi-v">57<small>%</small></div><div class="kpi-l">atendimento no whatsapp</div><div class="kpi-d up">▲ 6 p.p. na semana</div></div>
-        <div class="kpi"><div class="kpi-v">0,9<small>s</small></div><div class="kpi-l">conexão pós-“alô”</div><div class="kpi-d up">instantâneo p/ SDR livre</div></div>
-        <div class="kpi"><div class="kpi-v">12</div><div class="kpi-l">números no pool</div><div class="kpi-d up">11 saudáveis · 1 em cooldown</div></div>
-      </div>
-      <div class="panel-body">
-        <div class="chart-side">
-          <div class="chart-cap"><span>chamadas via whatsapp realizadas</span><span id="chartTotal">826 no total</span></div>
-          <div class="chart" id="chartBars"></div>
-        </div>
-        <div class="top-side">
-          <p class="top-cap">melhores números · taxa de atendimento</p>
-          <div class="top-num"><div class="tn-row"><span>+55 11 98•••-2214</span><b>68%</b></div><div class="tn-bar"><i style="--v:68%"></i></div></div>
-          <div class="top-num"><div class="tn-row"><span>+55 21 97•••-8830</span><b>61%</b></div><div class="tn-bar"><i style="--v:61%"></i></div></div>
-          <div class="top-num"><div class="tn-row"><span>+55 31 99•••-1407</span><b>57%</b></div><div class="tn-bar"><i style="--v:57%"></i></div></div>
-          <div class="top-num"><div class="tn-row"><span>+55 41 98•••-7743</span><b>54%</b></div><div class="tn-bar"><i style="--v:54%"></i></div></div>
-          <div class="top-num"><div class="tn-row"><span>+55 11 96•••-5529</span><b>49%</b></div><div class="tn-bar"><i style="--v:49%"></i></div></div>
-        </div>
-      </div>
-    </div>
-  </div>
-</section>
-
-<!-- ============ MÉTRICAS (dark) ============ -->
-<section class="metrics" id="resultados">
-  <div class="wrap">
-    <p class="metrics-cap">resultados médios em operações b2b · 60 dias de uso</p>
-    <div class="metrics-grid">
-      <div class="metric reveal"><div class="metric-num counter" data-to="3.4" data-dec="1" data-suf="x">0</div><p class="metric-lab">mais conversas por SDR, por dia</p></div>
-      <div class="metric reveal" style="--d:.1s"><div class="metric-num counter" data-to="78" data-suf="%">0</div><p class="metric-lab">menos tempo ocioso entre chamadas</p></div>
-      <div class="metric reveal" style="--d:.2s"><div class="metric-num counter" data-to="41" data-pre="+" data-suf="%">0</div><p class="metric-lab">reuniões agendadas em 60 dias</p></div>
-      <div class="metric reveal" style="--d:.3s"><div class="metric-num counter" data-to="0.9" data-dec="1" data-suf=" s">0</div><p class="metric-lab">entre o “alô” e o SDR na linha</p></div>
+      <article class="feat feat--w3" data-reveal style="--d:.12s">
+        <span class="feat-ico"><svg><use href="#i-activity"/></svg></span>
+        <h3>Chamadas simultâneas</h3>
+        <p>Controle quantas ligações podem acontecer ao mesmo tempo na operação.</p>
+      </article>
+      <article class="feat feat--w3" data-reveal style="--d:.18s">
+        <span class="feat-ico"><svg><use href="#i-repeat"/></svg></span>
+        <h3>Nova tentativa automática</h3>
+        <p>Configure novas tentativas para contatos que não atenderam na primeira chamada.</p>
+      </article>
+      <article class="feat feat--w4" data-reveal>
+        <span class="feat-ico"><svg><use href="#i-layers"/></svg></span>
+        <h3>Fila de leads</h3>
+        <p>Organize automaticamente a ordem dos contatos. Sem planilhas paralelas, sem escolha manual, sem lead esquecido.</p>
+      </article>
+      <article class="feat feat--w4" data-reveal style="--d:.07s">
+        <span class="feat-ico"><svg><use href="#i-shield"/></svg></span>
+        <h3>Status em tempo real</h3>
+        <p>Acompanhe números, SDRs, chamadas e filas em uma visão única e atualizada continuamente.</p>
+      </article>
+      <article class="feat feat--w4" data-reveal style="--d:.14s">
+        <span class="feat-ico"><svg><use href="#i-chart"/></svg></span>
+        <h3>Métricas de operação</h3>
+        <p>Visualize tentativas, atendimentos, conversas e a performance da equipe ao longo do dia.</p>
+      </article>
     </div>
   </div>
 </section>
 
 <!-- ============ COMPARATIVO ============ -->
-<section class="comparativo" id="comparativo">
-  <div class="wrap">
-    <div class="reveal">
-      <span class="kicker">Antes × depois</span>
-      <h2 class="h2">Telefone do jeito antigo vs. chamada pelo WhatsApp</h2>
+<section class="sec sec--soft" id="comparativo">
+  <div class="container">
+    <div class="sec-head" data-reveal>
+      <span class="eyebrow">Comparativo</span>
+      <h2>Discagem tradicional vs. operação automatizada</h2>
     </div>
-    <div class="table-scroll reveal" style="--d:.15s">
-      <table class="cmp">
-        <thead>
-          <tr>
-            <th>Na operação</th>
-            <th>Ligação tradicional</th>
-            <th>ZapLiga<span class="tag-pro">100% WHATSAPP</span></th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr><td>Por onde sai a chamada</td><td><span class="no-ic">×</span>Linha fixa, celular ou VoIP, número que o lead ignora</td><td><span class="ok-ic">✓</span>WhatsApp, o app que o lead abre 20× por dia</td></tr>
-          <tr><td>Quem disca</td><td><span class="no-ic">×</span>O SDR, uma a uma, na mão</td><td><span class="ok-ic">✓</span>O motor, em lote e sozinho</td></tr>
-          <tr><td>Tempo entre conversas</td><td><span class="no-ic">×</span>4 a 9 minutos</td><td><span class="ok-ic">✓</span>~20 segundos</td></tr>
-          <tr><td>Limites de cada número</td><td><span class="no-ic">×</span>Planilha e memória</td><td><span class="ok-ic">✓</span>Cooldown, teto diário e janelas automáticos</td></tr>
-          <tr><td>Lead não atendeu</td><td><span class="no-ic">×</span>Vira anotação esquecida</td><td><span class="ok-ic">✓</span>Volta à fila na melhor janela, sozinho</td></tr>
-          <tr><td>Distribuição das chamadas</td><td><span class="no-ic">×</span>Desigual, no grito</td><td><span class="ok-ic">✓</span>Sempre o SDR livre há mais tempo</td></tr>
-          <tr><td>Métricas por número</td><td><span class="no-ic">×</span>Nenhuma</td><td><span class="ok-ic">✓</span>Taxa, duração e saúde em tempo real</td></tr>
-        </tbody>
-      </table>
+    <div class="cmp" data-reveal>
+      <div class="cmp-row cmp-head">
+        <div class="cmp-c">Operação tradicional</div>
+        <div class="cmp-c win">Com a plataforma</div>
+      </div>
+      <div class="cmp-row">
+        <div class="cmp-c"><span class="ci ci--no"><svg><use href="#i-x"/></svg></span>SDR escolhe o próximo lead</div>
+        <div class="cmp-c win"><span class="ci ci--yes"><svg><use href="#i-check"/></svg></span>Fila automática</div>
+      </div>
+      <div class="cmp-row">
+        <div class="cmp-c"><span class="ci ci--no"><svg><use href="#i-x"/></svg></span>SDR realiza cada ligação</div>
+        <div class="cmp-c win"><span class="ci ci--yes"><svg><use href="#i-check"/></svg></span>Discagem automática</div>
+      </div>
+      <div class="cmp-row">
+        <div class="cmp-c"><span class="ci ci--no"><svg><use href="#i-x"/></svg></span>SDR espera a chamada tocar</div>
+        <div class="cmp-c win"><span class="ci ci--yes"><svg><use href="#i-check"/></svg></span>SDR aguarda disponível</div>
+      </div>
+      <div class="cmp-row">
+        <div class="cmp-c"><span class="ci ci--no"><svg><use href="#i-x"/></svg></span>SDR controla nova tentativa</div>
+        <div class="cmp-c win"><span class="ci ci--yes"><svg><use href="#i-check"/></svg></span>Sistema agenda a tentativa</div>
+      </div>
+      <div class="cmp-row">
+        <div class="cmp-c"><span class="ci ci--no"><svg><use href="#i-x"/></svg></span>Operação depende do vendedor</div>
+        <div class="cmp-c win"><span class="ci ci--yes"><svg><use href="#i-check"/></svg></span>Processo padronizado</div>
+      </div>
+      <div class="cmp-row">
+        <div class="cmp-c"><span class="ci ci--no"><svg><use href="#i-x"/></svg></span>Difícil controlar vários números</div>
+        <div class="cmp-c win"><span class="ci ci--yes"><svg><use href="#i-check"/></svg></span>Pool centralizado</div>
+      </div>
+      <div class="cmp-row">
+        <div class="cmp-c"><span class="ci ci--no"><svg><use href="#i-x"/></svg></span>Tempo gasto tentando contato</div>
+        <div class="cmp-c win"><span class="ci ci--yes"><svg><use href="#i-check"/></svg></span>Tempo focado em conversas</div>
+      </div>
     </div>
   </div>
 </section>
 
-<!-- ============ DEPOIMENTOS ============ -->
-<section class="depoimentos" id="depoimentos">
-  <div class="wrap">
-    <div class="reveal">
-      <span class="kicker">Depoimentos</span>
-      <h2 class="h2">Quem trocou o telefone pelo WhatsApp, aprova.</h2>
+<!-- ============ FOCO EM PRODUTIVIDADE ============ -->
+<section class="sec" id="produtividade">
+  <div class="container foco-grid">
+    <div data-reveal>
+      <span class="eyebrow">Produtividade</span>
+      <h2 style="font-size:clamp(28px,3.4vw,40px);line-height:1.16;letter-spacing:-.025em;font-weight:700;margin:16px 0 18px">Pare de medir quantas ligações seu SDR fez.<br>Comece a medir quantas <span class="h-accent">conversas</span> ele teve.</h2>
+      <p style="color:var(--ink-2);font-size:16px;max-width:520px">O objetivo não é simplesmente aumentar o número de chamadas. É remover do SDR toda a parte operacional existente antes de uma conversa acontecer.</p>
+      <p style="color:var(--mut);font-size:15px;margin-top:12px;max-width:520px">Com a discagem automatizada, sua equipe pode concentrar mais tempo em:</p>
+      <ul class="foco-list">
+        <li><span class="ck"><svg><use href="#i-check"/></svg></span>Entender o lead</li>
+        <li><span class="ck"><svg><use href="#i-check"/></svg></span>Qualificar oportunidades</li>
+        <li><span class="ck"><svg><use href="#i-check"/></svg></span>Contornar objeções</li>
+        <li><span class="ck"><svg><use href="#i-check"/></svg></span>Realizar follow-ups</li>
+        <li><span class="ck"><svg><use href="#i-check"/></svg></span>Fechar vendas</li>
+      </ul>
     </div>
-    <div class="depo-grid">
-      <figure class="depo-card reveal">
-        <blockquote class="depo-quote">“O lead vê <b>chamada de WhatsApp</b> e atende na hora. Antes, do 0800, quase ninguém pegava. Hoje o SDR senta, fica disponível e <b>as conversas simplesmente chegam</b>.”</blockquote>
-        <figcaption class="depo-foot">
-          <span class="avatar av-1">MD</span>
-          <span><span class="depo-name">Marina Duarte</span><br><span class="depo-role">Head de Vendas · Nortech SaaS</span></span>
-          <span class="depo-chip">+52% reuniões</span>
-        </figcaption>
-      </figure>
-      <figure class="depo-card reveal" style="--d:.15s">
-        <blockquote class="depo-quote">“As regras de cooldown salvaram nossos números. <b>Zero bloqueios em 6 meses</b>, mesmo com um volume 3x maior de chamadas pelo WhatsApp.”</blockquote>
-        <figcaption class="depo-foot">
-          <span class="avatar av-2">RL</span>
-          <span><span class="depo-name">Rafael Lima</span><br><span class="depo-role">Coord. de Pré-vendas · CobraFácil</span></span>
-          <span class="depo-chip">0 bloqueios</span>
-        </figcaption>
-      </figure>
-      <figure class="depo-card reveal" style="--d:.3s">
-        <blockquote class="depo-quote">“Finalmente sei <b>qual número atende bem</b> e qual só gasta lead. O painel de desempenho virou pauta fixa da nossa reunião de segunda.”</blockquote>
-        <figcaption class="depo-foot">
-          <span class="avatar av-3">PS</span>
-          <span><span class="depo-name">Paula Siqueira</span><br><span class="depo-role">Diretora Comercial · EduPro</span></span>
-          <span class="depo-chip">3,1x contatos</span>
-        </figcaption>
-      </figure>
+    <div data-reveal style="--d:.12s">
+      <div class="foco-card" id="focoCard">
+        <div class="foco-card-h">
+          <h4>Atividade do SDR no dia</h4>
+          <div class="foco-seg" id="focoSeg" role="group" aria-label="Comparar modo de operação">
+            <button type="button" class="on" data-m="trad">Tradicional</button>
+            <button type="button" class="g" data-m="disc">Com ZapLiga</button>
+          </div>
+        </div>
+        <div class="foco-card-b">
+          <div class="foco-metric">
+            <div class="fm-top"><b>Discando e esperando</b><span id="fmAp">82%</span></div>
+            <div class="fm-bar"><i id="fmAb" style="transform:scaleX(.82)"></i></div>
+          </div>
+          <div class="foco-metric">
+            <div class="fm-top"><b>Em conversa com leads</b><span id="fmBp">18%</span></div>
+            <div class="fm-bar"><i class="g" id="fmBb" style="transform:scaleX(.18)"></i></div>
+          </div>
+        </div>
+        <div class="foco-card-f"><svg><use href="#i-activity"/></svg>O tempo de tentativa passa a ser da plataforma. O tempo de conversa é do SDR.</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ DASHBOARD ============ -->
+<section class="sec sec--soft" id="dashboard">
+  <div class="container">
+    <div class="sec-head sec-head--center" data-reveal>
+      <span class="eyebrow">Controle operacional</span>
+      <h2>Sua operação inteira em uma única tela.</h2>
+      <p class="lead">Filas, números, SDRs, chamadas e resultados — tudo centralizado, atualizado em tempo real. Navegue pelas abas.</p>
+    </div>
+    <div class="window dash-window spot" data-reveal id="dashWindow">
+      <div class="window-bar">
+        <span class="wdot"></span><span class="wdot"></span><span class="wdot"></span>
+        <div class="dash-tabs" role="tablist" aria-label="Áreas do painel">
+          <button class="dash-tab on" type="button" role="tab" aria-selected="true" data-pane="geral">Visão geral</button>
+          <button class="dash-tab" type="button" role="tab" aria-selected="false" data-pane="filas">Filas</button>
+          <button class="dash-tab" type="button" role="tab" aria-selected="false" data-pane="numeros">Números</button>
+          <button class="dash-tab" type="button" role="tab" aria-selected="false" data-pane="sdres">SDRs</button>
+        </div>
+        <span class="window-live" style="margin-left:auto">TEMPO REAL</span>
+      </div>
+      <div class="window-body">
+        <div class="kpi-grid">
+          <div class="kpi" style="--k:0"><span class="lbl">Leads na fila</span><b class="val num count" data-to="214">0</b><span class="delta">atualizada agora</span></div>
+          <div class="kpi" style="--k:1"><span class="lbl">Tentativas realizadas</span><b class="val num count" id="kpiTent" data-to="1284">0</b><span class="delta up">hoje</span></div>
+          <div class="kpi" style="--k:2"><span class="lbl">Chamadas atendidas</span><b class="val num count" id="kpiAtend" data-to="312">0</b><span class="delta up">hoje</span></div>
+          <div class="kpi" style="--k:3"><span class="lbl">Taxa de atendimento</span><b class="val num count" data-to="24.3" data-dec="1" data-suf="%">0</b><span class="delta">últimas 24h</span></div>
+          <div class="kpi" style="--k:4"><span class="lbl">SDRs disponíveis</span><b class="val num pos count" data-to="5">0</b><span class="delta">de 14 ativos</span></div>
+          <div class="kpi" style="--k:5"><span class="lbl">SDRs em chamada</span><b class="val num count" data-to="9">0</b><span class="delta">agora</span></div>
+          <div class="kpi" style="--k:6"><span class="lbl">Números disponíveis</span><b class="val num pos count" data-to="11">0</b><span class="delta">no pool</span></div>
+          <div class="kpi" style="--k:7"><span class="lbl">Números em cooldown</span><b class="val num count" data-to="3">0</b><span class="delta">retorno automático</span></div>
+          <div class="kpi" style="--k:8"><span class="lbl">Chamadas simultâneas</span><b class="val num count" data-to="14">0</b><span class="delta">limite: 20</span></div>
+          <div class="kpi" style="--k:9"><span class="lbl">Média de tentativas por contato</span><b class="val num count" data-to="2.4" data-dec="1">0</b><span class="delta">últimos 7 dias</span></div>
+        </div>
+
+        <div class="dash-panes">
+          <!-- PANE: VISÃO GERAL -->
+          <div class="dash-pane active" id="pane-geral" role="tabpanel">
+            <div class="dash-cols">
+              <div class="panel">
+                <div class="panel-h">
+                  <h4>Tentativas × atendimentos · últimos 7 dias</h4>
+                  <span class="legend"><span class="l-a"><i></i>Tentativas</span><span class="l-b"><i></i>Atendidas</span></span>
+                </div>
+                <div class="chart-area" aria-hidden="true">
+                  <div class="chart-group"><div class="bar-pair"><span class="bar a" style="--bd:.0s;height:69%"></span><span class="bar b" style="--bd:.15s;height:18%"></span></div><small>seg</small></div>
+                  <div class="chart-group"><div class="bar-pair"><span class="bar a" style="--bd:.06s;height:84%"></span><span class="bar b" style="--bd:.21s;height:22%"></span></div><small>ter</small></div>
+                  <div class="chart-group"><div class="bar-pair"><span class="bar a" style="--bd:.12s;height:94%"></span><span class="bar b" style="--bd:.27s;height:27%"></span></div><small>qua</small></div>
+                  <div class="chart-group"><div class="bar-pair"><span class="bar a" style="--bd:.18s;height:79%"></span><span class="bar b" style="--bd:.33s;height:20%"></span></div><small>qui</small></div>
+                  <div class="chart-group"><div class="bar-pair"><span class="bar a" style="--bd:.24s;height:100%"></span><span class="bar b" style="--bd:.39s;height:30%"></span></div><small>sex</small></div>
+                  <div class="chart-group"><div class="bar-pair"><span class="bar a" style="--bd:.3s;height:50%"></span><span class="bar b" style="--bd:.45s;height:12%"></span></div><small>sáb</small></div>
+                  <div class="chart-group"><div class="bar-pair"><span class="bar a" style="--bd:.36s;height:24%"></span><span class="bar b" style="--bd:.51s;height:5%"></span></div><small>dom</small></div>
+                </div>
+              </div>
+              <div class="panel">
+                <div class="panel-h"><h4>Performance dos SDRs · hoje</h4></div>
+                <table class="sdr-t">
+                  <thead><tr><th>SDR</th><th>Conversas</th><th>Atend.</th><th>Status</th></tr></thead>
+                  <tbody id="sdrBody">
+                    <tr><td><span class="sdr-cell"><span class="av" style="background:#0B7A4B">AP</span>Ana Prado</span></td><td class="mono">28</td><td class="mono">31%</td><td><span class="pill pill--call">Em chamada</span></td></tr>
+                    <tr><td><span class="sdr-cell"><span class="av" style="background:#14171C">BC</span>Bruno Costa</span></td><td class="mono">24</td><td class="mono">28%</td><td><span class="pill pill--ok js-sdrst">Disponível</span></td></tr>
+                    <tr><td><span class="sdr-cell"><span class="av" style="background:#5A6472">JM</span>Júlia Mendes</span></td><td class="mono">22</td><td class="mono">26%</td><td><span class="pill pill--call">Em chamada</span></td></tr>
+                    <tr><td><span class="sdr-cell"><span class="av" style="background:#12915C">RS</span>Ricardo Sá</span></td><td class="mono">19</td><td class="mono">25%</td><td><span class="pill pill--ok js-sdrst">Disponível</span></td></tr>
+                    <tr><td><span class="sdr-cell"><span class="av" style="background:#8A93A0">LT</span>Larissa Teixeira</span></td><td class="mono">17</td><td class="mono">24%</td><td><span class="pill pill--queue">Pausa</span></td></tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+            <div class="panel panel-feed">
+              <div class="panel-h"><h4>Atividade recente</h4><span class="window-live">AO VIVO</span></div>
+              <ul class="feed-list" id="feedList">
+                <li class="feed-item"><span class="feed-time">14:31</span><span class="feed-txt">Carlos Silva atendeu — conectado a Ana Prado</span><span class="pill pill--ok">Conectado</span></li>
+                <li class="feed-item"><span class="feed-time">14:29</span><span class="feed-txt">Nova tentativa agendada — Marcos Lima · 15 min</span><span class="pill pill--retry">Agendada</span></li>
+                <li class="feed-item"><span class="feed-time">14:27</span><span class="feed-txt">Tentativa sem resposta — Fernanda Souza</span><span class="pill pill--queue">Na fila</span></li>
+                <li class="feed-item"><span class="feed-time">14:25</span><span class="feed-txt">Número +55 11 ****-4291 liberado do cooldown</span><span class="pill pill--ok">Disponível</span></li>
+              </ul>
+            </div>
+          </div>
+
+          <!-- PANE: FILAS -->
+          <div class="dash-pane" id="pane-filas" role="tabpanel">
+            <div class="panel">
+              <div class="panel-h"><h4>Filas de discagem</h4><span class="legend"><span class="l-b"><i></i>Ritmo de processamento</span></span></div>
+              <table class="sdr-t">
+                <thead><tr><th>Fila</th><th>Leads</th><th>Processando</th><th>Atend. hoje</th><th>Taxa</th><th>Ritmo</th><th>Status</th></tr></thead>
+                <tbody>
+                  <tr><td><b>Outbound-SP</b></td><td class="mono">96</td><td class="mono">4</td><td class="mono">118</td><td class="mono">27%</td><td><span class="fq-bar"><i style="--fw:.86;--fd:0s"></i></span></td><td><span class="pill pill--call">Ativa</span></td></tr>
+                  <tr><td><b>Inbound-Web</b></td><td class="mono">54</td><td class="mono">3</td><td class="mono">96</td><td class="mono">31%</td><td><span class="fq-bar"><i style="--fw:.72;--fd:.1s"></i></span></td><td><span class="pill pill--call">Ativa</span></td></tr>
+                  <tr><td><b>Reengajamento</b></td><td class="mono">41</td><td class="mono">2</td><td class="mono">44</td><td class="mono">18%</td><td><span class="fq-bar"><i style="--fw:.48;--fd:.2s"></i></span></td><td><span class="pill pill--call">Ativa</span></td></tr>
+                  <tr><td><b>Lista Evento-Agro</b></td><td class="mono">23</td><td class="mono">0</td><td class="mono">—</td><td class="mono">—</td><td><span class="fq-bar"><i style="--fw:.06;--fd:.3s"></i></span></td><td><span class="pill pill--queue">Programada</span></td></tr>
+                </tbody>
+              </table>
+            </div>
+            <div class="panel panel-feed">
+              <div class="panel-h"><h4>Regras de fila aplicadas</h4></div>
+              <ul class="feed-list">
+                <li class="feed-item"><span class="feed-time">REGRA</span><span class="feed-txt">Prioridade por ordem de entrada + recência do lead</span><span class="pill pill--ok">Ativa</span></li>
+                <li class="feed-item"><span class="feed-time">REGRA</span><span class="feed-txt">Máximo de 3 tentativas por contato · intervalo de 30 min</span><span class="pill pill--ok">Ativa</span></li>
+                <li class="feed-item"><span class="feed-time">REGRA</span><span class="feed-txt">Pausa automática fora da janela 08:00–20:00</span><span class="pill pill--ok">Ativa</span></li>
+              </ul>
+            </div>
+          </div>
+
+          <!-- PANE: NÚMEROS -->
+          <div class="dash-pane" id="pane-numeros" role="tabpanel">
+            <div class="panel">
+              <div class="panel-h"><h4>Pool de números · utilização de hoje</h4></div>
+              <table class="sdr-t">
+                <thead><tr><th>Número</th><th>Status</th><th>Hoje</th><th>Limite</th><th>Cooldown</th><th>Próxima</th></tr></thead>
+                <tbody>
+                  <tr><td class="mono">+55 27 ****-1928</td><td><span class="pill pill--ok">Disponível</span></td><td><span class="mono">47</span><span class="usage"><i style="width:47%"></i></span></td><td class="mono">100</td><td class="mono">2 min</td><td><span class="pill pill--ok">Agora</span></td></tr>
+                  <tr><td class="mono">+55 11 ****-4291</td><td><span class="pill pill--cool">Cooldown</span></td><td><span class="mono">63</span><span class="usage"><i class="warn" style="width:63%"></i></span></td><td class="mono">100</td><td class="mono">3 min</td><td><span class="cdown num">01:24</span></td></tr>
+                  <tr><td class="mono">+55 21 ****-8821</td><td><span class="pill pill--call">Em chamada</span></td><td><span class="mono">39</span><span class="usage"><i style="width:39%"></i></span></td><td class="mono">100</td><td class="mono">2 min</td><td class="mono" style="color:var(--mut-2)">—</td></tr>
+                  <tr><td class="mono">+55 31 ****-7720</td><td><span class="pill pill--ok">Disponível</span></td><td><span class="mono">72</span><span class="usage"><i style="width:60%"></i></span></td><td class="mono">120</td><td class="mono">1,5 min</td><td><span class="pill pill--ok">Agora</span></td></tr>
+                  <tr><td class="mono">+55 47 ****-3055</td><td><span class="pill pill--ok">Disponível</span></td><td><span class="mono">28</span><span class="usage"><i style="width:28%"></i></span></td><td class="mono">100</td><td class="mono">2 min</td><td><span class="pill pill--ok">Agora</span></td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          <!-- PANE: SDRs -->
+          <div class="dash-pane" id="pane-sdres" role="tabpanel">
+            <div class="panel">
+              <div class="panel-h"><h4>Equipe de SDRs · hoje</h4><span class="legend"><span class="l-b"><i></i>Disponibilidade</span></span></div>
+              <table class="sdr-t">
+                <thead><tr><th>SDR</th><th>Conversas</th><th>Conexões</th><th>Tempo médio</th><th>Disponibilidade</th><th>Status</th></tr></thead>
+                <tbody>
+                  <tr><td><span class="sdr-cell"><span class="av" style="background:#0B7A4B">AP</span>Ana Prado</span></td><td class="mono">28</td><td class="mono">34</td><td class="mono">4:12</td><td><span class="fq-bar"><i style="--fw:.9;--fd:0s"></i></span></td><td><span class="pill pill--call">Em chamada</span></td></tr>
+                  <tr><td><span class="sdr-cell"><span class="av" style="background:#14171C">BC</span>Bruno Costa</span></td><td class="mono">24</td><td class="mono">29</td><td class="mono">3:48</td><td><span class="fq-bar"><i style="--fw:.64;--fd:.08s"></i></span></td><td><span class="pill pill--ok">Disponível</span></td></tr>
+                  <tr><td><span class="sdr-cell"><span class="av" style="background:#5A6472">JM</span>Júlia Mendes</span></td><td class="mono">22</td><td class="mono">27</td><td class="mono">4:35</td><td><span class="fq-bar"><i style="--fw:.81;--fd:.16s"></i></span></td><td><span class="pill pill--call">Em chamada</span></td></tr>
+                  <tr><td><span class="sdr-cell"><span class="av" style="background:#12915C">RS</span>Ricardo Sá</span></td><td class="mono">19</td><td class="mono">25</td><td class="mono">3:56</td><td><span class="fq-bar"><i style="--fw:.55;--fd:.24s"></i></span></td><td><span class="pill pill--ok">Disponível</span></td></tr>
+                  <tr><td><span class="sdr-cell"><span class="av" style="background:#8A93A0">LT</span>Larissa Teixeira</span></td><td class="mono">17</td><td class="mono">21</td><td class="mono">4:04</td><td><span class="fq-bar"><i style="--fw:.3;--fd:.32s"></i></span></td><td><span class="pill pill--queue">Pausa</span></td></tr>
+                  <tr><td><span class="sdr-cell"><span class="av" style="background:#3E4652">PA</span>Paulo Andrade</span></td><td class="mono">15</td><td class="mono">19</td><td class="mono">3:41</td><td><span class="fq-bar"><i style="--fw:.7;--fd:.4s"></i></span></td><td><span class="pill pill--ok">Disponível</span></td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <p class="dash-note">PAINEL OPERACIONAL · FILAS, NÚMEROS, SDRS E CHAMADAS EM TEMPO REAL</p>
+  </div>
+</section>
+
+<!-- ============ GESTÃO DOS NÚMEROS ============ -->
+<section class="sec" id="numeros">
+  <div class="container num-grid">
+    <div class="num-side" data-reveal>
+      <span class="eyebrow">Gestão dos números</span>
+      <h2 style="font-size:clamp(28px,3.2vw,38px);letter-spacing:-.025em;line-height:1.16;font-weight:700;margin:16px 0 0">Controle cada número da operação.</h2>
+      <p class="lead">Cada número possui suas próprias regras de utilização, permitindo uma distribuição mais organizada das chamadas — e uma operação mais previsível.</p>
+      <ul class="num-rules">
+        <li><svg><use href="#i-clock"/></svg><span><b>Cooldown individual</b> — intervalo mínimo entre chamadas por número.</span></li>
+        <li><svg><use href="#i-gauge"/></svg><span><b>Limite diário</b> — teto de utilização definido por você.</span></li>
+        <li><svg><use href="#i-calendar"/></svg><span><b>Janelas de disponibilidade</b> — horários em que cada número pode operar.</span></li>
+        <li><svg><use href="#i-repeat"/></svg><span><b>Controle de tentativas</b> — quantas vezes e quando tentar de novo.</span></li>
+      </ul>
+    </div>
+    <div data-reveal style="--d:.12s">
+      <div class="window spot" id="numWindow">
+        <div class="window-bar">
+          <span class="wdot"></span><span class="wdot"></span><span class="wdot"></span>
+          <span class="window-url">app.zapliga.com.br/numeros</span>
+          <span class="window-live" style="margin-left:auto">ATUALIZADO</span>
+        </div>
+        <div class="window-body" style="padding:6px 10px 12px">
+          <table class="mt" style="font-size:13px">
+            <thead><tr><th>Número</th><th>Status</th><th>Hoje</th><th>Limite</th><th>Próxima chamada</th></tr></thead>
+            <tbody>
+              <tr class="x-row" tabindex="0" role="button" aria-expanded="false">
+                <td><span class="x-chev"><svg><use href="#i-arrow"/></svg></span><span class="mono">+55 27 ****-1928</span></td>
+                <td><span class="pill pill--ok">Disponível</span></td>
+                <td><span class="mono num">47</span><span class="usage"><i style="width:47%"></i></span></td>
+                <td class="mono">100</td>
+                <td><span class="pill pill--ok">Agora</span></td>
+              </tr>
+              <tr class="x-detail"><td colspan="5"><div class="x-detail-in"><div class="x-chips">
+                <span class="x-chip">Cooldown · 2 min</span><span class="x-chip">Janela · 08:00–20:00</span><span class="x-chip">Limite diário · 100</span><span class="x-chip">Rotação ativa</span><span class="x-chip">Máx. 3 tentativas por lead</span>
+              </div></div></td></tr>
+              <tr class="x-row" tabindex="0" role="button" aria-expanded="false">
+                <td><span class="x-chev"><svg><use href="#i-arrow"/></svg></span><span class="mono">+55 11 ****-4291</span></td>
+                <td><span class="pill pill--cool">Cooldown</span></td>
+                <td><span class="mono num">63</span><span class="usage"><i class="warn" style="width:63%"></i></span></td>
+                <td class="mono">100</td>
+                <td><span class="cdown num" id="cooldownTimer">01:24</span></td>
+              </tr>
+              <tr class="x-detail"><td colspan="5"><div class="x-detail-in"><div class="x-chips">
+                <span class="x-chip">Cooldown · 3 min</span><span class="x-chip">Janela · 09:00–19:00</span><span class="x-chip">Limite diário · 100</span><span class="x-chip">Rotação ativa</span><span class="x-chip">Máx. 3 tentativas por lead</span>
+              </div></div></td></tr>
+              <tr class="x-row" tabindex="0" role="button" aria-expanded="false">
+                <td><span class="x-chev"><svg><use href="#i-arrow"/></svg></span><span class="mono">+55 21 ****-8821</span></td>
+                <td><span class="pill pill--call">Em chamada</span></td>
+                <td><span class="mono num">39</span><span class="usage"><i style="width:39%"></i></span></td>
+                <td class="mono">100</td>
+                <td class="mono" style="color:var(--mut-2)">—</td>
+              </tr>
+              <tr class="x-detail"><td colspan="5"><div class="x-detail-in"><div class="x-chips">
+                <span class="x-chip">Cooldown · 2 min</span><span class="x-chip">Janela · 08:00–20:00</span><span class="x-chip">Limite diário · 100</span><span class="x-chip">Chamada em andamento</span><span class="x-chip">Máx. 2 tentativas por lead</span>
+              </div></div></td></tr>
+              <tr class="x-row" tabindex="0" role="button" aria-expanded="false">
+                <td><span class="x-chev"><svg><use href="#i-arrow"/></svg></span><span class="mono">+55 31 ****-7720</span></td>
+                <td><span class="pill pill--ok">Disponível</span></td>
+                <td><span class="mono num">72</span><span class="usage"><i style="width:60%"></i></span></td>
+                <td class="mono">120</td>
+                <td><span class="pill pill--ok">Agora</span></td>
+              </tr>
+              <tr class="x-detail"><td colspan="5"><div class="x-detail-in"><div class="x-chips">
+                <span class="x-chip">Cooldown · 1,5 min</span><span class="x-chip">Janela · 08:00–21:00</span><span class="x-chip">Limite diário · 120</span><span class="x-chip">Rotação ativa</span><span class="x-chip">Máx. 4 tentativas por lead</span>
+              </div></div></td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+      <p class="x-hint">▸ Clique em um número para ver as regras configuradas</p>
+    </div>
+  </div>
+</section>
+
+<!-- ============ PARA QUEM É ============ -->
+<section class="sec sec--soft" id="para-quem">
+  <div class="container">
+    <div class="sec-head" data-reveal>
+      <span class="eyebrow">Para quem é</span>
+      <h2>Feito para operações que precisam falar com muitos leads.</h2>
+    </div>
+    <div class="aud-grid">
+      <article class="aud-card" data-reveal>
+        <span class="feat-ico"><svg><use href="#i-headset"/></svg></span>
+        <h3>Times de SDR</h3>
+        <p>Equipes de pré-vendas que vivem de volume de contato e velocidade de resposta.</p>
+      </article>
+      <article class="aud-card" data-reveal style="--d:.05s">
+        <span class="feat-ico"><svg><use href="#i-call"/></svg></span>
+        <h3>Inside Sales</h3>
+        <p>Operações de venda remota que precisam manter o pipeline em movimento.</p>
+      </article>
+      <article class="aud-card" data-reveal style="--d:.1s">
+        <span class="feat-ico"><svg><use href="#i-building"/></svg></span>
+        <h3>Call centers</h3>
+        <p>Centrais de atendimento com grande volume de discagem e controle operacional.</p>
+      </article>
+      <article class="aud-card" data-reveal style="--d:.15s">
+        <span class="feat-ico"><svg><use href="#i-mega"/></svg></span>
+        <h3>Agências de marketing</h3>
+        <p>Agências que ativam leads para clientes e precisam de escala com organização.</p>
+      </article>
+      <article class="aud-card" data-reveal>
+        <span class="feat-ico"><svg><use href="#i-funnel"/></svg></span>
+        <h3>Operações de pré-vendas</h3>
+        <p>Estruturas BDR/SDR que trabalham qualificação em alto volume.</p>
+      </article>
+      <article class="aud-card" data-reveal style="--d:.05s">
+        <span class="feat-ico"><svg><use href="#i-inbox"/></svg></span>
+        <h3>Alto volume de inbound</h3>
+        <p>Empresas que recebem muitos leads e precisam contatar cada um rapidamente.</p>
+      </article>
+      <article class="aud-card" data-reveal style="--d:.1s">
+        <span class="feat-ico"><svg><use href="#i-target"/></svg></span>
+        <h3>Listas de outbound</h3>
+        <p>Operações que prospectam ativamente e dependem de tentativas constantes.</p>
+      </article>
+      <article class="aud-card" data-reveal style="--d:.15s;background:var(--g-tint-2);border-color:var(--g-line)">
+        <span class="feat-ico" style="background:#fff"><svg><use href="#i-arrow"/></svg></span>
+        <h3>Sua operação</h3>
+        <p>Se o seu time passa o dia tentando contato, o ZapLiga foi feito para você.</p>
+        <a href="#demo" class="btn btn--primary btn--sm" style="margin-top:16px;align-self:flex-start">Solicitar demonstração</a>
+      </article>
+    </div>
+  </div>
+</section>
+
+<!-- ============ ANTES / DEPOIS ============ -->
+<section class="sec" id="resultado">
+  <div class="container">
+    <div class="sec-head sec-head--center" data-reveal>
+      <span class="eyebrow">Resultado</span>
+      <h2>Menos etapas entre o lead e o vendedor.</h2>
+    </div>
+    <div class="ba-grid">
+      <div class="panel-ba" data-reveal>
+        <span class="ba-tag">Antes · operação tradicional</span>
+        <div class="chain">
+          <span class="chip" style="--ci:0">SDR</span><span class="arr" style="--ci:1"><svg><use href="#i-arrow"/></svg></span>
+          <span class="chip" style="--ci:2">CRM</span><span class="arr" style="--ci:3"><svg><use href="#i-arrow"/></svg></span>
+          <span class="chip" style="--ci:4">procura lead</span><span class="arr" style="--ci:5"><svg><use href="#i-arrow"/></svg></span>
+          <span class="chip" style="--ci:6">liga</span><span class="arr" style="--ci:7"><svg><use href="#i-arrow"/></svg></span>
+          <span class="chip dim" style="--ci:8">espera</span><span class="arr" style="--ci:9"><svg><use href="#i-arrow"/></svg></span>
+          <span class="chip dim" style="--ci:10">ninguém atende</span><span class="arr" style="--ci:11"><svg><use href="#i-arrow"/></svg></span>
+          <span class="chip" style="--ci:12">agenda novamente</span><span class="arr" style="--ci:13"><svg><use href="#i-arrow"/></svg></span>
+          <span class="chip loop" style="--ci:14">repete</span>
+        </div>
+        <p class="ba-count">8 etapas antes de cada conversa</p>
+      </div>
+      <div class="ba-mid" aria-hidden="true"><svg><use href="#i-arrow"/></svg></div>
+      <div class="panel-ba after" data-reveal style="--d:.12s">
+        <span class="ba-tag">Depois · com o ZapLiga</span>
+        <div class="chain">
+          <span class="chip" style="--ci:0">Plataforma</span><span class="arr" style="--ci:1"><svg><use href="#i-arrow"/></svg></span>
+          <span class="chip" style="--ci:2">realiza tentativas</span><span class="arr" style="--ci:3"><svg><use href="#i-arrow"/></svg></span>
+          <span class="chip" style="--ci:4">lead atende</span><span class="arr" style="--ci:5"><svg><use href="#i-arrow"/></svg></span>
+          <span class="chip" style="--ci:6"><b>SDR conversa</b></span>
+        </div>
+        <p class="ba-count">Apenas o que exige um vendedor</p>
+      </div>
+    </div>
+    <div class="ba-headline" data-reveal>
+      <h3>Remova etapas que não precisam de um vendedor.</h3>
+      <p>Cada tarefa operacional eliminada vira tempo de conversa — e conversa é onde a venda acontece.</p>
+    </div>
+  </div>
+</section>
+
+<!-- ============ PREÇOS ============ -->
+<section class="sec sec--soft" id="precos">
+  <div class="container price-grid">
+    <div class="price-side" data-reveal>
+      <span class="eyebrow">Preços</span>
+      <h2>Plano para sua operação</h2>
+      <p><strong style="color:var(--ink);font-weight:600">Estrutura personalizada conforme o tamanho da sua equipe.</strong> Você conversa com nosso time, dimensiona a operação e recebe uma proposta adequada ao seu volume de leads, números e SDRs.</p>
+      <ul class="price-points">
+        <li><svg><use href="#i-check"/></svg>Proposta conforme volume de chamadas e números da operação.</li>
+        <li><svg><use href="#i-check"/></svg>Implantação assistida: filas, números e regras configuradas com você.</li>
+        <li><svg><use href="#i-check"/></svg>Onboarding completo para SDRs e gestores.</li>
+        <li><svg><use href="#i-check"/></svg>Suporte operacional durante toda a vigência.</li>
+      </ul>
+    </div>
+    <div class="price-card spot" data-reveal style="--d:.12s">
+      <div class="price-card-h">
+        <span class="price-badge">Sob medida</span>
+        <h3>Plano Operações</h3>
+        <p>Tudo o que sua equipe precisa para discar em escala.</p>
+      </div>
+      <div class="price-inc">
+        <h5>Inclui</h5>
+        <ul>
+          <li style="--pi:0"><svg><use href="#i-check"/></svg>Números para operação</li>
+          <li style="--pi:1"><svg><use href="#i-check"/></svg>Gestão de SDRs</li>
+          <li style="--pi:2"><svg><use href="#i-check"/></svg>Discagem automatizada</li>
+          <li style="--pi:3"><svg><use href="#i-check"/></svg>Filas de leads</li>
+          <li style="--pi:4"><svg><use href="#i-check"/></svg>Novas tentativas</li>
+          <li style="--pi:5"><svg><use href="#i-check"/></svg>Chamadas simultâneas</li>
+          <li style="--pi:6"><svg><use href="#i-check"/></svg>Dashboard operacional</li>
+          <li style="--pi:7"><svg><use href="#i-check"/></svg>Métricas de operação</li>
+        </ul>
+      </div>
+      <div class="price-card-f">
+        <a class="btn btn--primary btn--lg" href="#demo">Falar com vendas</a>
+        <small>Sem compromisso · resposta rápida do time comercial</small>
+      </div>
     </div>
   </div>
 </section>
 
 <!-- ============ FAQ ============ -->
-<section class="faq-sec" id="faq">
-  <div class="wrap">
-    <div class="reveal" style="text-align:center">
-      <span class="kicker" style="justify-content:center">Perguntas frequentes</span>
-      <h2 class="h2" style="margin:0 auto">Tudo sobre ligar pelo WhatsApp em escala.</h2>
+<section class="sec" id="faq">
+  <div class="container">
+    <div class="sec-head sec-head--center" data-reveal>
+      <span class="eyebrow">FAQ</span>
+      <h2>Perguntas frequentes</h2>
     </div>
-    <div class="faq-list">
-      <div class="faq-item reveal">
-        <button class="faq-q" aria-expanded="false">A chamada é realmente feita pelo WhatsApp?<span class="faq-ic" aria-hidden="true"></span></button>
-        <div class="faq-a"><p><b>Sim, 100%.</b> É a chamada de voz nativa do WhatsApp, feita a partir de números reais gerenciados pelo motor. Não usamos VoIP, linha telefônica nem discador externo: o lead recebe exatamente uma <b>“chamada via WhatsApp”</b> na tela do celular.</p></div>
+    <div class="faq-wrap" data-reveal>
+      <div class="faq-item">
+        <button class="faq-q" aria-expanded="false">O SDR precisa realizar as ligações manualmente?<span class="fx"><svg><use href="#i-plus"/></svg></span></button>
+        <div class="faq-a"><p>Não. As tentativas são realizadas automaticamente pela plataforma. O SDR só entra em ação quando um lead atende.</p></div>
       </div>
-      <div class="faq-item reveal">
-        <button class="faq-q" aria-expanded="false">O que o lead vê quando vocês ligam?<span class="faq-ic" aria-hidden="true"></span></button>
-        <div class="faq-a"><p>Uma chamada comum de WhatsApp, com o nome ou número do seu time. <b>Nada de robô ou URA</b>: quando o lead atende, quem fala é o seu SDR, conectado em menos de 1 segundo.</p></div>
+      <div class="faq-item">
+        <button class="faq-q" aria-expanded="false">O que acontece quando um lead atende?<span class="fx"><svg><use href="#i-plus"/></svg></span></button>
+        <div class="faq-a"><p>A chamada é direcionada imediatamente para um SDR disponível. A conexão acontece sem intervenção manual.</p></div>
       </div>
-      <div class="faq-item reveal">
-        <button class="faq-q" aria-expanded="false">Existe risco de bloqueio dos números?<span class="faq-ic" aria-hidden="true"></span></button>
-        <div class="faq-a"><p>Todo o sistema foi desenhado para minimizar esse risco: <b>cooldown entre chamadas, teto diário por número, janelas de horário</b> e monitoramento contínuo da saúde de cada conta. Se um número dá sinais de desgaste, o motor o tira de circulação automaticamente.</p></div>
+      <div class="faq-item">
+        <button class="faq-q" aria-expanded="false">Posso trabalhar com vários números?<span class="fx"><svg><use href="#i-plus"/></svg></span></button>
+        <div class="faq-a"><p>Sim. A operação pode utilizar um pool de números, com as chamadas distribuídas automaticamente entre eles.</p></div>
       </div>
-      <div class="faq-item reveal">
-        <button class="faq-q" aria-expanded="false">Preciso trocar os números de WhatsApp da minha equipe?<span class="faq-ic" aria-hidden="true"></span></button>
-        <div class="faq-a"><p><b>Não.</b> Você conecta ao pool os números que já usa, ou adiciona novos aos poucos. O motor passa a gerenciar a disponibilidade e as regras de cada um, sem mudança na experiência do lead.</p></div>
+      <div class="faq-item">
+        <button class="faq-q" aria-expanded="false">É possível definir limites diferentes para cada número?<span class="fx"><svg><use href="#i-plus"/></svg></span></button>
+        <div class="faq-a"><p>Sim. Cada número pode possuir suas próprias regras operacionais: cooldown, limite diário, horários e disponibilidade.</p></div>
       </div>
-      <div class="faq-item reveal">
-        <button class="faq-q" aria-expanded="false">Integra com o meu CRM?<span class="faq-ic" aria-hidden="true"></span></button>
-        <div class="faq-a"><p><b>Sim.</b> API aberta e webhooks para entrada de leads, registro de resultados e atualização de status. Os principais CRMs do mercado conectam em menos de um dia, e nosso time apoia a configuração.</p></div>
+      <div class="faq-item">
+        <button class="faq-q" aria-expanded="false">O sistema realiza novas tentativas?<span class="fx"><svg><use href="#i-plus"/></svg></span></button>
+        <div class="faq-a"><p>Sim. É possível configurar regras de nova tentativa para contatos que não atenderam, definindo quando e quantas vezes tentar novamente.</p></div>
       </div>
-      <div class="faq-item reveal">
-        <button class="faq-q" aria-expanded="false">E a LGPD?<span class="faq-ic" aria-hidden="true"></span></button>
-        <div class="faq-a"><p>Tratamos dados com <b>base legal definida, criptografia, controle de consentimento e opt-out</b>. Você define janelas de contato e regras de descarte, e todos os acessos ficam registrados em auditoria.</p></div>
+      <div class="faq-item">
+        <button class="faq-q" aria-expanded="false">Posso controlar quantas chamadas acontecem simultaneamente?<span class="fx"><svg><use href="#i-plus"/></svg></span></button>
+        <div class="faq-a"><p>Sim. Você define o limite de chamadas simultâneas da operação de acordo com a capacidade da sua equipe.</p></div>
+      </div>
+      <div class="faq-item">
+        <button class="faq-q" aria-expanded="false">Consigo acompanhar a operação em tempo real?<span class="fx"><svg><use href="#i-plus"/></svg></span></button>
+        <div class="faq-a"><p>Sim. A plataforma centraliza informações sobre chamadas, SDRs, números e filas em um painel atualizado em tempo real.</p></div>
       </div>
     </div>
   </div>
 </section>
 
 <!-- ============ CTA FINAL ============ -->
-<section class="cta-final" id="cta">
-  <div class="cta-mq" aria-hidden="true">WHATSAPP · WHATSAPP · WHATSAPP · WHATSAPP · WHATSAPP · WHATSAPP ·</div>
-  <div class="wrap">
-    <div class="reveal">
-      <h2>Pare de discar.<br><span class="line2">Chame pelo WhatsApp.</span></h2>
-      <p>Agende uma demonstração de 15 minutos e veja o motor chamando a sua fila de leads, 100% pelo WhatsApp.</p>
-      <div class="cta-btns">
-        <a href="#" class="btn btn-primary" onclick="return false">Agendar demonstração gratuita
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
-        </a>
-        <a href="#" class="btn btn-ghost on-dark" onclick="return false">
-          <svg width="17" height="17" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 2a10 10 0 0 0-8.5 15.3L2 22l4.9-1.4A10 10 0 1 0 12 2zm5.5 14.2c-.24.66-1.36 1.26-1.9 1.3-.5.06-1.13.09-1.83-.12a16 16 0 0 1-1.66-.61c-2.93-1.26-4.84-4.2-4.99-4.4-.14-.19-1.2-1.6-1.2-3.05s.76-2.16 1.03-2.46c.27-.3.6-.37.8-.37h.57c.18 0 .43-.07.67.51.24.6.83 2.03.9 2.17.07.15.12.32.02.51-.1.2-.15.32-.3.5-.15.19-.31.42-.45.56-.15.15-.3.31-.14.6.17.3.76 1.25 1.63 2.02 1.12 1 2.07 1.3 2.36 1.45.3.15.46.13.63-.07.17-.2.73-.85.93-1.15.2-.3.39-.24.66-.14.27.1 1.7.8 2 .95.29.15.48.22.55.34.07.13.07.73-.18 1.38z"/></svg>
-          Falar no WhatsApp
-        </a>
+<section class="sec cta-final" id="demo">
+  <div class="container cta-grid">
+    <div data-reveal>
+      <span class="eyebrow">Comece agora</span>
+      <h2>Seu time foi contratado para vender.<br>Deixe a plataforma cuidar das tentativas.</h2>
+      <p class="sub">Transforme horas de discagem em mais tempo de conversa com potenciais clientes.</p>
+      <p class="cta-under"><svg><use href="#i-shield"/></svg>Descubra como automatizar a discagem da sua operação comercial.</p>
+    </div>
+    <div data-reveal style="--d:.12s">
+      <div class="form-card" id="formCard">
+        <h3>Solicitar demonstração</h3>
+        <p>Preencha e nossa equipe entra em contato com os próximos passos.</p>
+        <form id="demoForm" novalidate>
+          <div class="f-field fv">
+            <label for="f-nome">Nome</label>
+            <input id="f-nome" name="nome" type="text" placeholder="Seu nome completo" required>
+            <svg class="f-ok-ic" aria-hidden="true"><use href="#i-check"/></svg>
+            <span class="f-err" aria-live="polite"></span>
+          </div>
+          <div class="f-row">
+            <div class="f-field fv">
+              <label for="f-email">E-mail corporativo</label>
+              <input id="f-email" name="email" type="email" placeholder="voce@empresa.com.br" required>
+              <svg class="f-ok-ic" aria-hidden="true"><use href="#i-check"/></svg>
+              <span class="f-err" aria-live="polite"></span>
+            </div>
+            <div class="f-field">
+              <label for="f-empresa">Empresa</label>
+              <input id="f-empresa" name="empresa" type="text" placeholder="Nome da empresa">
+            </div>
+          </div>
+          <div class="f-field">
+            <label for="f-sdrs">Tamanho da equipe de vendas</label>
+            <select id="f-sdrs" name="sdres">
+              <option>1 a 5 SDRs</option>
+              <option selected>6 a 15 SDRs</option>
+              <option>16 a 40 SDRs</option>
+              <option>Mais de 40 SDRs</option>
+            </select>
+          </div>
+          <button class="btn btn--primary btn--lg" type="submit">Solicitar demonstração</button>
+        </form>
+        <div class="form-ok" role="status">
+          <span class="ok-ico"><svg><use href="#i-check"/></svg></span>
+          <h4>Solicitação recebida.</h4>
+          <p>Nosso time comercial vai entrar em contato para agendar sua demonstração.</p>
+        </div>
       </div>
-      <p class="cta-note">15 minutos · sem cartão · sem compromisso</p>
     </div>
   </div>
 </section>
+</main>
 
 <!-- ============ FOOTER ============ -->
-<footer>
-  <div class="wrap">
-    <div class="foot-grid">
-      <div class="foot-brand">
-        <a href="#" class="logo" aria-label="ZapLiga">
-          <span class="logo-ic" aria-hidden="true">
-            <svg width="19" height="19" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2a10 10 0 0 0-8.5 15.3L2 22l4.9-1.4A10 10 0 1 0 12 2zm5.5 14.2c-.24.66-1.36 1.26-1.9 1.3-.5.06-1.13.09-1.83-.12a16 16 0 0 1-1.66-.61c-2.93-1.26-4.84-4.2-4.99-4.4-.14-.19-1.2-1.6-1.2-3.05s.76-2.16 1.03-2.46c.27-.3.6-.37.8-.37h.57c.18 0 .43-.07.67.51.24.6.83 2.03.9 2.17.07.15.12.32.02.51-.1.2-.15.32-.3.5-.15.19-.31.42-.45.56-.15.15-.3.31-.14.6.17.3.76 1.25 1.63 2.02 1.12 1 2.07 1.3 2.36 1.45.3.15.46.13.63-.07.17-.2.73-.85.93-1.15.2-.3.39-.24.66-.14.27.1 1.7.8 2 .95.29.15.48.22.55.34.07.13.07.73-.18 1.38z"/></svg>
-          </span>
-          Zap<span>Liga</span>
+<footer class="site-footer">
+  <div class="container">
+    <div class="f-grid">
+      <div class="f-brand">
+        <a class="brand" href="#produto">
+          <span class="brand-mark"><svg><use href="#i-call"/></svg></span>
+          ZapLiga
         </a>
-        <p>O discador automático que liga para a sua fila de leads 100% pelo WhatsApp. Sem VoIP, sem linha telefônica, só conversa.</p>
+        <p>Infraestrutura de discagem automática pelo WhatsApp para equipes de SDR e vendas. Enquanto a plataforma tenta contato, seus SDRs ficam disponíveis para falar com quem atender.</p>
       </div>
-      <div class="foot-col">
-        <h4>Produto</h4>
-        <a href="#whatsapp">Por que WhatsApp</a>
-        <a href="#como-funciona">Como funciona</a>
-        <a href="#recursos">Recursos</a>
-        <a href="#painel">Painel</a>
+      <div class="f-col">
+        <h5>Produto</h5>
+        <ul>
+          <li><a href="#produto">Produto</a></li>
+          <li><a href="#recursos">Recursos</a></li>
+          <li><a href="#como-funciona">Como funciona</a></li>
+          <li><a href="#precos">Preços</a></li>
+          <li><a href="guia-pool-numeros.html">Guia do pool de números</a></li>
+          <li><a href="boas-praticas-anti-bloqueio.html">Boas práticas anti-bloqueio</a></li>
+        </ul>
       </div>
-      <div class="foot-col">
-        <h4>Conteúdo</h4>
-        <a href="#faq">FAQ</a>
-        <a href="guia-pool-numeros.html">Guia do pool de números</a>
-        <a href="boas-praticas-anti-bloqueio.html">Boas práticas anti-bloqueio</a>
-        <a href="central-de-ajuda.html">Central de ajuda</a>
+      <div class="f-col">
+        <h5>Empresa</h5>
+        <ul>
+          <li><a href="sobre.html">Sobre</a></li>
+          <li><a href="carreiras.html">Carreiras</a></li>
+          <li><a href="contato.html">Contato</a></li>
+          <li><a href="central-de-ajuda.html">Central de ajuda</a></li>
+          <li><a href="#faq">Perguntas frequentes</a></li>
+        </ul>
       </div>
-      <div class="foot-col">
-        <h4>Empresa</h4>
-        <a href="sobre.html">Sobre</a>
-        <a href="carreiras.html">Carreiras</a>
-        <a href="contato.html">Contato</a>
-      </div>
-      <div class="foot-col">
-        <h4>Legal</h4>
-        <a href="termos-de-uso.html">Termos de uso</a>
-        <a href="privacidade.html">Privacidade</a>
-        <a href="lgpd.html">LGPD</a>
+      <div class="f-col">
+        <h5>Legal</h5>
+        <ul>
+          <li><a href="termos-de-uso.html">Termos de uso</a></li>
+          <li><a href="privacidade.html">Privacidade</a></li>
+          <li><a href="lgpd.html">LGPD</a></li>
+        </ul>
       </div>
     </div>
-    <div class="foot-bottom">
-      <span>© 2026 ZapLiga Tecnologia Ltda. Feito para times que vivem de conversa.</span>
-      <span class="status"><span class="live-dot"></span> todos os sistemas operacionais</span>
+    <div class="f-bottom">
+      <span>© 2026 ZapLiga Tecnologia Ltda. Todos os direitos reservados.</span>
+      <span>WhatsApp é marca registrada da Meta Platforms, Inc.</span>
     </div>
   </div>
 </footer>
+
+<button class="to-top" id="toTop" aria-label="Voltar ao topo"><svg><use href="#i-arrow"/></svg></button>
 
 <script src="script.js"></script>
 </body>

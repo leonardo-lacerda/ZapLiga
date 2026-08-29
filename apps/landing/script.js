@@ -1,277 +1,533 @@
 (function(){
-"use strict";
-var reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  "use strict";
+  var RM = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
-/* ---------- nav ---------- */
-var nav = document.getElementById('nav');
-function onScroll(){ nav.classList.toggle('scrolled', window.scrollY > 10); }
-window.addEventListener('scroll', onScroll, {passive:true}); onScroll();
-
-var burger = document.getElementById('burger');
-var menu = document.getElementById('mobileMenu');
-burger.addEventListener('click', function(){
-  var open = menu.classList.toggle('open');
-  burger.classList.toggle('open', open);
-  burger.setAttribute('aria-expanded', open);
-});
-menu.querySelectorAll('a').forEach(function(a){
-  a.addEventListener('click', function(){
-    menu.classList.remove('open'); burger.classList.remove('open');
-    burger.setAttribute('aria-expanded','false');
+  /* ---------- Scroll: header + progress + to-top ---------- */
+  var header = document.getElementById("siteHeader");
+  var prog = document.getElementById("progress");
+  var toTop = document.getElementById("toTop");
+  function onScroll(){
+    var h = document.documentElement;
+    header.classList.toggle("scrolled", window.scrollY > 8);
+    var max = h.scrollHeight - h.clientHeight;
+    prog.style.width = (max > 0 ? (h.scrollTop / max) * 100 : 0) + "%";
+    toTop.classList.toggle("show", window.scrollY > 700);
+  }
+  window.addEventListener("scroll", onScroll, {passive:true});
+  onScroll();
+  toTop.addEventListener("click", function(){
+    window.scrollTo({top:0, behavior: RM ? "auto" : "smooth"});
   });
-});
 
-/* ---------- reveal ---------- */
-var io = new IntersectionObserver(function(entries){
-  entries.forEach(function(e){
-    if(e.isIntersecting){ e.target.classList.add('in'); io.unobserve(e.target); }
+  /* ---------- Mobile menu ---------- */
+  var burger = document.getElementById("burger");
+  var panel = document.getElementById("mobilePanel");
+  function closeMenu(){
+    panel.classList.remove("open");
+    burger.setAttribute("aria-expanded","false");
+    burger.firstElementChild.innerHTML = "<use href='#i-menu'></use>";
+  }
+  burger.addEventListener("click", function(){
+    var open = panel.classList.toggle("open");
+    burger.setAttribute("aria-expanded", String(open));
+    burger.firstElementChild.innerHTML = open ? "<use href='#i-x'></use>" : "<use href='#i-menu'></use>";
   });
-},{threshold:.15});
-document.querySelectorAll('.reveal').forEach(function(el){ io.observe(el); });
+  panel.querySelectorAll("a").forEach(function(a){ a.addEventListener("click", closeMenu); });
 
-/* ---------- scramble ---------- */
-function scramble(el){
-  var finalText = el.getAttribute('data-text') || el.textContent;
-  var chars = '01#/<>+*';
-  var frame = 0, total = Math.max(16, finalText.length * 3);
+  /* ---------- Formatting ---------- */
+  function fmt(n, dec){
+    return n.toLocaleString("pt-BR", {minimumFractionDigits: dec, maximumFractionDigits: dec});
+  }
+  function bump(el){ el.classList.remove("bump"); void el.offsetWidth; el.classList.add("bump"); }
 
-  /* lock the box to its final size so swapping glyphs never reflows the page */
-  var rect = el.getBoundingClientRect();
-  el.style.display = 'inline-block';
-  el.style.width = rect.width + 'px';
-  el.style.height = rect.height + 'px';
-  el.style.overflow = 'hidden';
-  el.style.whiteSpace = 'nowrap';
-  el.style.verticalAlign = 'top';
-
-  function step(){
-    frame++;
-    var out = '';
-    for(var i = 0; i < finalText.length; i++){
-      var revealAt = (i / finalText.length) * total * 0.7;
-      out += (frame > revealAt + 6) ? finalText[i] : chars[Math.floor(Math.random() * chars.length)];
+  /* ---------- Count-up ---------- */
+  function runCount(el){
+    var to = parseFloat(el.dataset.to) || 0;
+    var dec = parseInt(el.dataset.dec || "0", 10);
+    var suf = el.dataset.suf || "";
+    if (RM) { el.textContent = fmt(to, dec) + suf; return; }
+    var t0 = null, dur = 1200;
+    function tick(ts){
+      if (!t0) t0 = ts;
+      var p = Math.min((ts - t0) / dur, 1);
+      var e = 1 - Math.pow(1 - p, 3);
+      el.textContent = fmt(to * e, dec) + suf;
+      if (p < 1) requestAnimationFrame(tick);
     }
-    el.textContent = out;
-    if(frame < total + 8){ requestAnimationFrame(step); } else {
-      el.textContent = finalText;
-      el.style.width = '';
-      el.style.height = '';
-    }
+    requestAnimationFrame(tick);
   }
-  requestAnimationFrame(step);
-}
-if(!reduced){
-  document.querySelectorAll('.scramble').forEach(function(el, i){
-    setTimeout(function(){ scramble(el); }, 350 + i * 250);
-  });
-}
 
-/* ---------- counters ---------- */
-function countUp(el){
-  var to = parseFloat(el.getAttribute('data-to'));
-  var dec = parseInt(el.getAttribute('data-dec') || '0', 10);
-  var pre = el.getAttribute('data-pre') || '';
-  var suf = el.getAttribute('data-suf') || '';
-  function fmt(v){ return pre + v.toLocaleString('pt-BR',{minimumFractionDigits:dec, maximumFractionDigits:dec}) + suf; }
-  if(reduced){ el.textContent = fmt(to); return; }
-  var t0 = performance.now(), dur = 1500;
-  function tick(t){
-    var p = Math.min(1, (t - t0) / dur);
-    var e = 1 - Math.pow(1 - p, 3);
-    el.textContent = fmt(to * e);
-    if(p < 1) requestAnimationFrame(tick);
+  /* ---------- Reveal + counters ---------- */
+  var revealEls = document.querySelectorAll("[data-reveal]");
+  var countEls = document.querySelectorAll(".count");
+  if (RM || !("IntersectionObserver" in window)) {
+    revealEls.forEach(function(el){ el.classList.add("is-in"); });
+    countEls.forEach(runCount);
+  } else {
+    var counted = new WeakSet();
+    var io = new IntersectionObserver(function(entries){
+      entries.forEach(function(entry){
+        if (!entry.isIntersecting) return;
+        var el = entry.target;
+        el.classList.add("is-in");
+        if (el.classList.contains("count") && !counted.has(el)) { counted.add(el); runCount(el); }
+        el.querySelectorAll(".count").forEach(function(c){
+          if (!counted.has(c)) { counted.add(c); runCount(c); }
+        });
+        io.unobserve(el);
+      });
+    }, {threshold: 0.15, rootMargin: "0px 0px -40px 0px"});
+    revealEls.forEach(function(el){ io.observe(el); });
+    countEls.forEach(function(el){ io.observe(el); });
   }
-  requestAnimationFrame(tick);
-}
-var cio = new IntersectionObserver(function(entries){
-  entries.forEach(function(e){
-    if(e.isIntersecting){ countUp(e.target); cio.unobserve(e.target); }
-  });
-},{threshold:.5});
-document.querySelectorAll('.counter').forEach(function(el){ cio.observe(el); });
 
-/* ---------- marquee (duplica trilha) ---------- */
-var mq = document.getElementById('mqTrack');
-if(mq){ mq.innerHTML += mq.innerHTML; }
+  /* ---------- Active nav ---------- */
+  var navLinks = document.querySelectorAll("[data-navlink]");
+  var navSections = ["produto","como-funciona","recursos","para-quem","precos"]
+    .map(function(id){ return document.getElementById(id); }).filter(Boolean);
+  if ("IntersectionObserver" in window) {
+    var nio = new IntersectionObserver(function(entries){
+      entries.forEach(function(entry){
+        if (!entry.isIntersecting) return;
+        navLinks.forEach(function(l){
+          l.classList.toggle("active", l.dataset.navlink === entry.target.id);
+        });
+      });
+    }, {rootMargin: "-38% 0px -55% 0px"});
+    navSections.forEach(function(s){ nio.observe(s); });
+  }
 
-/* ---------- dashboard: gráfico com abas ---------- */
-var chartEl = document.getElementById('chartBars');
-var chartTotal = document.getElementById('chartTotal');
-var datasets = {
-  hoje: { labels:['9h','10h','11h','12h','13h','14h','15h','16h','17h','18h','19h','20h'],
-          values:[38,64,82,57,44,71,96,104,88,76,59,41] },
-  semana:{ labels:['Seg','Ter','Qua','Qui','Sex','Sáb','Dom'],
-          values:[312,428,396,511,468,244,96] }
-};
-function renderChart(key){
-  var d = datasets[key];
-  var max = Math.max.apply(null, d.values);
-  var total = d.values.reduce(function(a,b){ return a + b; }, 0);
-  chartTotal.textContent = total.toLocaleString('pt-BR') + (key === 'hoje' ? ' hoje' : ' na semana');
-  chartEl.innerHTML = d.values.map(function(v, i){
-    return '<div class="cb" title="' + d.labels[i] + ': ' + v + ' chamadas via WhatsApp">' +
-           '<div class="cb-bar' + (v === max ? ' peak' : '') + '" data-h="' + (v / max * 100).toFixed(1) + '"></div>' +
-           '<span class="cb-lab">' + d.labels[i] + '</span></div>';
-  }).join('');
-  requestAnimationFrame(function(){ requestAnimationFrame(function(){
-    chartEl.querySelectorAll('.cb-bar').forEach(function(b, i){
-      b.style.transitionDelay = (i * 40) + 'ms';
-      b.style.height = b.getAttribute('data-h') + '%';
+  /* ---------- Hero tilt ---------- */
+  var heroVisual = document.getElementById("heroVisual");
+  var heroWindow = document.getElementById("heroWindow");
+  if (!RM && heroVisual && heroWindow && window.matchMedia("(pointer:fine)").matches) {
+    var tiltOn = window.innerWidth > 940;
+    heroVisual.addEventListener("mousemove", function(e){
+      if (!tiltOn) return;
+      var r = heroVisual.getBoundingClientRect();
+      var px = (e.clientX - r.left) / r.width - .5;
+      var py = (e.clientY - r.top) / r.height - .5;
+      heroWindow.style.transform = "rotateX(" + (-py * 3.2) + "deg) rotateY(" + (px * 4) + "deg)";
     });
-  });});
-}
-document.querySelectorAll('.tab').forEach(function(tab){
-  tab.addEventListener('click', function(){
-    document.querySelectorAll('.tab').forEach(function(t){
-      t.classList.remove('active'); t.setAttribute('aria-selected','false');
-    });
-    tab.classList.add('active'); tab.setAttribute('aria-selected','true');
-    renderChart(tab.getAttribute('data-key'));
-  });
-});
-renderChart('hoje');
-
-/* ---------- console ao vivo ---------- */
-var listEl = document.getElementById('callList');
-var stripEl = document.getElementById('sdrStrip');
-var filaEl = document.getElementById('statFila');
-var simEl = document.getElementById('statSim');
-var atEl = document.getElementById('statAtend');
-var msgEl = document.getElementById('consoleMsg');
-var TICK = 900;
-var pad = function(n){ return String(n).padStart(2, '0'); };
-var fmtT = function(s){ return pad(Math.floor(s / 60)) + ':' + pad(s % 60); };
-var genPhone = function(){ return '+55 ' + pad(11 + Math.floor(Math.random() * 81)) + ' 9••••-' + (1000 + Math.floor(Math.random() * 9000)); };
-var retryTimes = ['09:40','10:15','11:05','14:32','15:20','16:45','17:10'];
-var WA_ICON = '<svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 2a10 10 0 0 0-8.5 15.3L2 22l4.9-1.4A10 10 0 1 0 12 2zm5.5 14.2c-.24.66-1.36 1.26-1.9 1.3-.5.06-1.13.09-1.83-.12a16 16 0 0 1-1.66-.61c-2.93-1.26-4.84-4.2-4.99-4.4-.14-.19-1.2-1.6-1.2-3.05s.76-2.16 1.03-2.46c.27-.3.6-.37.8-.37h.57c.18 0 .43-.07.67.51.24.6.83 2.03.9 2.17.07.15.12.32.02.51-.1.2-.15.32-.3.5-.15.19-.31.42-.45.56-.15.15-.3.31-.14.6.17.3.76 1.25 1.63 2.02 1.12 1 2.07 1.3 2.36 1.45.3.15.46.13.63-.07.17-.2.73-.85.93-1.15.2-.3.39-.24.66-.14.27.1 1.7.8 2 .95.29.15.48.22.55.34.07.13.07.73-.18 1.38z"/></svg>';
-var sdridades = ['Ana','Bruno','Carla','Diego','Elisa'].map(function(n){ return {name:n, state:'livre', timer:0}; });
-var calls = [], fila = 34, atendidas = 412, tickN = 0, nextId = 1;
-var msgs = [
-  '<b>chamadas via WhatsApp</b> · cooldown ok · janela aberta',
-  'pool: <b>12 números WhatsApp saudáveis</b> · 1 em cooldown',
-  'roteamento: <b>Ana</b> é a próxima SDR livre',
-  'nova chamada de WhatsApp agendada para <b>14:32</b>',
-  'distribuição equilibrada · nenhum SDR ocioso há 40s'
-];
-
-function rowHTML(c){
-  var t = fmtT(Math.round(c.age * TICK / 1000));
-  var phone = '<span class="cr-phone">' + WA_ICON + c.phone + '</span>';
-  var time = '<span class="cr-time">' + t + '</span>';
-  if(c.state === 'discando') return phone + '<span class="cr-chip c-disc"><i></i>discando</span>' + time;
-  if(c.state === 'chamando') return phone + '<span class="cr-chip c-ring"><i></i>chamando no WhatsApp…</span>' + time;
-  if(c.state === 'atendido') return phone + '<span class="cr-chip c-ok"><i></i>atendeu · rota p/ ' + c.sdr + '</span><span class="cr-time">⚡</span>';
-  if(c.state === 'conversa') return phone + '<span class="cr-chip c-live"><i></i>em conversa · ' + c.sdr + '</span>' + time;
-  return phone + '<span class="cr-chip c-warn"><i></i>sem resposta · retry ' + c.retry + '</span><span class="cr-time">·</span>';
-}
-function renderSdrs(){
-  stripEl.innerHTML = sdridades.map(function(s){
-    var cls = s.state === 'livre' ? 's-free' : (s.state === 'conectando' ? 's-conn' : 's-busy');
-    return '<span class="sdr ' + cls + '"><i></i>' + s.name + '</span>';
-  }).join('');
-}
-function renderStatic(){
-  var snap = [
-    {phone:'+55 11 9••••-4821', state:'chamando', age:8},
-    {phone:'+55 21 9••••-0347', state:'atendido', age:11, sdr:'Carla'},
-    {phone:'+55 31 9••••-7759', state:'discando', age:2},
-    {phone:'+55 41 9••••-1204', state:'falhou', age:14, retry:'14:32'},
-    {phone:'+55 11 9••••-6683', state:'conversa', age:31, sdr:'Bruno'}
-  ];
-  listEl.innerHTML = snap.map(function(c){
-    return '<li class="call-row">' + rowHTML({state:c.state, age:c.age, phone:c.phone, sdr:c.sdr, retry:c.retry}) + '</li>';
-  }).join('');
-  sdridades[0].state = 'livre'; sdridades[1].state = 'em conversa'; sdridades[2].state = 'conectando'; sdridades[3].state = 'livre'; sdridades[4].state = 'em conversa';
-  renderSdrs();
-}
-function tick(){
-  if(document.hidden) return;
-  tickN++;
-  var active = calls.filter(function(c){ return c.state === 'discando' || c.state === 'chamando'; }).length;
-  if(calls.length < 6 && active < 5 && Math.random() < 0.6){
-    calls.push({id:nextId++, phone:genPhone(), state:'discando', age:0, next:2 + Math.floor(Math.random() * 2), sdr:null, retry:null, el:null, gone:false});
+    heroVisual.addEventListener("mouseleave", function(){ heroWindow.style.transform = ""; });
+    window.addEventListener("resize", function(){ tiltOn = window.innerWidth > 940; }, {passive:true});
   }
-  calls.forEach(function(c){
-    c.age++;
-    if(c.state === 'discando' && c.age >= c.next){
-      c.state = 'chamando'; c.next = c.age + 5 + Math.floor(Math.random() * 7);
-    } else if(c.state === 'chamando' && c.age >= c.next){
-      var free = null;
-      for(var i = 0; i < sdridades.length; i++){ if(sdridades[i].state === 'livre'){ free = sdridades[i]; break; } }
-      if(Math.random() < 0.6 && free){
-        c.state = 'atendido'; c.sdr = free.name; free.state = 'conectando';
-        atendidas++; c.next = c.age + 2;
-      } else {
-        c.state = 'falhou'; c.retry = retryTimes[Math.floor(Math.random() * retryTimes.length)]; c.next = c.age + 3;
+
+  /* ---------- Spotlight (cursor) ---------- */
+  if (!RM && window.matchMedia("(pointer:fine)").matches) {
+    document.querySelectorAll(".spot").forEach(function(el){
+      el.addEventListener("mousemove", function(e){
+        var r = el.getBoundingClientRect();
+        el.style.setProperty("--mx", (e.clientX - r.left) + "px");
+        el.style.setProperty("--my", (e.clientY - r.top) + "px");
+      });
+    });
+  }
+
+  /* ---------- Magnetic CTAs ---------- */
+  if (!RM && window.matchMedia("(pointer:fine)").matches) {
+    document.querySelectorAll(".btn--lg").forEach(function(btn){
+      btn.addEventListener("mousemove", function(e){
+        var r = btn.getBoundingClientRect();
+        var mx = (e.clientX - r.left - r.width / 2) / r.width;
+        var my = (e.clientY - r.top - r.height / 2) / r.height;
+        btn.style.transform = "translate(" + (mx * 8) + "px," + (my * 6) + "px)";
+      });
+      btn.addEventListener("mouseleave", function(){ btn.style.transform = ""; });
+    });
+  }
+
+  /* ---------- Hero clock ---------- */
+  var clockEl = document.getElementById("heroClock");
+  function updClock(){
+    var d = new Date();
+    var days = ["dom","seg","ter","qua","qui","sex","sáb"];
+    var hh = String(d.getHours()).padStart(2,"0");
+    var mm = String(d.getMinutes()).padStart(2,"0");
+    clockEl.textContent = days[d.getDay()] + " · " + hh + ":" + mm;
+  }
+  updClock();
+  setInterval(updClock, 30000);
+
+  /* ---------- Hero live simulation ---------- */
+  var LEAD_STATES = [["Ligando","call"],["Conectado","ok"],["Na fila","queue"],["Nova tentativa","retry"]];
+  var NUM_STATES  = [["Disponível","ok"],["Em chamada","call"],["Cooldown","cool"]];
+  var leadEls = document.querySelectorAll(".js-lead");
+  var numEls = document.querySelectorAll(".js-num");
+  var leadIdx = [], numIdx = [];
+  leadEls.forEach(function(el){ leadIdx.push(parseInt(el.dataset.off,10)); });
+  numEls.forEach(function(el){ numIdx.push(parseInt(el.dataset.off,10)); });
+  function setLeadPill(el, state){
+    el.className = "pill pill--" + LEAD_STATES[state][1] + " js-lead";
+    el.dataset.off = state;
+    el.textContent = LEAD_STATES[state][0];
+  }
+  function setNumPill(el, state){
+    el.className = "pill pill--" + NUM_STATES[state][1] + " js-num";
+    el.dataset.off = state;
+    el.textContent = NUM_STATES[state][0];
+  }
+  function advancePills(){
+    leadEls.forEach(function(el, i){
+      leadIdx[i] = (leadIdx[i] + 1) % LEAD_STATES.length;
+      setLeadPill(el, leadIdx[i]);
+    });
+    numEls.forEach(function(el, i){
+      numIdx[i] = (numIdx[i] + 1) % NUM_STATES.length;
+      setNumPill(el, numIdx[i]);
+    });
+  }
+  var bursting = false;
+  var tentativas = 846, atendHero = 137, callsHero = 12;
+  var tentEl = document.getElementById("heroTentativas");
+  var atendEl = document.getElementById("heroAtend");
+  var callsEl = document.getElementById("heroCalls");
+  var chipCalls = document.getElementById("chipCalls");
+
+  if (!RM) {
+    setInterval(function(){
+      if (bursting) return;
+      advancePills();
+    }, 3200);
+    setInterval(function(){
+      if (bursting) return;
+      tentativas += 1 + Math.floor(Math.random() * 3);
+      tentEl.textContent = fmt(tentativas, 0);
+      bump(tentEl);
+      if (Math.random() < .3) {
+        atendHero += 1;
+        atendEl.textContent = fmt(atendHero, 0);
+        bump(atendEl);
       }
-    } else if(c.state === 'atendido' && c.age >= c.next){
-      c.state = 'conversa'; c.next = c.age + 4 + Math.floor(Math.random() * 4);
-      var s = sdridades.find(function(x){ return x.name === c.sdr; });
-      if(s){ s.state = 'em conversa'; s.timer = c.next - c.age; }
-    } else if(c.state === 'conversa'){
-      var sd = sdridades.find(function(x){ return x.name === c.sdr; });
-      if(sd){ sd.timer--; if(sd.timer <= 0) sd.state = 'livre'; }
-      if(c.age >= c.next) c.gone = true;
-    } else if(c.state === 'falhou' && c.age >= c.next){
-      c.gone = true;
-    }
-  });
-  calls.forEach(function(c){
-    if(!c.el){
-      c.el = document.createElement('li');
-      c.el.className = 'call-row';
-      listEl.appendChild(c.el);
-    }
-    c.el.innerHTML = rowHTML(c);
-    if(c.gone) c.el.classList.add('out');
-  });
-  calls = calls.filter(function(c){
-    if(c.gone){ var el = c.el; setTimeout(function(){ if(el && el.parentNode) el.parentNode.removeChild(el); }, 380); return false; }
-    return true;
-  });
-  fila = Math.max(26, Math.min(46, fila + Math.floor(Math.random() * 5) - 2));
-  var sim = calls.filter(function(c){ return ['discando','chamando','atendido','conversa'].indexOf(c.state) > -1; }).length;
-  filaEl.textContent = fila;
-  simEl.textContent = sim;
-  atEl.textContent = atendidas;
-  renderSdrs();
-  if(tickN % 5 === 0){
-    msgEl.innerHTML = 'motor ▸ ' + msgs[Math.floor(tickN / 5) % msgs.length];
+      if (Math.random() < .4) {
+        callsHero = Math.max(6, Math.min(20, callsHero + (Math.random() < .5 ? -1 : 1)));
+        callsEl.textContent = fmt(callsHero, 0);
+        chipCalls.textContent = callsHero + " chamadas em andamento";
+      }
+    }, 4200);
   }
-}
-if(reduced){
-  renderStatic();
-} else {
-  tick();
-  setInterval(tick, TICK);
-}
 
-/* ---------- FAQ ---------- */
-document.querySelectorAll('.faq-q').forEach(function(btn){
-  btn.addEventListener('click', function(){
-    var item = btn.parentElement;
-    var panel = item.querySelector('.faq-a');
-    var open = item.classList.toggle('open');
-    btn.setAttribute('aria-expanded', open);
-    panel.style.maxHeight = open ? panel.scrollHeight + 'px' : '0px';
-  });
-});
-var firstFaq = document.querySelector('.faq-item');
-if(firstFaq){
-  firstFaq.classList.add('open');
-  firstFaq.querySelector('.faq-q').setAttribute('aria-expanded','true');
-  var fp = firstFaq.querySelector('.faq-a');
-  requestAnimationFrame(function(){ fp.style.maxHeight = fp.scrollHeight + 'px'; });
-}
+  /* ---------- Burst: simular discagem ---------- */
+  var simBtn = document.getElementById("simBtn");
+  if (simBtn && !RM) {
+    simBtn.addEventListener("click", function(){
+      if (bursting) return;
+      bursting = true;
+      simBtn.classList.add("on");
+      var burstTicks = 0;
+      var burstInt = setInterval(function(){
+        burstTicks++;
+        advancePills();
+        tentativas += 2 + Math.floor(Math.random() * 5);
+        tentEl.textContent = fmt(tentativas, 0);
+        bump(tentEl);
+        if (burstTicks % 2 === 0) {
+          atendHero += 1;
+          atendEl.textContent = fmt(atendHero, 0);
+          bump(atendEl);
+          showToast();
+        }
+        callsHero = Math.max(6, Math.min(20, callsHero + (Math.random() < .5 ? -1 : 1)));
+        callsEl.textContent = fmt(callsHero, 0);
+        chipCalls.textContent = callsHero + " chamadas em andamento";
+      }, 500);
+      setTimeout(function(){
+        clearInterval(burstInt);
+        bursting = false;
+        simBtn.classList.remove("on");
+      }, 6500);
+    });
+  } else if (simBtn) {
+    simBtn.style.display = "none";
+  }
 
-/* ---------- nav ativa dos recursos ---------- */
-var resLinks = Array.prototype.slice.call(document.querySelectorAll('.res-link'));
-var secIO = new IntersectionObserver(function(entries){
-  entries.forEach(function(e){
-    if(e.isIntersecting){
-      resLinks.forEach(function(l){ l.classList.toggle('active', l.getAttribute('href') === '#' + e.target.id); });
+  /* ---------- Hero toast ---------- */
+  var TOASTS = [
+    ["Carlos Silva atendeu","Conectado a Ana Prado · agora"],
+    ["Nova tentativa agendada","Marcos Lima · em 30 minutos"],
+    ["Fernanda Souza conectada","Bruno Costa assumiu a chamada"],
+    ["+3 leads na fila","Importação automática concluída"],
+    ["Número liberado","+55 31 ****-7720 disponível novamente"],
+    ["Ana Santos atendeu","Chamada direcionada a Júlia Mendes"]
+  ];
+  var toast = document.getElementById("heroToast");
+  var toastT = document.getElementById("toastTitle");
+  var toastS = document.getElementById("toastSub");
+  var ti = 0;
+  function showToast(){
+    if (!toast || RM) return;
+    var t = TOASTS[ti % TOASTS.length]; ti++;
+    toastT.textContent = t[0];
+    toastS.textContent = t[1];
+    toast.classList.remove("show");
+    void toast.offsetWidth;
+    toast.classList.add("show");
+  }
+  if (!RM && toast) {
+    setTimeout(showToast, 1800);
+    setInterval(function(){ if (!bursting) showToast(); }, 8000);
+  }
+
+  /* ---------- Cooldown countdown ---------- */
+  var cd = document.getElementById("cooldownTimer");
+  var cdSec = 84;
+  if (cd && !RM) {
+    setInterval(function(){
+      cdSec--;
+      if (cdSec < 0) cdSec = 120;
+      var m = String(Math.floor(cdSec / 60)).padStart(2,"0");
+      var s = String(cdSec % 60).padStart(2,"0");
+      cd.textContent = m + ":" + s;
+    }, 1000);
+  }
+
+  /* ---------- Calculadora ---------- */
+  var cRange = document.getElementById("calcRange");
+  var cAtt = document.getElementById("calcAtt");
+  var cMin = document.getElementById("calcMin");
+  var cOut = document.getElementById("calcOut");
+  var cHours = document.getElementById("calcHours");
+  var cTents = document.getElementById("calcTents");
+  var cDays = document.getElementById("calcDays");
+  var cBar = document.getElementById("calcBar");
+  function calcValues(n, att, min){
+    var hours = n * att * min * 22 / 60;
+    return { hours: Math.round(hours), tents: n * att * 22, days: Math.round(hours / 8) };
+  }
+  function paintCalc(animate){
+    var n = parseInt(cRange.value, 10);
+    var att = parseInt(cAtt.value, 10);
+    var min = parseFloat(cMin.value);
+    var v = calcValues(n, att, min);
+    cOut.textContent = n + " SDRs";
+    cTents.textContent = fmt(v.tents, 0);
+    cDays.textContent = fmt(v.days, 0);
+    cBar.style.width = ((n - 2) / 78 * 100) + "%";
+    cRange.style.setProperty("--fill", ((n - 2) / 78 * 100) + "%");
+    if (!animate || RM) { cHours.textContent = fmt(v.hours, 0); return; }
+    var from = parseInt(cHours.textContent.replace(/\D/g,""), 10) || 0;
+    var t0 = null, dur = 420;
+    function step(ts){
+      if (!t0) t0 = ts;
+      var p = Math.min((ts - t0) / dur, 1);
+      cHours.textContent = fmt(Math.round(from + (v.hours - from) * p), 0);
+      if (p < 1) requestAnimationFrame(step);
     }
+    requestAnimationFrame(step);
+    bump(cHours);
+  }
+  if (cRange) {
+    paintCalc(false);
+    cRange.addEventListener("input", function(){ paintCalc(true); });
+    cAtt.addEventListener("change", function(){ paintCalc(true); });
+    cMin.addEventListener("change", function(){ paintCalc(true); });
+  }
+
+  /* ---------- Steps interativos ---------- */
+  var stepEls = Array.prototype.slice.call(document.querySelectorAll(".step"));
+  var stepsHint = document.getElementById("stepsHint");
+  var sIdx = 0, sAuto = !RM;
+  function actStep(i){
+    sIdx = i;
+    stepEls.forEach(function(s, j){
+      s.classList.toggle("active", j === i);
+      if (j === i) {
+        var p = s.querySelector(".step-prog");
+        p.style.animation = "none";
+        void p.offsetWidth;
+        p.style.animation = "";
+      }
+    });
+  }
+  stepEls.forEach(function(s, i){
+    s.addEventListener("click", function(){
+      if (sAuto) { sAuto = false; stepsHint.textContent = "▸ Modo manual · clique para navegar entre os passos"; }
+      actStep(i);
+    });
   });
-},{rootMargin:'-30% 0px -60% 0px'});
-document.querySelectorAll('.feat-block').forEach(function(b){ secIO.observe(b); });
+  actStep(0);
+  if (!RM) {
+    setInterval(function(){
+      if (!sAuto) return;
+      actStep((sIdx + 1) % stepEls.length);
+    }, 4000);
+  } else {
+    stepsHint.textContent = "▸ Clique em um passo para destacar";
+  }
+
+  /* ---------- Foco toggle ---------- */
+  var focoSeg = document.getElementById("focoSeg");
+  var fmAb = document.getElementById("fmAb");
+  var fmBb = document.getElementById("fmBb");
+  var fmAp = document.getElementById("fmAp");
+  var fmBp = document.getElementById("fmBp");
+  if (focoSeg) {
+    focoSeg.addEventListener("click", function(e){
+      var b = e.target.closest("button");
+      if (!b) return;
+      focoSeg.querySelectorAll("button").forEach(function(x){ x.classList.remove("on"); });
+      b.classList.add("on");
+      var disc = b.dataset.m === "disc";
+      fmAb.style.transform = "scaleX(" + (disc ? .14 : .82) + ")";
+      fmBb.style.transform = "scaleX(" + (disc ? .78 : .18) + ")";
+      fmAp.textContent = disc ? "14%" : "82%";
+      fmBp.textContent = disc ? "78%" : "18%";
+    });
+  }
+
+  /* ---------- Dashboard tabs ---------- */
+  var dashTabs = Array.prototype.slice.call(document.querySelectorAll(".dash-tab"));
+  var curPane = "geral";
+  function setPane(name){
+    curPane = name;
+    dashTabs.forEach(function(t){
+      var on = t.dataset.pane === name;
+      t.classList.toggle("on", on);
+      t.setAttribute("aria-selected", String(on));
+    });
+    document.querySelectorAll(".dash-pane").forEach(function(p){
+      p.classList.toggle("active", p.id === "pane-" + name);
+    });
+  }
+  dashTabs.forEach(function(t, idx){
+    t.addEventListener("click", function(){ setPane(t.dataset.pane); });
+    t.addEventListener("keydown", function(e){
+      if (e.key === "ArrowRight" || e.key === "ArrowLeft") {
+        e.preventDefault();
+        var ni = (idx + (e.key === "ArrowRight" ? 1 : -1) + dashTabs.length) % dashTabs.length;
+        dashTabs[ni].focus();
+        setPane(dashTabs[ni].dataset.pane);
+      }
+    });
+  });
+
+  /* ---------- Dashboard live ---------- */
+  var dashWin = document.getElementById("dashWindow");
+  var kpiTent = document.getElementById("kpiTent");
+  var kpiAtend = document.getElementById("kpiAtend");
+  var feedList = document.getElementById("feedList");
+  var sdrStatus = document.querySelectorAll(".js-sdrst");
+  var FEED_POOL = [
+    ["Carlos Silva atendeu — conectado a Ana Prado","ok","Conectado"],
+    ["Tentativa sem resposta — Fernanda Souza","queue","Na fila"],
+    ["Nova tentativa agendada — Marcos Lima · 15 min","retry","Agendada"],
+    ["Número +55 11 ****-4291 liberado do cooldown","ok","Disponível"],
+    ["Chamada concluída — SDR Bruno Costa · 4:12","call","Concluída"],
+    ["+2 leads adicionados à fila Outbound-SP","queue","Fila"],
+    ["Júlia Mendes disponível para conexão","ok","Disponível"],
+    ["Ricardo Sá entrou em chamada","call","Em chamada"],
+    ["Número +55 21 ****-8821 iniciou cooldown","cool","Cooldown"],
+    ["Chamada conectada — SDR Larissa Teixeira","ok","Conectado"]
+  ];
+  var feedI = 0, tickCount = 0;
+  function nowHM(){
+    var d = new Date();
+    return String(d.getHours()).padStart(2,"0") + ":" + String(d.getMinutes()).padStart(2,"0");
+  }
+  function addFeed(){
+    var item = FEED_POOL[feedI % FEED_POOL.length]; feedI++;
+    var li = document.createElement("li");
+    li.className = "feed-item";
+    li.innerHTML = '<span class="feed-time">' + nowHM() + '</span><span class="feed-txt">' + item[0] + '</span><span class="pill pill--' + item[1] + '">' + item[2] + '</span>';
+    feedList.insertBefore(li, feedList.firstChild);
+    while (feedList.children.length > 6) feedList.removeChild(feedList.lastChild);
+  }
+  function startDashLive(){
+    if (RM) return;
+    var tentV = 1284, atendV = 312;
+    setInterval(function(){
+      tentV += 1 + Math.floor(Math.random() * 3);
+      kpiTent.textContent = fmt(tentV, 0);
+      bump(kpiTent);
+      tickCount++;
+      if (tickCount % 3 === 0) {
+        atendV += 1;
+        kpiAtend.textContent = fmt(atendV, 0);
+        bump(kpiAtend);
+      }
+      if (curPane === "geral") addFeed();
+    }, 3800);
+    setInterval(function(){
+      sdrStatus.forEach(function(el){
+        var busy = el.classList.contains("pill--call");
+        el.className = "pill " + (busy ? "pill--ok" : "pill--call") + " js-sdrst";
+        el.textContent = busy ? "Disponível" : "Em chamada";
+      });
+    }, 7400);
+  }
+  if (dashWin && "IntersectionObserver" in window) {
+    var dio = new IntersectionObserver(function(entries){
+      entries.forEach(function(entry){
+        if (entry.isIntersecting) {
+          dio.disconnect();
+          setTimeout(startDashLive, 1600);
+        }
+      });
+    }, {threshold: .2});
+    dio.observe(dashWin);
+  }
+
+  /* ---------- Linhas expansíveis (números) ---------- */
+  document.querySelectorAll(".x-row").forEach(function(row){
+    function toggle(){
+      var detail = row.nextElementSibling;
+      var open = detail.classList.toggle("open");
+      row.classList.toggle("open", open);
+      row.setAttribute("aria-expanded", String(open));
+    }
+    row.addEventListener("click", toggle);
+    row.addEventListener("keydown", function(e){
+      if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggle(); }
+    });
+  });
+
+  /* ---------- FAQ ---------- */
+  document.querySelectorAll(".faq-item").forEach(function(item){
+    var q = item.querySelector(".faq-q");
+    var a = item.querySelector(".faq-a");
+    q.addEventListener("click", function(){
+      var open = item.classList.contains("open");
+      document.querySelectorAll(".faq-item.open").forEach(function(o){
+        o.classList.remove("open");
+        o.querySelector(".faq-a").style.maxHeight = "0px";
+        o.querySelector(".faq-q").setAttribute("aria-expanded","false");
+      });
+      if (!open) {
+        item.classList.add("open");
+        a.style.maxHeight = a.scrollHeight + "px";
+        q.setAttribute("aria-expanded","true");
+      }
+    });
+  });
+
+  /* ---------- Form + validação ---------- */
+  var form = document.getElementById("demoForm");
+  var formCard = document.getElementById("formCard");
+  function validateField(input, showMsg){
+    var field = input.closest(".f-field");
+    var err = field.querySelector(".f-err");
+    var val = input.value.trim();
+    var ok = true;
+    if (input.id === "f-nome") ok = val.length >= 2;
+    if (input.id === "f-email") ok = val.length >= 5 && val.indexOf("@") > 0 && val.indexOf(".") > val.indexOf("@");
+    field.classList.toggle("valid", ok && val.length > 0);
+    field.classList.toggle("invalid", !ok && (showMsg || val.length > 0));
+    if (err) err.textContent = (!ok && (showMsg || val.length > 0)) ? (input.id === "f-nome" ? "Informe seu nome." : "Informe um e-mail válido.") : "";
+    return ok;
+  }
+  form.querySelectorAll(".fv input").forEach(function(inp){
+    inp.addEventListener("blur", function(){ validateField(inp, false); });
+    inp.addEventListener("input", function(){
+      if (inp.closest(".f-field").classList.contains("invalid")) validateField(inp, false);
+      else validateField(inp, false);
+    });
+  });
+  form.addEventListener("submit", function(e){
+    e.preventDefault();
+    var okNome = validateField(document.getElementById("f-nome"), true);
+    var okEmail = validateField(document.getElementById("f-email"), true);
+    if (!okNome) { document.getElementById("f-nome").focus(); return; }
+    if (!okEmail) { document.getElementById("f-email").focus(); return; }
+    formCard.classList.add("sent");
+  });
 })();

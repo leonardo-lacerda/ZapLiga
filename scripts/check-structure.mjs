@@ -16,7 +16,7 @@ const expectedSourceEntries = {
   'apps/api/src': new Set(['app.module.ts', 'main.ts', 'database', 'infrastructure', 'modules', 'scripts']),
   'apps/web/src': new Set(['main.tsx', 'vite-env.d.ts', 'app', 'audio', 'components', 'features', 'services', 'shared', 'styles', 'types']),
   'apps/landing': new Set([
-    'index.html', 'script.js', 'pages.js', 'styles.css',
+    'index.html', 'script.js', 'pages.js', 'styles.css', 'home.css',
     'boas-praticas-anti-bloqueio.html', 'carreiras.html', 'central-de-ajuda.html',
     'contato.html', 'guia-pool-numeros.html', 'lgpd.html', 'privacidade.html',
     'sobre.html', 'termos-de-uso.html',
