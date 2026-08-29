@@ -3,7 +3,6 @@ import { randomUUID } from 'node:crypto';
 import { DatabaseService } from '../../database/database.service';
 import { AuthGuard, CurrentTenant, CurrentUser, Roles, RolesGuard, TenantMembershipGuard } from '../auth/auth.guards';
 import { AuditService } from '../audit/audit.service';
-import { legacyTenantId } from '../../database/tenant-context';
 import { WaxumClient } from '../../infrastructure/waxum/waxum.client';
 import { normalizeWaxumStatus } from '../../infrastructure/waxum/waxum-status';
 import { CreateNumberDto } from './dto/create-number.dto';
@@ -18,14 +17,14 @@ export class NumbersController {
 
   constructor(private readonly db: DatabaseService, private readonly waxum: WaxumClient, private readonly audit: AuditService) {}
 
-  @Roles('super_admin')
+  @Roles('leader', 'super_admin')
   @Post(['/api/numbers', '/api/tenants/:tenantId/numbers'])
   async create(@Body() body: CreateNumberDto, @CurrentTenant() tenantId: string, @CurrentUser() user: any) {
     const label = String(body.label ?? '').trim();
     if (!label) throw new BadRequestException('label é obrigatório');
     try {
       const session = await this.waxum.createSession(label);
-      const result = await this.db.query(`INSERT INTO whatsapp_numbers (id,tenant_id,label,phone,waxum_session_id,max_concurrent_calls,cooldown_seconds) VALUES ($1,NULL,$2,$3,$4,$5,$6) RETURNING *`, [randomUUID(), label, digits(body.phone) || null, session.id, Number(body.maxConcurrentCalls ?? 1), Number(body.cooldownSeconds ?? 60)]);
+      const result = await this.db.query(`INSERT INTO whatsapp_numbers (id,tenant_id,label,phone,waxum_session_id,max_concurrent_calls,cooldown_seconds) VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING *`, [randomUUID(), tenantId, label, digits(body.phone) || null, session.id, Number(body.maxConcurrentCalls ?? 1), Number(body.cooldownSeconds ?? 60)]);
       await this.audit.record({ actorUserId: user.id, tenantId, action: 'number.created', entityType: 'whatsapp_number', entityId: result.rows[0].id });
       return result.rows[0];
     } catch (error) { throw new BadRequestException(`Não foi possível criar a sessão Waxum: ${String(error)}`); }
@@ -36,10 +35,10 @@ export class NumbersController {
   list(@Query('limit') limit = '100', @Query('offset') offset = '0', @CurrentTenant() tenantId: string) {
     const safeLimit = Math.min(200, Math.max(1, Number(limit) || 100));
     const safeOffset = Math.max(0, Number(offset) || 0);
-    return this.db.query("SELECT * FROM whatsapp_numbers WHERE status <> 'removed' ORDER BY created_at DESC LIMIT $1 OFFSET $2", [safeLimit, safeOffset]).then((result) => result.rows);
+    return this.db.query("SELECT * FROM whatsapp_numbers WHERE tenant_id = $1 AND status <> 'removed' ORDER BY created_at DESC LIMIT $2 OFFSET $3", [tenantId, safeLimit, safeOffset]).then((result) => result.rows);
   }
 
-  @Roles('super_admin')
+  @Roles('leader', 'super_admin')
   @Delete(['/api/numbers/:id', '/api/tenants/:tenantId/numbers/:id'])
   async remove(@Param('id') id: string, @CurrentTenant() tenantId: string, @CurrentUser() user: any) {
     const number = await this.find(id, tenantId);
@@ -53,12 +52,12 @@ export class NumbersController {
       if (statusCode !== 404) throw new BadRequestException(`Nao foi possivel remover a sessao Waxum: ${String(error)}`);
     }
 
-    await this.db.query("UPDATE whatsapp_numbers SET status = 'removed' WHERE id = $1", [id]);
+    await this.db.query("UPDATE whatsapp_numbers SET status = 'removed' WHERE id = $1 AND tenant_id = $2", [id, tenantId]);
     await this.audit.record({ actorUserId: user.id, tenantId, action: 'number.removed', entityType: 'whatsapp_number', entityId: id });
     return { ok: true, id, archived: true };
   }
 
-  @Roles('super_admin')
+  @Roles('leader', 'super_admin')
   @Get(['/api/numbers/:id/qr', '/api/tenants/:tenantId/numbers/:id/qr'])
   async qr(@Param('id') id: string, @CurrentTenant() tenantId: string) {
     const requestKey = `${tenantId}:${id}`;
@@ -69,7 +68,7 @@ export class NumbersController {
     return request;
   }
 
-  @Roles('super_admin')
+  @Roles('leader', 'super_admin')
   @Post(['/api/numbers/:id/reconnect', '/api/tenants/:tenantId/numbers/:id/reconnect'])
   async reconnect(@Param('id') id: string, @CurrentTenant() tenantId: string) {
     let number = await this.find(id, tenantId);
@@ -81,17 +80,17 @@ export class NumbersController {
     }
   }
 
-  @Roles('super_admin')
+  @Roles('leader', 'super_admin')
   @Patch(['/api/numbers/:id/settings', '/api/tenants/:tenantId/numbers/:id/settings'])
   async settings(@Param('id') id: string, @Body() body: UpdateNumberDto, @CurrentTenant() tenantId: string, @CurrentUser() user: any) {
-    const result = await this.db.query(`UPDATE whatsapp_numbers SET max_concurrent_calls = COALESCE($1,max_concurrent_calls), cooldown_seconds = COALESCE($2,cooldown_seconds), label = COALESCE($3,label) WHERE id = $4 AND status <> 'removed' RETURNING *`, [body.maxConcurrentCalls == null ? null : Number(body.maxConcurrentCalls), body.cooldownSeconds == null ? null : Number(body.cooldownSeconds), body.label ? String(body.label) : null, id]);
+    const result = await this.db.query(`UPDATE whatsapp_numbers SET max_concurrent_calls = COALESCE($1,max_concurrent_calls), cooldown_seconds = COALESCE($2,cooldown_seconds), label = COALESCE($3,label) WHERE id = $4 AND tenant_id = $5 AND status <> 'removed' RETURNING *`, [body.maxConcurrentCalls == null ? null : Number(body.maxConcurrentCalls), body.cooldownSeconds == null ? null : Number(body.cooldownSeconds), body.label ? String(body.label) : null, id, tenantId]);
     if (!result.rows[0]) throw new NotFoundException('Número não encontrado');
     await this.audit.record({ actorUserId: user.id, tenantId, action: 'number.settings_changed', entityType: 'whatsapp_number', entityId: id });
     return result.rows[0];
   }
 
-  private async find(id: string, tenantId = legacyTenantId()) {
-    const result = await this.db.query('SELECT * FROM whatsapp_numbers WHERE id = $1', [id]);
+  private async find(id: string, tenantId: string) {
+    const result = await this.db.query('SELECT * FROM whatsapp_numbers WHERE id = $1 AND tenant_id = $2', [id, tenantId]);
     if (!result.rows[0]) throw new NotFoundException('Número não encontrado');
     return result.rows[0];
   }

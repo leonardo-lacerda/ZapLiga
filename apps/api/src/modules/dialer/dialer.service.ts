@@ -233,7 +233,7 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
       `, [tenantId]),
       // Manual calls intentionally bypass the number cooldown for the MVP.
       // Redis still enforces the global and per-number concurrent limits.
-      this.db.query(`SELECT * FROM whatsapp_numbers WHERE status IN ('connected', 'online', 'ready', 'authenticated') AND (flagged_until IS NULL OR flagged_until <= now()) ORDER BY last_call_ended_at NULLS FIRST, last_call_ended_at ASC`),
+      this.db.query(`SELECT * FROM whatsapp_numbers WHERE tenant_id = $1 AND status IN ('connected', 'online', 'ready', 'authenticated') AND (flagged_until IS NULL OR flagged_until <= now()) ORDER BY last_call_ended_at NULLS FIRST, last_call_ended_at ASC`, [tenantId]),
       this.db.query(`SELECT l.* FROM leads l JOIN lead_folders f ON f.tenant_id = l.tenant_id AND f.id = l.folder_id WHERE l.tenant_id = $1 AND l.id = $2 AND f.is_active = true AND l.do_not_call = false AND l.status IN ('queued', 'retry_wait') AND l.attempts < $3`, [tenantId, leadId, settings.max_attempts_per_lead]),
     ]);
     const sdr = sdrs.rows.find((row: any) => this.gateway.isConnected(row.id));
@@ -305,7 +305,7 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
           )
         ORDER BY s.last_assigned_at NULLS FIRST, s.last_assigned_at ASC
       `, [tenantId, sdrUserId ?? null]),
-      this.db.query(`SELECT * FROM whatsapp_numbers WHERE status IN ('connected', 'online', 'ready', 'authenticated') AND (flagged_until IS NULL OR flagged_until <= now()) ORDER BY last_call_ended_at NULLS FIRST, last_call_ended_at ASC`),
+      this.db.query(`SELECT * FROM whatsapp_numbers WHERE tenant_id = $1 AND status IN ('connected', 'online', 'ready', 'authenticated') AND (flagged_until IS NULL OR flagged_until <= now()) ORDER BY last_call_ended_at NULLS FIRST, last_call_ended_at ASC`, [tenantId]),
     ]);
     const sdr = sdrs.rows.find((row: any) => this.gateway.isConnected(row.id));
     if (!sdr) throw new Error('Nenhum SDR conectado e disponivel');
@@ -359,10 +359,10 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
           END AS cooldown_remaining_seconds
         FROM whatsapp_numbers n
         LEFT JOIN calls c ON c.number_id = n.id AND c.status IN ('reserved', 'dialing', 'media_active')
-        WHERE n.status <> 'removed'
+        WHERE n.tenant_id = $1 AND n.status <> 'removed'
         GROUP BY n.id
         ORDER BY n.created_at DESC
-      `),
+      `, [tenantId]),
       this.db.query(`
         SELECT
           COUNT(*)::int AS total,
@@ -458,8 +458,8 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
     const [settings, sdr, pool] = await Promise.all([
       this.getSettings(tenantId),
       this.db.query(`SELECT id, name, available, state, current_pause_id FROM sdrs WHERE tenant_id = $1 AND user_id = $2 LIMIT 1`, [tenantId, userId]),
-      // Shared number pool: expose only whether a line is available, never how many.
-      this.db.query(`SELECT EXISTS (SELECT 1 FROM whatsapp_numbers WHERE status IN ('connected', 'online', 'ready', 'authenticated') AND (flagged_until IS NULL OR flagged_until <= now())) AS ready`),
+      // Per-tenant lines: expose only whether a line is available, never how many.
+      this.db.query(`SELECT EXISTS (SELECT 1 FROM whatsapp_numbers WHERE tenant_id = $1 AND status IN ('connected', 'online', 'ready', 'authenticated') AND (flagged_until IS NULL OR flagged_until <= now())) AS ready`, [tenantId]),
     ]);
     return { running: Boolean(settings?.running), sdr: sdr.rows[0] ?? null, line_ready: Boolean(pool.rows[0]?.ready) };
   }
@@ -489,7 +489,7 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
             )
           ORDER BY s.last_assigned_at NULLS FIRST, s.last_assigned_at ASC
         `, [tenantId]),
-        this.db.query(`SELECT * FROM whatsapp_numbers WHERE status IN ('connected', 'online', 'ready', 'authenticated') AND (flagged_until IS NULL OR flagged_until <= now()) AND (last_call_ended_at IS NULL OR last_call_ended_at <= now() - (cooldown_seconds * interval '1 second')) ORDER BY last_call_ended_at NULLS FIRST, last_call_ended_at ASC`),
+        this.db.query(`SELECT * FROM whatsapp_numbers WHERE tenant_id = $1 AND status IN ('connected', 'online', 'ready', 'authenticated') AND (flagged_until IS NULL OR flagged_until <= now()) AND (last_call_ended_at IS NULL OR last_call_ended_at <= now() - (cooldown_seconds * interval '1 second')) ORDER BY last_call_ended_at NULLS FIRST, last_call_ended_at ASC`, [tenantId]),
           this.db.query(`
           WITH active_folders AS (
             SELECT f.id, (ROW_NUMBER() OVER (ORDER BY f.sort_order ASC, f.created_at ASC) - 1)::int AS folder_index,
@@ -599,7 +599,7 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
   }
 
   private async syncNumberStatuses(tenantId = legacyTenantId()) {
-    const result = await this.db.query("SELECT id, tenant_id, waxum_session_id FROM whatsapp_numbers WHERE status <> 'removed'");
+    const result = await this.db.query("SELECT id, tenant_id, waxum_session_id FROM whatsapp_numbers WHERE tenant_id = $1 AND status <> 'removed'", [tenantId]);
     for (const number of result.rows) {
       try {
         const status = normalizeWaxumStatus(await this.waxum.getStatus(number.waxum_session_id));
