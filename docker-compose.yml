@@ -72,9 +72,18 @@ services:
       SUPERADMIN_TOKEN: ${WAXUM_API_KEY:-zapcall-local-waxum-token}
       JWT_SECRET: ${WAXUM_JWT_SECRET:-zapcall-local-jwt-secret-change-me}
       NATS_URL: nats://nats:4222
-      # API polling and media sockets share one Docker peer IP.
-      RATE_LIMIT_PER_SECOND: ${WAXUM_RATE_LIMIT_PER_SECOND:-200}
-      RATE_LIMIT_BURST: ${WAXUM_RATE_LIMIT_BURST:-1000}
+      # The ZapLiga API applies the control-plane cadence. Waxum's limiter is
+      # kept effectively out of the way because all API calls share one Docker
+      # peer IP and its penalty can otherwise reject health checks/session
+      # creation with a long 429 window.
+      RATE_LIMIT_PER_SECOND: ${WAXUM_GATEWAY_RATE_LIMIT_PER_SECOND:-1000000}
+      RATE_LIMIT_BURST: ${WAXUM_GATEWAY_RATE_LIMIT_BURST:-1000000}
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "--max-time", "4", "http://127.0.0.1:3451/livez"]
+      interval: 30s
+      timeout: 5s
+      start_period: 20s
+      retries: 3
     volumes:
       - waxum_data:/app/whatsapp_sessions
     depends_on:

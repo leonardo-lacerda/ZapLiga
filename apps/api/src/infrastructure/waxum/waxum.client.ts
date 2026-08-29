@@ -9,7 +9,12 @@ export class WaxumClient implements OnModuleDestroy {
   private readonly baseUrl = (process.env.WAXUM_URL ?? 'http://localhost:3451').replace(/\/$/, '');
   private readonly apiKey = process.env.WAXUM_API_KEY;
   private readonly natsUrl = process.env.NATS_URL ?? 'nats://localhost:4222';
+  private readonly requestIntervalMs = (() => {
+    const configured = Number(process.env.WAXUM_REQUEST_INTERVAL_MS ?? 250);
+    return Number.isFinite(configured) ? Math.max(0, configured) : 250;
+  })();
   private requestChain: Promise<void> = Promise.resolve();
+  private nextRequestAt = 0;
   private natsConnection?: Promise<NatsConnection>;
 
   async onModuleDestroy() {
@@ -31,24 +36,29 @@ export class WaxumClient implements OnModuleDestroy {
     return queued;
   }
 
+  private async waitForRequestSlot() {
+    const now = Date.now();
+    const waitMs = Math.max(0, this.nextRequestAt - now);
+    this.nextRequestAt = Math.max(now, this.nextRequestAt) + this.requestIntervalMs;
+    if (waitMs > 0) await new Promise((resolve) => setTimeout(resolve, waitMs));
+  }
+
   private async requestWithRetry<T>(path: string, init: RequestInit, maxAttempts: number): Promise<T> {
     for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+      await this.waitForRequestSlot();
       const response = await fetch(`${this.baseUrl}${path}`, { ...init, signal: init.signal ?? AbortSignal.timeout(10000), headers: { ...this.headers(), ...(init.headers ?? {}) } });
       const body = await response.text();
       let parsed: any = body;
       try { parsed = body ? JSON.parse(body) : {}; } catch { /* plain response */ }
       if (response.ok) return parsed as T;
-      if (response.status === 429 && attempt < maxAttempts - 1) {
-        // All requests share one serial chain, so never sleep here for the full
-        // server-requested window (which can be 100s+). A long in-chain sleep
-        // stalls every other Waxum call — including the dialer's LID lookups —
-        // and hangs calls in `reserved`. Cap the retry wait; callers that need
-        // to honor the real backoff (the dialer) do so at the number level.
-        await new Promise((resolve) => setTimeout(resolve, 3000));
+      if ([502, 503, 504].includes(response.status) && attempt < maxAttempts - 1) {
+        await new Promise((resolve) => setTimeout(resolve, Math.min(3000, 500 * (attempt + 1))));
         continue;
       }
       const error = new Error(`Waxum ${response.status}: ${typeof parsed === 'string' ? parsed : JSON.stringify(parsed)}`) as Error & { statusCode?: number };
       error.statusCode = response.status;
+      const retryAfter = response.headers.get('retry-after');
+      if (retryAfter) (error as Error & { retryAfterSeconds?: number }).retryAfterSeconds = Number(retryAfter);
       throw error;
     }
     throw new Error('Waxum request failed');
