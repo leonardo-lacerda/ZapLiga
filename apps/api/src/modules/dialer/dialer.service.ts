@@ -326,16 +326,19 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
     return { ...(await this.startReservedCall(sdr, number, lead, settings, token, 'manual', tenantId)), leadId: lead.id };
   }
 
-  async getStatus(tenantId = legacyTenantId()) {
+  async getStatus(tenantId = legacyTenantId(), from?: string, to?: string) {
     const settings = await this.getSettings(tenantId);
+    const end = to && /^\d{4}-\d{2}-\d{2}$/.test(to) ? `${to}T23:59:59.999Z` : new Date().toISOString();
+    const startDate = from && /^\d{4}-\d{2}-\d{2}$/.test(from) ? new Date(`${from}T00:00:00.000Z`) : new Date(Date.now() - 24 * 60 * 60 * 1000);
+    const start = startDate.toISOString();
     const counts = await this.db.query(`
       SELECT status, count(*)::int AS count FROM calls
-      WHERE tenant_id = $1 AND created_at > now() - interval '24 hours' GROUP BY status
-    `, [tenantId]);
+      WHERE tenant_id = $1 AND created_at >= $2 AND created_at <= $3 GROUP BY status
+    `, [tenantId, start, end]);
     const answered = await this.db.query(`
       SELECT count(*)::int AS total, count(*) FILTER (WHERE connected_at IS NOT NULL)::int AS answered
-      FROM calls WHERE tenant_id = $1 AND created_at > now() - interval '24 hours'
-    `, [tenantId]);
+      FROM calls WHERE tenant_id = $1 AND created_at >= $2 AND created_at <= $3
+    `, [tenantId, start, end]);
     const [available, leads, numberDetails, queueSummary, queuePreview, activeCalls, sdrDetails, folderSummary] = await Promise.all([
       this.db.query(`
         SELECT count(*)::int AS count FROM sdrs s
@@ -436,9 +439,9 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
       settings,
       active_calls: Array.from(this.active.values()).filter((resource) => resource.tenantId === tenantId).length,
       available_sdrs: available.rows[0].count,
-      call_counts_24h: Object.fromEntries(counts.rows.map((row: any) => [row.status, row.count])),
-      answered_24h: answered.rows[0].answered,
-      answer_rate_24h: answered.rows[0].total ? Math.round((answered.rows[0].answered / answered.rows[0].total) * 100) : 0,
+      call_counts: Object.fromEntries(counts.rows.map((row: any) => [row.status, row.count])),
+      answered: answered.rows[0].answered,
+      answer_rate: answered.rows[0].total ? Math.round((answered.rows[0].answered / answered.rows[0].total) * 100) : 0,
       lead_counts: Object.fromEntries(leads.rows.map((row: any) => [row.status, row.count])),
       sdrs: sdrDetails.rows,
       post_call_sdrs: sdrDetails.rows.filter((row: any) => row.state === 'post_call'),

@@ -229,8 +229,18 @@ p { color: var(--muted); }
 .breadcrumb .icon { color: var(--primary); }
 .breadcrumb strong { font-size: 12px; }
 .header-actions { justify-content: flex-end; }
-.date-filter { min-height: 32px; padding: 7px 10px; border: 1px solid var(--border); border-radius: 7px; color: var(--muted); background: var(--surface); font-size: 11px; }
+.date-filter { min-height: 32px; padding: 7px 10px; border: 1px solid var(--border); border-radius: 7px; color: var(--muted); background: var(--surface); font-size: 11px; cursor: pointer; }
 .date-filter:hover { border-color: #b8c7d9; color: var(--text); }
+.date-range-anchor { position: relative; }
+.date-range-backdrop { position: fixed; z-index: 39; inset: 0; background: transparent; }
+.date-range-popover { position: absolute; z-index: 40; top: calc(100% + 8px); right: 0; width: 280px; padding: 14px; border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--surface); box-shadow: var(--shadow-card), 0 12px 32px rgba(16, 24, 40, .14); display: grid; gap: 12px; }
+.date-range-presets { display: flex; flex-wrap: wrap; gap: 6px; }
+.date-range-presets button { padding: 6px 10px; border: 1px solid var(--border-subtle); border-radius: 999px; color: var(--text); background: var(--surface-subtle); font-size: 11px; cursor: pointer; }
+.date-range-presets button:hover { border-color: var(--primary); color: var(--primary); background: var(--primary-soft); }
+.date-range-custom { display: flex; gap: 8px; }
+.date-range-custom label { flex: 1; display: flex; flex-direction: column; gap: 4px; color: var(--muted); font-size: 10px; }
+.date-range-custom input { min-height: 32px; padding: 6px 8px; border: 1px solid var(--border); border-radius: 7px; font-size: 11px; }
+.date-range-footer { display: flex; justify-content: flex-end; gap: 8px; padding-top: 6px; border-top: 1px solid var(--border-subtle); }
 .page-content { max-width: 1440px; padding: 24px; margin: 0 auto; }
 .page-heading { min-height: 62px; margin-bottom: 20px; display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; }
 .page-heading h1 { margin: 5px 0 3px; font-size: 24px; letter-spacing: -.7px; }
@@ -272,6 +282,7 @@ p { color: var(--muted); }
 .section-header h2 { margin: 4px 0 3px; font-size: 15px; letter-spacing: -.2px; }
 .section-header p { margin: 0; font-size: 11px; }
 .panel-actions, .card-actions, .table-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.admin-pagination { margin-top: 14px; display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; font-size: 11px; color: var(--subtle); }
 
 .metric-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; margin-bottom: 16px; }
 .metric-card { min-width: 0; padding: 15px; border: 1px solid var(--border-subtle); border-radius: var(--radius-lg); background: var(--surface); box-shadow: var(--shadow-card); }

@@ -7,7 +7,7 @@ import { DataTable } from '../../components/DataTable';
 const metric = (value: unknown) => Number(value ?? 0).toLocaleString('pt-BR');
 
 export function LeadsPage({
-  leads, folders, selectedFolderId, selectedFolder, metrics, metricsRange, setMetricsRange,
+  leads, folders, selectedFolderId, selectedFolder, metrics,
   setSelectedFolderId, createFolder, updateFolder, removeFolder, leadForm, setLeadForm,
   createLead, importCsv, importResult, clearFolder, manualCall, resetLead, removeLead,
 }: AnyRow) {
@@ -58,7 +58,6 @@ export function LeadsPage({
           <Panel className="folder-overview-panel">
             <div className="folder-overview-heading"><div><span className="eyebrow">PASTA SELECIONADA</span><h2>{selectedFolder.name}</h2><p>{selectedFolder.is_active ? 'Esta pasta participa da fila automática.' : 'Esta pasta está pausada e não receberá novas chamadas.'}</p></div><div className="panel-actions"><Badge tone={selectedFolder.is_active ? 'success' : 'neutral'}>{selectedFolder.is_active ? 'Ativa' : 'Pausada'}</Badge><Button variant={selectedFolder.is_active ? 'danger' : 'success'} icon={selectedFolder.is_active ? 'pause' : 'play'} onClick={() => void updateFolder(selectedFolder.id, { isActive: !selectedFolder.is_active })}>{selectedFolder.is_active ? 'Desativar pasta' : 'Ativar pasta'}</Button></div></div>
             <div className="folder-metric-grid"><div><span>Leads</span><strong>{metric(leadCounts.total ?? selectedFolder.lead_count)}</strong><small>{metric(leadCounts.queued)} na fila</small></div><div><span>Tentativas</span><strong>{metric(calls.attempts)}</strong><small>{metric(calls.active)} em andamento</small></div><div><span>Atendidas</span><strong>{metric(calls.answered)}</strong><small>{metric(calls.answer_rate)}% de aproveitamento</small></div><div><span>Concluídas</span><strong>{metric(calls.completed)}</strong><small>{metric(calls.no_answer)} sem resposta</small></div></div>
-            <div className="metrics-toolbar"><span>Período das métricas</span><label>De<input type="date" value={metricsRange.from} onChange={(event) => setMetricsRange({ ...metricsRange, from: event.target.value })} /></label><label>Até<input type="date" value={metricsRange.to} onChange={(event) => setMetricsRange({ ...metricsRange, to: event.target.value })} /></label></div>
           </Panel>
 
           <Panel>

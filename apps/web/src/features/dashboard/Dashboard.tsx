@@ -2,18 +2,20 @@ import type { ReactNode } from 'react';
 import type { AnyRow } from '../../types';
 import { Badge, Button, EmptyState, Icon, Panel, SectionHeader } from '../../components/ui';
 import { LiveTimer } from '../../components/LiveTimer';
+import { formatDateRangeLabel } from '../../components/DateRangePopover';
 import { formatNextAttempt, formatSeconds, labelStatus } from '../../shared/format';
 
-export function Dashboard({ isSdr, status, available, connected, sdrReady, sdrs, connectSdr, setAvailability, manualDial, manualPhone, setManualPhone, manualName, setManualName, manualCalling, logs, activeCall, hangup, connectedNumbers }: AnyRow) {
+export function Dashboard({ isSdr, status, available, connected, sdrReady, sdrs, connectSdr, setAvailability, manualDial, manualPhone, setManualPhone, manualName, setManualName, manualCalling, logs, activeCall, hangup, connectedNumbers, dateRange }: AnyRow) {
+  const rangeLabel = dateRange ? formatDateRangeLabel(dateRange) : 'período selecionado';
   return <>
     <div className="page-heading">
       <div><span className="eyebrow">OPERAÇÃO</span><h1>Visão geral</h1><p>Acompanhe a saúde do discador e mantenha sua equipe em movimento.</p></div>
       <Badge tone={status.running ? 'success' : 'neutral'}><i className="badge-dot"></i>{status.running ? 'Discador operando' : 'Discador pausado'}</Badge>
     </div>
     <div className="metric-grid">
-      <MetricCard label="Chamadas hoje" value={status.call_counts_24h?.completed ?? 0} icon="phone" tone="blue" detail="Chamadas concluídas" />
-      <MetricCard label="Atendidas" value={status.answered_24h ?? 0} icon="check" tone="green" detail="Nas últimas 24 horas" />
-      <MetricCard label="Taxa de atendimento" value={`${status.answer_rate_24h ?? 0}%`} icon="chart" tone="purple" detail="Comparado ao período anterior" />
+      <MetricCard label="Chamadas no período" value={status.call_counts?.completed ?? 0} icon="phone" tone="blue" detail="Chamadas concluídas" />
+      <MetricCard label="Atendidas" value={status.answered ?? 0} icon="check" tone="green" detail={rangeLabel} />
+      <MetricCard label="Taxa de atendimento" value={`${status.answer_rate ?? 0}%`} icon="chart" tone="purple" detail="Atendidas sobre o total de chamadas" />
       <MetricCard label="Leads na fila" value={status.lead_counts?.queued ?? 0} icon="users" tone="orange" detail="Contatos aguardando" />
     </div>
     <div className="dashboard-grid">
