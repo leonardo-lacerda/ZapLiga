@@ -83,7 +83,7 @@
 
   /* ---------- Active nav ---------- */
   var navLinks = document.querySelectorAll("[data-navlink]");
-  var navSections = ["produto","como-funciona","recursos","para-quem","precos"]
+  var navSections = ["produto","como-funciona","para-quem","precos"]
     .map(function(id){ return document.getElementById(id); }).filter(Boolean);
   if ("IntersectionObserver" in window) {
     var nio = new IntersectionObserver(function(entries){
