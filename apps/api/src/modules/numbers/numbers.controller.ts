@@ -97,7 +97,7 @@ export class NumbersController {
 
   private async replaceMissingSession(number: any) {
     const session = await this.waxum.createSession(number.label);
-    const result = await this.db.query(`UPDATE whatsapp_numbers SET waxum_session_id = $1, status = 'disconnected' WHERE id = $2 RETURNING *`, [session.id, number.id]);
+    const result = await this.db.query(`UPDATE whatsapp_numbers SET waxum_session_id = $1, status = 'disconnected' WHERE id = $2 AND tenant_id = $3 RETURNING *`, [session.id, number.id, number.tenant_id]);
     return result.rows[0];
   }
 
@@ -116,7 +116,7 @@ export class NumbersController {
 
   private async refreshNumberStatus(number: any) {
     const status = normalizeWaxumStatus(await this.waxum.getStatus(number.waxum_session_id));
-    await this.db.query('UPDATE whatsapp_numbers SET status = $1, phone = COALESCE($2, phone) WHERE id = $3', [status.status, status.phone, number.id]);
+    await this.db.query('UPDATE whatsapp_numbers SET status = $1, phone = COALESCE($2, phone) WHERE id = $3 AND tenant_id = $4', [status.status, status.phone, number.id, number.tenant_id]);
     return status;
   }
 

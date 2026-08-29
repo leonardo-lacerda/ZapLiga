@@ -1,6 +1,7 @@
 services:
   postgres:
     image: postgres:16-alpine
+    restart: unless-stopped
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-zapcall}
       POSTGRES_USER: ${POSTGRES_USER:-zapcall}
@@ -15,8 +16,30 @@ services:
       timeout: 5s
       retries: 10
 
+  # Daily local pg_dump with rotation. This protects against accidental
+  # deletes/bad migrations, not against loss of the host itself — copy
+  # postgres_backups off-box periodically for real disaster recovery.
+  postgres-backup:
+    image: prodrigestivill/postgres-backup-local:16-alpine
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_DB: ${POSTGRES_DB:-zapcall}
+      POSTGRES_USER: ${POSTGRES_USER:-zapcall}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-zapcall}
+      SCHEDULE: "@daily"
+      BACKUP_KEEP_DAYS: 7
+      BACKUP_KEEP_WEEKS: 4
+      BACKUP_KEEP_MONTHS: 6
+    volumes:
+      - postgres_backups:/backups
+
   redis:
     image: redis:7-alpine
+    restart: unless-stopped
     ports:
       - "127.0.0.1:6379:6379"
     volumes:
@@ -119,6 +142,7 @@ services:
 
 volumes:
   postgres_data:
+  postgres_backups:
   redis_data:
   nats_data:
   waxum_data:

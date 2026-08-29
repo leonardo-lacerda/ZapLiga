@@ -8,6 +8,7 @@ async function main() {
   const password = String(process.env.SUPERADMIN_PASSWORD ?? '');
   const name = String(process.env.SUPERADMIN_NAME ?? 'Admin supremo').trim();
   if (!email || !password) throw new Error('Defina SUPERADMIN_EMAIL e SUPERADMIN_PASSWORD antes de executar o bootstrap');
+  if (process.env.NODE_ENV === 'production' && password === 'change-this-password') throw new Error('SUPERADMIN_PASSWORD ainda está com o valor de exemplo; defina uma senha real antes de rodar em produção');
   const db = new DatabaseService();
   await db.onModuleInit();
   try {

@@ -603,10 +603,10 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
     for (const number of result.rows) {
       try {
         const status = normalizeWaxumStatus(await this.waxum.getStatus(number.waxum_session_id));
-        await this.db.query('UPDATE whatsapp_numbers SET status = $1, phone = COALESCE($2, phone) WHERE id = $3', [status.status, status.phone, number.id]);
+        await this.db.query('UPDATE whatsapp_numbers SET status = $1, phone = COALESCE($2, phone) WHERE id = $3 AND tenant_id = $4', [status.status, status.phone, number.id, tenantId]);
       } catch (error) {
         if ((error as Error & { statusCode?: number }).statusCode === 404) {
-          await this.db.query(`UPDATE whatsapp_numbers SET status = 'disconnected' WHERE id = $1`, [number.id]);
+          await this.db.query(`UPDATE whatsapp_numbers SET status = 'disconnected' WHERE id = $1 AND tenant_id = $2`, [number.id, tenantId]);
         }
         // Waxum may be temporarily unavailable; keep the last status unless
         // the session is definitively missing.
@@ -890,8 +890,8 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
     if (count < this.FLAG_FAILURE_THRESHOLD) return;
     this.lineFailures.delete(numberId);
     const hours = this.flagQuarantineHours;
-    await this.db.query(`UPDATE whatsapp_numbers SET flagged_until = now() + ($1 * interval '1 hour') WHERE id = $2`, [hours, numberId]);
-    const label = await this.db.query(`SELECT label FROM whatsapp_numbers WHERE id = $1`, [numberId]);
+    await this.db.query(`UPDATE whatsapp_numbers SET flagged_until = now() + ($1 * interval '1 hour') WHERE id = $2 AND tenant_id = $3`, [hours, numberId, tenantId]);
+    const label = await this.db.query(`SELECT label FROM whatsapp_numbers WHERE id = $1 AND tenant_id = $2`, [numberId, tenantId]);
     this.log(`Linha "${label.rows[0]?.label ?? numberId}" parece bloqueada pelo WhatsApp (chamadas caindo na hora, sem tocar); pausada por ${hours}h para proteger a conta. O discador usará as outras linhas.`, 'error', callId, tenantId);
     this.gateway.broadcast({ type: 'number_flagged', numberId, flaggedHours: hours }, tenantId);
   }

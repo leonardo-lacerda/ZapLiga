@@ -130,7 +130,9 @@ export class SdrGateway implements OnModuleDestroy {
     await this.dialer.handleSdrDisconnected(sdrId, tenantId);
   }
 
-  private handleMedia(socket: WebSocket, sdrId: string, callId: string, identity: { tenantId: string }) {
+  private async handleMedia(socket: WebSocket, sdrId: string, callId: string, identity: { tenantId: string; userId: string }) {
+    const owner = await this.db.query('SELECT 1 FROM sdrs WHERE tenant_id = $1 AND id = $2 AND user_id = $3 LIMIT 1', [identity.tenantId, sdrId, identity.userId]);
+    if (!owner.rows[0]) return socket.close(1008, 'sdr not owned by ticket');
     socket.on('error', () => socket.close());
     void this.dialer.attachMedia(callId, sdrId, socket, identity.tenantId);
   }

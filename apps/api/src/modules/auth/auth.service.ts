@@ -42,6 +42,10 @@ export class AuthService {
   }
 
   async registerOrganizer(input: { name: string; email: string; password: string; companyName: string; companySlug?: string }, request?: Request) {
+    const attemptKey = `zapcall:security:register:${sha256(request?.ip ?? 'unknown')}`;
+    const attempts = await this.redis.client.incr(attemptKey);
+    if (attempts === 1) await this.redis.client.expire(attemptKey, 15 * 60);
+    if (attempts > 6) throw new HttpException('Muitas tentativas de cadastro. Tente novamente em alguns minutos.', HttpStatus.TOO_MANY_REQUESTS);
     const name = input.name.trim();
     const email = normalizeEmail(input.email);
     const companyName = input.companyName.trim();
@@ -201,7 +205,7 @@ export class AuthService {
   }
 
   private async authResponse(user: any, refreshToken: string, sessionId: string, expiresAt: Date, request?: Request) {
-    const accessToken = await this.jwt.signAsync({ sub: user.id, sid: sessionId, platformRole: user.platform_role });
+    const accessToken = await this.jwt.signAsync({ sub: user.id, sid: sessionId, platformRole: user.platform_role }, { expiresIn: this.accessTtlSeconds });
     return { accessToken, expiresIn: this.accessTtlSeconds, refreshExpiresAt: expiresAt, user: publicUser(user), _refreshToken: refreshToken };
   }
 

@@ -95,7 +95,7 @@ jobs:
             exit 1
           fi
 
-          docker compose up -d postgres redis nats waxum
+          docker compose up -d postgres postgres-backup redis nats waxum
           docker compose build api web
           docker compose up -d --remove-orphans api web
 
