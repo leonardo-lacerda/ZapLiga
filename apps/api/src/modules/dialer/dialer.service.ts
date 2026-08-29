@@ -632,9 +632,12 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
         await client.query(`UPDATE sdrs SET available = false, state = 'in_call', last_assigned_at = now() WHERE tenant_id = $1 AND id = $2`, [tenantId, sdr.id]);
       });
       this.active.set(callId, { tenantId, token, numberId: number.id, leadId: lead.id, sdrId: sdr.id, mediaActive: false });
-      this.log(`Discando ${source} para ${lead.name} via ${number.label}`, 'info', callId, tenantId);
+      // Blind dialing: on automatic calls the SDR must not learn who is being
+      // called until the lead actually answers (notifyAnswered reveals it).
+      // Manual calls skip this — the SDR already chose the lead themselves.
+      this.log(isAutomatic ? `Discagem automática iniciada via ${number.label}` : `Discando manual para ${lead.name} via ${number.label}`, 'info', callId, tenantId);
       const browser = this.gateway.getSocket(sdr.id);
-      this.gateway.sendToSdr(sdr.id, { type: 'call_reserved', callId, lead: { id: lead.id, name: lead.name, phone: lead.phone }, number: { id: number.id, label: number.label } });
+      this.gateway.sendToSdr(sdr.id, { type: 'call_reserved', callId, lead: isAutomatic ? { id: lead.id } : { id: lead.id, name: lead.name, phone: lead.phone }, number: { id: number.id, label: number.label } });
       if (browser) void this.attachMedia(callId, sdr.id, browser, tenantId);
       return { callId, status: 'reserved' };
     } catch (error) {
