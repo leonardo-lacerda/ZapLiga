@@ -18,9 +18,10 @@ import { TenantsModule } from './modules/tenants/tenants.module';
 import { UsersModule } from './modules/users/users.module';
 import { AdminModule } from './modules/admin/admin.module';
 import { LeadFoldersModule } from './modules/lead-folders/lead-folders.module';
+import { MetricsModule } from './modules/metrics/metrics.module';
 
 @Module({
-  imports: [DatabaseModule, RedisModule, AuthModule, AuditModule, InvitationsModule, MembershipsModule, TenantsModule, UsersModule, AdminModule, LeadFoldersModule],
+  imports: [DatabaseModule, RedisModule, AuthModule, AuditModule, InvitationsModule, MembershipsModule, TenantsModule, UsersModule, AdminModule, LeadFoldersModule, MetricsModule],
   controllers: [CallsController, DialerController, HealthController, LeadsController, NumbersController, SdrsController],
   providers: [WaxumClient, DialerService, SdrGateway],
   exports: [DialerService, SdrGateway],

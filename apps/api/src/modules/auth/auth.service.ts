@@ -95,7 +95,7 @@ export class AuthService {
         FROM user_sessions s JOIN users u ON u.id = s.user_id
         LEFT JOIN user_sessions replacement ON replacement.id = s.replaced_by_session_id
         WHERE s.refresh_token_hash = $1
-        FOR UPDATE
+        FOR UPDATE OF s
       `, [tokenHash]);
       const current = result.rows[0];
       if (!current) throw new UnauthorizedException('Refresh token inválido');

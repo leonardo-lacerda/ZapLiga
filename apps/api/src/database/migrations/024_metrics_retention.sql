@@ -1,0 +1,14 @@
+-- Fase 8 do plano de métricas: "criar retenção por plano" (plano seção 13,
+-- Fase 8, item 4). Este projeto não tem um sistema de planos/assinatura
+-- (tabela `tenants` não possui coluna de plano/tier) — a interpretação
+-- honesta do item, sem inventar um sistema de billing que não existe, é
+-- retenção CONFIGURÁVEL POR TENANT: cada organização pode ter um limite de
+-- dias de retenção para dados de suporte a métricas; nulo significa manter
+-- indefinidamente (comportamento atual, sem mudança para tenants existentes).
+--
+-- Importante: isto NUNCA se aplica a `calls`/`leads` (dados operacionais
+-- centrais, não apenas de métricas) — só às tabelas de histórico que
+-- existem especificamente para alimentar a área de métricas
+-- (lead_stage_history, sdr_availability_history, number_status_history,
+-- metrics_daily_rollup, metric_exports). Ver MetricsRetentionService.
+ALTER TABLE tenants ADD COLUMN IF NOT EXISTS metrics_retention_days INTEGER;

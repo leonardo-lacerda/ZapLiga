@@ -1,7 +1,14 @@
 import { Injectable, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
-import { Pool, PoolClient, QueryResultRow } from 'pg';
+import { Pool, PoolClient, QueryResultRow, types } from 'pg';
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
+
+// `pg` por padrão converte a coluna `date` do Postgres num `Date` do JS (à
+// meia-noite UTC). Todo o resto do código trata datas civis como string
+// `YYYY-MM-DD` (DTOs, dayRangeInTimezone, etc.) — sem isto, qualquer coluna
+// `date` (ex.: metric_goals.period_from/period_to) volta com o tipo errado
+// e quebra silenciosamente qualquer função que espere uma string.
+types.setTypeParser(types.builtins.DATE, (value: string) => value);
 
 @Injectable()
 export class DatabaseService implements OnModuleInit, OnModuleDestroy {

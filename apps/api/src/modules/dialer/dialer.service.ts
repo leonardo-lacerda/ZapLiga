@@ -163,7 +163,12 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
       await client.query(`UPDATE sdr_pauses SET ended_at = $1, duration_seconds = GREATEST(0, EXTRACT(EPOCH FROM ($1 - started_at))::int) WHERE tenant_id = $2 AND id = $3`, [endedAt, tenantId, pauseId]);
       if (pause.call_id) {
         await client.query(`UPDATE calls SET call_result = $1, pipeline_stage = $2, notes = $3, wrap_up_completed_at = $4 WHERE tenant_id = $5 AND id = $6`, [callResult, pipelineStage, notes, endedAt, tenantId, pause.call_id]);
+        const previousStage = await client.query(`SELECT pipeline_stage FROM leads WHERE tenant_id = $1 AND id = $2`, [tenantId, pause.lead_id]);
         await client.query(`UPDATE leads SET pipeline_stage = $1 WHERE tenant_id = $2 AND id = $3`, [pipelineStage, tenantId, pause.lead_id]);
+        const fromStage = previousStage.rows[0]?.pipeline_stage ?? null;
+        if (fromStage !== pipelineStage) {
+          await client.query(`INSERT INTO lead_stage_history (id, tenant_id, lead_id, from_stage, to_stage, source, call_id) VALUES ($1, $2, $3, $4, $5, 'wrap_up', $6)`, [randomUUID(), tenantId, pause.lead_id, fromStage, pipelineStage, pause.call_id]);
+        }
       }
       await client.query(`UPDATE sdrs SET available = true, state = 'available', current_pause_id = NULL WHERE tenant_id = $1 AND id = $2 AND current_pause_id = $3`, [tenantId, sdrId, pauseId]);
       return { id: pauseId, ended_at: endedAt.toISOString(), duration_seconds: Math.max(0, Math.floor((endedAt.getTime() - new Date(pause.started_at).getTime()) / 1000)), call_result: callResult, pipeline_stage: pipelineStage, notes };
@@ -931,7 +936,7 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
       let pause: any = null;
       this.log(`Chamada encerrada: ${finalCallStatus} (${outcome})`, transientRateLimit ? 'warning' : finalCallStatus === 'failed' ? 'error' : 'info', callId);
       await this.db.transaction(async (client) => {
-        await client.query(`UPDATE calls SET status = $1, ended_at = now(), duration_seconds = CASE WHEN COALESCE(connected_at, started_at) IS NULL THEN 0 ELSE EXTRACT(EPOCH FROM (now() - COALESCE(connected_at, started_at)))::int END, outcome = $2, failure_reason = CASE WHEN $4 IN ('failed','no_answer') OR $2 = 'waxum_rate_limited' THEN $2 ELSE failure_reason END WHERE tenant_id = $5 AND id = $3 AND status NOT IN ('completed','no_answer','failed','cancelled')`, [finalCallStatus, outcome, callId, status, tenantId]);
+        await client.query(`UPDATE calls SET status = $1, ended_at = now(), duration_seconds = CASE WHEN COALESCE(connected_at, started_at) IS NULL THEN 0 ELSE EXTRACT(EPOCH FROM (now() - COALESCE(connected_at, started_at)))::int END, ring_duration_seconds = CASE WHEN started_at IS NULL THEN NULL ELSE GREATEST(0, EXTRACT(EPOCH FROM (COALESCE(connected_at, now()) - started_at))::int) END, connected_duration_seconds = CASE WHEN connected_at IS NULL THEN NULL ELSE GREATEST(0, EXTRACT(EPOCH FROM (now() - connected_at))::int) END, outcome = $2, failure_reason = CASE WHEN $4 IN ('failed','no_answer') OR $2 = 'waxum_rate_limited' THEN $2 ELSE failure_reason END WHERE tenant_id = $5 AND id = $3 AND status NOT IN ('completed','no_answer','failed','cancelled')`, [finalCallStatus, outcome, callId, status, tenantId]);
         if (!isAutomatic) {
           // Manual calls must not alter the automatic queue or attempt budget.
         } else if (transientRateLimit) {

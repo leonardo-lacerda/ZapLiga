@@ -44,6 +44,7 @@ describe('AuthService refresh rotation', () => {
     const result = await service.refresh(request);
 
     expect(result.accessToken).toBe('access-token');
+    expect(client.query.mock.calls[0][0]).toContain('FOR UPDATE OF s');
     expect(client.query).toHaveBeenCalledTimes(2);
     expect(client.query.mock.calls.some(([sql]) => String(sql).includes('WHERE family_id'))).toBe(false);
     expect(audit.record).toHaveBeenCalledWith(expect.objectContaining({ action: 'auth.refresh_concurrent' }));
