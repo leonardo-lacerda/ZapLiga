@@ -27,7 +27,7 @@ function getSdrPresence({ connecting, connected, sdrReady, available, activeCall
   return 'offline';
 }
 
-export function Dashboard({ isSdr, status, available, connected, connecting, sdrReady, sdrs, connectSdr, setAvailability, manualDial, manualPhone, setManualPhone, manualName, setManualName, manualCalling, logs, activeCall, postCall, hangup, connectedNumbers, dateRange }: AnyRow) {
+export function Dashboard({ isSdr, status, available, connected, connecting, sdrReady, sdrs, connectSdr, setAvailability, manualDial, manualPhone, setManualPhone, manualName, setManualName, manualCalling, logs, activeCall, postCall, hangup, micMuted, toggleMicMute, connectedNumbers, dateRange }: AnyRow) {
   const rangeLabel = dateRange ? formatDateRangeLabel(dateRange) : 'período selecionado';
   const presence = getSdrPresence({ connecting, connected, sdrReady, available, activeCall, postCall, manualCalling });
   const presenceInfo = presenceCopy[presence];
@@ -72,7 +72,7 @@ export function Dashboard({ isSdr, status, available, connected, connecting, sdr
         <Button variant="success" icon="phone" disabled={manualCalling || !connected || !sdrReady || Boolean(postCall)}>{manualCalling ? 'Iniciando...' : 'Ligar agora'}</Button>
       </form>
     </Panel>}
-    {activeCall?.lead && (() => { const answered = activeCall.phase === 'answered' || activeCall.mediaActive; return <Panel className={`active-call-card${answered ? '' : ' is-ringing'}`}><div><span className="eyebrow">{answered ? 'EM CHAMADA' : 'DISCANDO'}</span><h2>{activeCall.lead.name}</h2><p>{activeCall.lead.phone} · {answered ? <>{activeCall.mediaActive ? 'Áudio conectado' : 'Conectando áudio…'} · <LiveTimer startedAt={activeCall.connectedAt ?? activeCall.connected_at ?? activeCall.callStartedAt} /></> : 'Chamando o cliente…'}</p></div><Button variant="danger" icon="close" onClick={hangup}>{answered ? 'Encerrar' : 'Desligar'}</Button></Panel>; })()}
+    {activeCall?.lead && (() => { const answered = activeCall.phase === 'answered' || activeCall.mediaActive; return <Panel className={`active-call-card${answered ? '' : ' is-ringing'}`}><div><span className="eyebrow">{answered ? 'EM CHAMADA' : 'DISCANDO'}</span><h2>{activeCall.lead.name}</h2><p>{activeCall.lead.phone} · {answered ? <>{activeCall.mediaActive ? 'Áudio conectado' : 'Conectando áudio…'} · <LiveTimer startedAt={activeCall.connectedAt ?? activeCall.connected_at ?? activeCall.callStartedAt} /></> : 'Chamando o cliente…'}</p></div><div className="active-call-actions"><Button variant={micMuted ? 'danger' : 'secondary'} icon={micMuted ? 'mic-off' : 'mic'} onClick={toggleMicMute} aria-pressed={Boolean(micMuted)}>{micMuted ? 'Ativar microfone' : 'Mutar microfone'}</Button><Button variant="danger" icon="close" onClick={hangup}>{answered ? 'Encerrar' : 'Desligar'}</Button></div></Panel>; })()}
     <Panel><SectionHeader eyebrow="TEMPO REAL" title="Log do discador" action={<Badge>{logs.length} eventos</Badge>} /><div className="logs">{logs.slice(0, 40).map((entry: AnyRow) => <div className={`log-row ${entry.level}`} key={entry.id}><time>{new Date(entry.at).toLocaleTimeString()}</time><span>{entry.message}</span>{entry.callId && <code>{entry.callId.slice(0, 8)}</code>}</div>)}{!logs.length && <EmptyState title="Nenhum evento ainda" description="Os eventos de operação aparecerão aqui em tempo real." />}</div></Panel>
   </>;
 }

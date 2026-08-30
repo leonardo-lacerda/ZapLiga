@@ -11,6 +11,7 @@ export class AudioBridge {
   private sourceCursor = 0;
   private outgoingSamples: number[] = [];
   private readonly frameSamples = 960;
+  private muted = false;
 
   /**
    * Opens the browser microphone from an explicit user action. Preparing it
@@ -20,6 +21,7 @@ export class AudioBridge {
   async prepare() {
     if (this.context && this.processor && this.stream) {
       if (this.context.state === 'suspended') await this.context.resume();
+      if (this.context.state !== 'running') throw new Error('O navegador bloqueou a reprodução de áudio. Clique novamente em Ligar agora.');
       return;
     }
     if (this.starting) return this.starting;
@@ -61,6 +63,11 @@ export class AudioBridge {
 
     const context = new AudioContext({ sampleRate: 16000 });
     await context.resume();
+    if (context.state !== 'running') {
+      stream.getTracks().forEach((track) => track.stop());
+      await context.close();
+      throw new Error('O navegador bloqueou a reprodução de áudio. Clique novamente em Ligar agora.');
+    }
     if (this.stopRequested) {
       stream.getTracks().forEach((track) => track.stop());
       await context.close();
@@ -79,7 +86,9 @@ export class AudioBridge {
     this.processor = context.createScriptProcessor(1024, 1, 1);
     this.processor.onaudioprocess = (event) => {
       const input = event.inputBuffer.getChannelData(0);
-      const pcm = this.resampleToPcm16(input);
+      const pcm = this.muted
+        ? new Int16Array(Math.max(1, Math.round(input.length * 16000 / this.captureSampleRate)))
+        : this.resampleToPcm16(input);
       this.outgoingSamples.push(...pcm);
       while (this.outgoingSamples.length >= this.frameSamples) {
         const frame = new Int16Array(this.outgoingSamples.splice(0, this.frameSamples));
@@ -91,6 +100,15 @@ export class AudioBridge {
     source.connect(this.processor);
     this.processor.connect(silent);
     silent.connect(context.destination);
+  }
+
+  setMuted(muted: boolean) {
+    this.muted = muted;
+    this.stream?.getAudioTracks().forEach((track) => { track.enabled = !muted; });
+  }
+
+  isMuted() {
+    return this.muted;
   }
 
   play(raw: ArrayBuffer) {
@@ -125,6 +143,7 @@ export class AudioBridge {
     this.sourceBuffer = [];
     this.sourceCursor = 0;
     this.outgoingSamples = [];
+    this.muted = false;
   }
 
   /** Waxum expects mono PCM16 at exactly 16 kHz. Browsers may run the
