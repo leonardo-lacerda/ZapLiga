@@ -1,3 +1,59 @@
+x-api-environment: &api-environment
+  NODE_ENV: ${NODE_ENV:-development}
+  PORT: 3000
+  DATABASE_URL: postgres://${POSTGRES_USER:-zapcall}:${POSTGRES_PASSWORD:-zapcall}@postgres:5432/${POSTGRES_DB:-zapcall}
+  REDIS_URL: redis://redis:6379
+  WAXUM_URL: http://waxum:3451
+  WAXUM_API_KEY: ${WAXUM_API_KEY:-zapcall-local-waxum-token}
+  WAXUM_JWT_SECRET: ${WAXUM_JWT_SECRET:-zapcall-local-jwt-secret-change-me}
+  NATS_URL: nats://nats:4222
+  JWT_ACCESS_SECRET: ${JWT_ACCESS_SECRET:-zapcall-local-access-secret-change-me}
+  LEGACY_TENANT_ID: ${LEGACY_TENANT_ID:-tenant-legado}
+  LEGACY_TENANT_NAME: ${LEGACY_TENANT_NAME:-Operação legada}
+  LEGACY_TENANT_SLUG: ${LEGACY_TENANT_SLUG:-operacao-legada}
+  JWT_ACCESS_TTL_SECONDS: ${JWT_ACCESS_TTL_SECONDS:-900}
+  REFRESH_TOKEN_TTL_SECONDS: ${REFRESH_TOKEN_TTL_SECONDS:-2592000}
+  INVITATION_TTL_SECONDS: ${INVITATION_TTL_SECONDS:-172800}
+  SMTP_HOST: ${SMTP_HOST:-}
+  SMTP_PORT: ${SMTP_PORT:-587}
+  SMTP_SECURE: ${SMTP_SECURE:-false}
+  SMTP_USER: ${SMTP_USER:-}
+  SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+  SMTP_FROM: ${SMTP_FROM:-}
+  BCRYPT_ROUNDS: ${BCRYPT_ROUNDS:-12}
+  AUTH_COOKIE_SAME_SITE: ${AUTH_COOKIE_SAME_SITE:-lax}
+  AUTH_COOKIE_SECURE: ${AUTH_COOKIE_SECURE:-false}
+  WEB_ORIGIN: ${WEB_ORIGIN:-http://localhost:5173}
+  API_INSTANCE_ID: ${API_INSTANCE_ID:-}
+  PG_POOL_MAX: ${PG_POOL_MAX:-10}
+  PG_IDLE_TIMEOUT_MS: ${PG_IDLE_TIMEOUT_MS:-30000}
+  PG_CONNECTION_TIMEOUT_MS: ${PG_CONNECTION_TIMEOUT_MS:-5000}
+  DASHBOARD_CACHE_TTL_MS: ${DASHBOARD_CACHE_TTL_MS:-1500}
+
+x-api-common: &api-common
+  init: true
+  build:
+    context: .
+    dockerfile: apps/api/Dockerfile
+  environment:
+    <<: *api-environment
+  depends_on:
+    postgres:
+      condition: service_healthy
+    redis:
+      condition: service_healthy
+    waxum:
+      condition: service_started
+    nats:
+      condition: service_started
+  restart: unless-stopped
+  stop_grace_period: 45s
+  healthcheck:
+    test: ["CMD", "node", "-e", "fetch('http://localhost:3000/health').then((r) => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
+    interval: 10s
+    timeout: 5s
+    retries: 3
+
 services:
   postgres:
     image: postgres:16-alpine
@@ -89,60 +145,21 @@ services:
     depends_on:
       - nats
 
-  api:
-    init: true
-    build:
-      context: .
-      dockerfile: apps/api/Dockerfile
+  api-a:
+    <<: *api-common
     environment:
-      NODE_ENV: ${NODE_ENV:-development}
-      PORT: 3000
-      DATABASE_URL: postgres://${POSTGRES_USER:-zapcall}:${POSTGRES_PASSWORD:-zapcall}@postgres:5432/${POSTGRES_DB:-zapcall}
-      REDIS_URL: redis://redis:6379
-      WAXUM_URL: http://waxum:3451
-      WAXUM_API_KEY: ${WAXUM_API_KEY:-zapcall-local-waxum-token}
-      WAXUM_JWT_SECRET: ${WAXUM_JWT_SECRET:-zapcall-local-jwt-secret-change-me}
-      NATS_URL: nats://nats:4222
-      JWT_ACCESS_SECRET: ${JWT_ACCESS_SECRET:-zapcall-local-access-secret-change-me}
-      LEGACY_TENANT_ID: ${LEGACY_TENANT_ID:-tenant-legado}
-      LEGACY_TENANT_NAME: ${LEGACY_TENANT_NAME:-Operação legada}
-      LEGACY_TENANT_SLUG: ${LEGACY_TENANT_SLUG:-operacao-legada}
-      JWT_ACCESS_TTL_SECONDS: ${JWT_ACCESS_TTL_SECONDS:-900}
-      REFRESH_TOKEN_TTL_SECONDS: ${REFRESH_TOKEN_TTL_SECONDS:-2592000}
-      INVITATION_TTL_SECONDS: ${INVITATION_TTL_SECONDS:-172800}
-      SMTP_HOST: ${SMTP_HOST:-}
-      SMTP_PORT: ${SMTP_PORT:-587}
-      SMTP_SECURE: ${SMTP_SECURE:-false}
-      SMTP_USER: ${SMTP_USER:-}
-      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
-      SMTP_FROM: ${SMTP_FROM:-}
-      BCRYPT_ROUNDS: ${BCRYPT_ROUNDS:-12}
-      AUTH_COOKIE_SAME_SITE: ${AUTH_COOKIE_SAME_SITE:-lax}
-      AUTH_COOKIE_SECURE: ${AUTH_COOKIE_SECURE:-false}
-      WEB_ORIGIN: ${WEB_ORIGIN:-http://localhost:5173}
-      API_INSTANCE_ID: ${API_INSTANCE_ID:-}
-      PG_POOL_MAX: ${PG_POOL_MAX:-10}
-      PG_IDLE_TIMEOUT_MS: ${PG_IDLE_TIMEOUT_MS:-30000}
-      PG_CONNECTION_TIMEOUT_MS: ${PG_CONNECTION_TIMEOUT_MS:-5000}
-      DASHBOARD_CACHE_TTL_MS: ${DASHBOARD_CACHE_TTL_MS:-1500}
-    depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-      waxum:
-        condition: service_started
-      nats:
-        condition: service_started
-    restart: unless-stopped
-    stop_grace_period: 45s
-    healthcheck:
-      test: ["CMD", "node", "-e", "fetch('http://localhost:3000/health').then((r) => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
-      interval: 10s
-      timeout: 5s
-      retries: 3
+      <<: *api-environment
+      API_INSTANCE_ID: api-a
     ports:
       - "127.0.0.1:3000:3000"
+
+  api-b:
+    <<: *api-common
+    environment:
+      <<: *api-environment
+      API_INSTANCE_ID: api-b
+    ports:
+      - "127.0.0.1:3001:3000"
 
   web:
     build:
@@ -151,7 +168,7 @@ services:
       args:
         VITE_API_URL: ${VITE_API_URL:-http://localhost:3000}
     depends_on:
-      - api
+      - api-a
     restart: unless-stopped
     ports:
       - "127.0.0.1:5173:80"
