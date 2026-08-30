@@ -20,6 +20,7 @@ import { AcceptInvitePage } from '../features/auth/AcceptInvitePage';
 import { LoginPage } from '../features/auth/LoginPage';
 import { RegisterPage } from '../features/auth/RegisterPage';
 import { useAuth } from '../features/auth/AuthProvider';
+import { authRouteFromPath, isPublicAuthPath, navigateToTab, tabFromPath, tabPaths } from './routes';
 
 const pauseFromSdr = (sdr: AnyRow) => sdr?.current_pause_id && sdr.pause_started_at ? ({ id: sdr.current_pause_id, pause_type: sdr.pause_type ?? 'post_call', started_at: sdr.pause_started_at, call_id: sdr.pause_call_id, lead_name: sdr.pause_lead_name, lead_phone: sdr.pause_lead_phone, call_started_at: sdr.pause_call_started_at, pause_elapsed_seconds: sdr.pause_elapsed_seconds }) : null;
 const isoDate = (date: Date) => date.toISOString().slice(0, 10);
@@ -43,7 +44,7 @@ function AuthenticatedApp() {
   const [callsTotal, setCallsTotal] = useState(0);
   const [callsOffset, setCallsOffset] = useState(0);
   const [logs, setLogs] = useState<AnyRow[]>([]);
-  const [tab, setTab] = useState<TabKey>('dashboard');
+  const [tab, setTab] = useState<TabKey>(() => tabFromPath(window.location.pathname));
   const [error, setError] = useState('');
   const [importResult, setImportResult] = useState('');
   const [qr, setQr] = useState<any>(null);
@@ -95,7 +96,16 @@ function AuthenticatedApp() {
 
   useEffect(() => { if (!isSdr) { if (sdrId) setSdrId(''); return; } if (!sdrId && sdrs[0]?.id) setSdrId(sdrs[0].id); }, [isSdr, sdrId, sdrs]);
   useEffect(() => { setSdrId(''); setActiveCall(null); setPostCall(null); setQr(null); setQrNumberId(''); }, [activeTenantId]);
-  useEffect(() => { if (isSdr && tab !== 'dashboard') setTab('dashboard'); }, [isSdr, tab]);
+  useEffect(() => { if (isSdr && tab !== 'dashboard') navigateToTab('dashboard'); }, [isSdr, tab]);
+  useEffect(() => {
+    const onPopState = () => setTab(tabFromPath(window.location.pathname));
+    window.addEventListener('popstate', onPopState);
+    return () => window.removeEventListener('popstate', onPopState);
+  }, []);
+  useEffect(() => {
+    if (isSdr && tab !== 'dashboard') return;
+    if (tabFromPath(window.location.pathname) !== tab) navigateToTab(tab);
+  }, [isSdr, tab]);
   useEffect(() => { setLeadsOffset(0); }, [selectedFolderId]);
   useEffect(() => { setCallsOffset(0); }, [dateRange.from, dateRange.to]);
 
@@ -202,11 +212,13 @@ function AuthenticatedApp() {
 
 export default function App() {
   const { session, loading, login, register, acceptInvite } = useAuth();
+  useEffect(() => {
+    if (session && isPublicAuthPath(window.location.pathname)) window.history.replaceState({}, '', tabPaths.dashboard);
+  }, [session]);
   if (loading) return <div className="auth-shell"><p>Carregando sessão...</p></div>;
   if (!session) {
-    const match = window.location.pathname.match(/^\/(?:app\/)?invite\/([^/]+)/);
-    const isRegister = /^\/(?:app\/)?cadastro\/?$/.test(window.location.pathname);
-    return match ? <AcceptInvitePage token={decodeURIComponent(match[1])} acceptInvite={acceptInvite} /> : isRegister ? <RegisterPage register={register} /> : <LoginPage login={login} />;
+    const route = authRouteFromPath(window.location.pathname);
+    return route.type === 'invite' ? <AcceptInvitePage token={route.token} acceptInvite={acceptInvite} /> : route.type === 'register' ? <RegisterPage register={register} /> : <LoginPage login={login} />;
   }
   return <AuthenticatedApp />;
 }

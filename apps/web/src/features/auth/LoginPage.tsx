@@ -24,6 +24,6 @@ export function LoginPage({ login, error }: { login: (email: string, password: s
       <Button type="submit" disabled={busy}>{busy ? 'Entrando...' : 'Entrar na central'}</Button>
     </form>
     <div className="auth-trust"><span className="auth-trust-icon">✓</span><span>Seus dados ficam protegidos e só você acessa sua operação.</span></div>
-    <div className="auth-links"><span>Primeira vez?</span><a href="/app/cadastro">Criar minha empresa</a></div>
+    <div className="auth-links"><span>Primeira vez?</span><a href="/registro">Criar minha empresa</a></div>
   </Panel></AuthShell>;
 }

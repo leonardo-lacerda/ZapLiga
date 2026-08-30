@@ -29,6 +29,6 @@ export function RegisterPage({ register }: { register: (input: RegisterInput) =>
       <label className="auth-field-wide"><span>Slug da empresa <small>Opcional · usado no endereço da operação</small></span><input value={form.companySlug} onChange={(event) => update('companySlug', event.target.value)} placeholder="minha-empresa" /></label>
       <Button type="submit" disabled={busy}>{busy ? 'Criando operação...' : 'Criar minha operação'}</Button>
     </form>
-    <div className="auth-links"><span>Já possui uma conta?</span><a href="/app/">Entrar</a></div>
+    <div className="auth-links"><span>Já possui uma conta?</span><a href="/login">Entrar</a></div>
   </Panel></AuthShell>;
 }

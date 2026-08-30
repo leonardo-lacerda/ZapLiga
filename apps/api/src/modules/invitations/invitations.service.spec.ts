@@ -35,7 +35,7 @@ describe('InvitationsService manual SDR links', () => {
     const result = await service.createSdrInvitation('tenant-1', 'leader-1', 'sdr@example.com', 'SDR Example');
 
     expect(result.role).toBe('sdr');
-    expect(result.invitationUrl).toMatch(/^https:\/\/app\.example\.com\/app\/invite\//);
+    expect(result.invitationUrl).toMatch(/^https:\/\/app\.example\.com\/convite\//);
     expect(service.mailer.send).not.toHaveBeenCalled();
     expect(service.audit.record).toHaveBeenCalledWith(expect.objectContaining({
       action: 'sdr.invitation.created',

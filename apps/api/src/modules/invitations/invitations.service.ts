@@ -33,7 +33,7 @@ export class InvitationsService {
     const expiresAt = new Date(Date.now() + this.invitationTtlSeconds * 1000);
     await this.db.query(`INSERT INTO invitations (id, tenant_id, invited_email, invitee_name, role, token_hash, invited_by, expires_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`, [invitationId, tenantId, normalizedEmail, normalizedName, role, hashToken(token), invitedBy, expiresAt]);
     const origin = (process.env.WEB_ORIGIN ?? 'http://localhost:5173').split(',')[0].replace(/\/$/, '');
-    const invitationUrl = `${origin}/app/invite/${encodeURIComponent(token)}`;
+    const invitationUrl = `${origin}/convite/${encodeURIComponent(token)}`;
     if (delivery === 'email') {
       try {
         await this.mailer.send({ email: normalizedEmail, tenantName: tenant.name, role, invitationUrl });
