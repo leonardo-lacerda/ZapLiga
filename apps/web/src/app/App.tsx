@@ -99,7 +99,13 @@ function AuthenticatedApp() {
   useEffect(() => { setLeadsOffset(0); }, [selectedFolderId]);
   useEffect(() => { setCallsOffset(0); }, [dateRange.from, dateRange.to]);
 
-  useEffect(() => { void load(); const timer = setInterval(() => void load(), 3000); return () => clearInterval(timer); }, [load]);
+  useEffect(() => {
+    void load();
+    const refreshWhenVisible = () => { if (document.visibilityState === 'visible') void load(); };
+    const timer = setInterval(refreshWhenVisible, 5000);
+    document.addEventListener('visibilitychange', refreshWhenVisible);
+    return () => { clearInterval(timer); document.removeEventListener('visibilitychange', refreshWhenVisible); };
+  }, [load]);
   useEffect(() => {
     if (!qrNumberId) return;
     let closed = false;

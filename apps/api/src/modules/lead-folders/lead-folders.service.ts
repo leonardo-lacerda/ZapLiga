@@ -190,18 +190,47 @@ export class LeadFoldersService {
       const existingByPhone = new Map(existing.rows.map((row: any) => [row.phone, row]));
       const newLeads = validLeads.filter((lead) => !existingByPhone.has(lead.phone));
       if (Number(current.rows[0]?.count ?? 0) + newLeads.length > Number(tenant.rows[0]?.max_leads ?? 100000)) throw new ConflictException('O CSV excede o limite de leads desta empresa');
-      let imported = 0;
+      const sameFolderExisting = validLeads.filter((lead) => existingByPhone.get(lead.phone)?.folder_id === folderId);
+      duplicated += validLeads.filter((lead) => existingByPhone.get(lead.phone)?.folder_id && existingByPhone.get(lead.phone)?.folder_id !== folderId).length;
+      const insertLeads = newLeads;
+
+      // Update and insert in bounded multi-row statements. The old loop held
+      // the transaction while issuing one round-trip per CSV row, which made a
+      // 50k import monopolize a database connection for a long time.
+      const chunkSize = 500;
       let updated = 0;
-      for (const lead of validLeads) {
-        const existingLead = existingByPhone.get(lead.phone);
-        if (existingLead && existingLead.folder_id !== folderId) { duplicated++; continue; }
-        if (existingLead) {
-          await client.query('UPDATE leads SET name = $1 WHERE tenant_id = $2 AND id = (SELECT id FROM leads WHERE tenant_id = $2 AND phone = $3)', [lead.name, tenantId, lead.phone]);
-          updated++;
-        } else {
-          await client.query('INSERT INTO leads (id, tenant_id, folder_id, name, phone) VALUES ($1, $2, $3, $4, $5)', [randomUUID(), tenantId, folderId, lead.name, lead.phone]);
-          imported++;
-        }
+      for (let offset = 0; offset < sameFolderExisting.length; offset += chunkSize) {
+        const chunk = sameFolderExisting.slice(offset, offset + chunkSize);
+        const values: unknown[] = [];
+        const tuples = chunk.map((lead, index) => {
+          const base = index * 3;
+          values.push(lead.phone, lead.name, tenantId);
+          return `($${base + 1}, $${base + 2}, $${base + 3})`;
+        });
+        const result = await client.query(`
+          UPDATE leads AS l
+          SET name = data.name
+          FROM (VALUES ${tuples.join(',')}) AS data(phone, name, tenant_id)
+          WHERE l.tenant_id = data.tenant_id AND l.phone = data.phone
+        `, values);
+        updated += result.rowCount ?? 0;
+      }
+
+      let imported = 0;
+      for (let offset = 0; offset < insertLeads.length; offset += chunkSize) {
+        const chunk = insertLeads.slice(offset, offset + chunkSize);
+        const values: unknown[] = [];
+        const tuples = chunk.map((lead, index) => {
+          const base = index * 5;
+          values.push(randomUUID(), tenantId, folderId, lead.name, lead.phone);
+          return `($${base + 1}, $${base + 2}, $${base + 3}, $${base + 4}, $${base + 5})`;
+        });
+        const result = await client.query(`
+          INSERT INTO leads (id, tenant_id, folder_id, name, phone)
+          VALUES ${tuples.join(',')}
+          ON CONFLICT (tenant_id, phone) DO NOTHING
+        `, values);
+        imported += result.rowCount ?? 0;
       }
       return { imported, updated, duplicated, skipped, total: records.length };
     });

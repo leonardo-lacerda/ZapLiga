@@ -28,7 +28,7 @@ describe('auth and tenant guards', () => {
     const db = { query: jest.fn()
       .mockResolvedValueOnce({ rows: [{ id: 'tenant-a', status: 'active' }] })
       .mockResolvedValueOnce({ rows: [{ tenant_id: 'tenant-a', role: 'sdr', status: 'active', tenant_status: 'active' }] }) };
-    await expect(new TenantMembershipGuard(db as any, { record: jest.fn() } as any).canActivate(contextFor(request))).resolves.toBe(true);
+    await expect(new TenantMembershipGuard(db as any, { record: jest.fn() } as any, { client: { set: jest.fn().mockResolvedValue('OK') } } as any).canActivate(contextFor(request))).resolves.toBe(true);
     expect(request.tenantId).toBe('tenant-a');
     expect(request.user.tenantMembership.role).toBe('sdr');
   });

@@ -7,6 +7,7 @@ import { DatabaseService } from '../../database/database.service';
 import { DialerService } from '../dialer/dialer.service';
 import { legacyTenantId } from '../../database/tenant-context';
 import { AuthService } from '../auth/auth.service';
+import { runtimeInstanceId } from '../../infrastructure/runtime-instance';
 
 @Injectable()
 export class SdrGateway implements OnModuleDestroy {
@@ -43,6 +44,12 @@ export class SdrGateway implements OnModuleDestroy {
   }
 
   onModuleDestroy() { this.server?.close(); }
+  closeAll() {
+    for (const socket of this.controls.values()) socket.close(1001, 'servidor reiniciando');
+    this.controls.clear();
+    this.sessions.clear();
+    this.tenantBySdr.clear();
+  }
   isConnected(sdrId: string) { return this.controls.get(sdrId)?.readyState === WebSocket.OPEN; }
   getSocket(sdrId: string) { const socket = this.controls.get(sdrId); return socket?.readyState === WebSocket.OPEN ? socket : undefined; }
 
@@ -87,10 +94,10 @@ export class SdrGateway implements OnModuleDestroy {
           RETURNING id, name, available, state, current_pause_id
         `, [randomUUID(), identity.tenantId, identity.userId, name, String(message.sessionId ?? '')])).rows[0];
         const claimed = await this.db.query(`
-          UPDATE sdrs SET user_id = $1, session_id = $2
+          UPDATE sdrs SET user_id = $1, session_id = $2, connection_instance_id = $5
           WHERE tenant_id = $3 AND id = $4
           RETURNING id, name, available, state, current_pause_id
-        `, [identity.userId, String(message.sessionId ?? ''), identity.tenantId, sdr.id]);
+        `, [identity.userId, String(message.sessionId ?? ''), identity.tenantId, sdr.id, runtimeInstanceId]);
         const sdrId = claimed.rows[0].id;
         const tenantId = identity.tenantId;
         this.controls.set(sdrId, socket); this.sessions.set(socket, sdrId); this.tenantBySdr.set(sdrId, tenantId);
@@ -126,7 +133,7 @@ export class SdrGateway implements OnModuleDestroy {
     const tenantId = this.tenantBySdr.get(sdrId) ?? legacyTenantId();
     if (!isCurrentSocket) return;
     this.tenantBySdr.delete(sdrId);
-    await this.db.query(`UPDATE sdrs SET available = false, state = CASE WHEN current_pause_id IS NULL THEN 'offline' ELSE state END WHERE tenant_id = $1 AND id = $2`, [tenantId, sdrId]);
+    await this.db.query(`UPDATE sdrs SET available = false, connection_instance_id = NULL, state = CASE WHEN current_pause_id IS NULL THEN 'offline' ELSE state END WHERE tenant_id = $1 AND id = $2 AND connection_instance_id = $3`, [tenantId, sdrId, runtimeInstanceId]);
     await this.dialer.handleSdrDisconnected(sdrId, tenantId);
   }
 

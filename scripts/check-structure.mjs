@@ -5,7 +5,7 @@ const rootFiles = new Set([
   'docker-compose.yml', 'package.json', 'package-lock.json', 'README.md',
 ]);
 const entries = await readdir('.');
-const unexpected = entries.filter((entry) => !rootFiles.has(entry) && entry !== 'apps' && entry !== 'node_modules' && entry !== 'scripts' && entry !== 'docs' && entry !== 'services' && entry !== 'backups' && entry !== 'Nova pasta' && entry !== '.git' && entry !== '.github');
+const unexpected = entries.filter((entry) => !rootFiles.has(entry) && entry !== 'apps' && entry !== 'node_modules' && entry !== 'scripts' && entry !== 'docs' && entry !== 'services' && entry !== 'backups' && entry !== 'Nova pasta' && entry !== '.git' && entry !== '.github' && entry !== '.claude' && entry !== '.tmp-zapliga-hosting');
 if (unexpected.length) throw new Error(`Arquivos inesperados na raiz: ${unexpected.join(', ')}`);
 
 for (const path of ['apps/api/src', 'apps/web/src', 'apps/landing']) {

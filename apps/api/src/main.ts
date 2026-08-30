@@ -7,6 +7,9 @@ import { SdrGateway } from './modules/sdrs/sdr.gateway';
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
+  // Let Nest run OnModuleDestroy hooks on deploys/restarts so the dialer can
+  // close media sockets and persist a clean terminal state for active calls.
+  app.enableShutdownHooks(['SIGTERM', 'SIGINT']);
   // The API is a pure JSON backend (no server-rendered HTML), so CSP/COEP add
   // no protection here and only risk breaking the health check or fetch()
   // clients; keep the headers that matter for an API (nosniff, no-referrer,

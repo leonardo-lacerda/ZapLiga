@@ -4,6 +4,7 @@ import { AuthenticatedUser, TenantRole } from './auth.types';
 import { AuthService } from './auth.service';
 import { DatabaseService } from '../../database/database.service';
 import { AuditService } from '../audit/audit.service';
+import { RedisService } from '../../infrastructure/redis/redis.service';
 
 export const ROLES_KEY = 'zapcall_roles';
 export const Roles = (...roles: Array<TenantRole | 'super_admin'>) => SetMetadata(ROLES_KEY, roles);
@@ -39,9 +40,7 @@ export class AuthGuard implements CanActivate {
 
 @Injectable()
 export class TenantMembershipGuard implements CanActivate {
-  private readonly recentAdminAccess = new Map<string, number>();
-
-  constructor(private readonly db: DatabaseService, private readonly audit: AuditService) {}
+  constructor(private readonly db: DatabaseService, private readonly audit: AuditService, private readonly redis: RedisService) {}
 
   async canActivate(context: ExecutionContext) {
     const request = context.switchToHttp().getRequest<any>();
@@ -57,9 +56,8 @@ export class TenantMembershipGuard implements CanActivate {
       request.user.tenantMembership = { tenantId, role: 'leader', status: 'active' };
       request.tenantId = tenantId;
       const auditKey = `${user.id}:${tenantId}`;
-      const lastAudit = this.recentAdminAccess.get(auditKey) ?? 0;
-      if (Date.now() - lastAudit > 5 * 60_000) {
-        this.recentAdminAccess.set(auditKey, Date.now());
+      const shouldAudit = await this.redis.client.set(`zapcall:audit:admin-access:${auditKey}`, '1', 'EX', 300, 'NX');
+      if (shouldAudit === 'OK') {
         await this.audit.record({ actorUserId: user.id, tenantId, action: 'tenant.admin_access', entityType: 'tenant', entityId: tenantId });
       }
       return true;

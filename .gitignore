@@ -5,3 +5,7 @@ dist/
 *.tsbuildinfo
 backups/
 .DS_Store
+docs/security-audit/.venv/
+docs/security-audit/__pycache__/
+.claude/
+.tmp-zapliga-hosting/

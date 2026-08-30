@@ -13,8 +13,10 @@ export class WaxumClient implements OnModuleDestroy {
     const configured = Number(process.env.WAXUM_REQUEST_INTERVAL_MS ?? 250);
     return Number.isFinite(configured) ? Math.max(0, configured) : 250;
   })();
-  private requestChain: Promise<void> = Promise.resolve();
-  private nextRequestAt = 0;
+  // Throttle independently per WhatsApp session. The previous global chain
+  // made one busy tenant block QR/status/call operations for every tenant.
+  private readonly requestChains = new Map<string, Promise<void>>();
+  private readonly nextRequestAt = new Map<string, number>();
   private natsConnection?: Promise<NatsConnection>;
 
   async onModuleDestroy() {
@@ -31,21 +33,32 @@ export class WaxumClient implements OnModuleDestroy {
 
   private request<T>(path: string, init: RequestInit = {}, maxAttempts = 3): Promise<T> {
     const run = () => this.requestWithRetry<T>(path, init, maxAttempts);
-    const queued = this.requestChain.then(run, run);
-    this.requestChain = queued.then(() => undefined, () => undefined);
+    const key = this.queueKey(path);
+    const previous = this.requestChains.get(key) ?? Promise.resolve();
+    const queued = previous.then(run, run);
+    const settled = queued.then(() => undefined, () => undefined);
+    this.requestChains.set(key, settled);
+    void settled.then(() => { if (this.requestChains.get(key) === settled) this.requestChains.delete(key); });
     return queued;
   }
 
-  private async waitForRequestSlot() {
+  private queueKey(path: string) {
+    const match = path.match(/\/sessions\/([^/]+)/);
+    return match?.[1] ? `session:${decodeURIComponent(match[1])}` : 'control-plane';
+  }
+
+  private async waitForRequestSlot(key: string) {
     const now = Date.now();
-    const waitMs = Math.max(0, this.nextRequestAt - now);
-    this.nextRequestAt = Math.max(now, this.nextRequestAt) + this.requestIntervalMs;
+    const next = this.nextRequestAt.get(key) ?? 0;
+    const waitMs = Math.max(0, next - now);
+    this.nextRequestAt.set(key, Math.max(now, next) + this.requestIntervalMs);
     if (waitMs > 0) await new Promise((resolve) => setTimeout(resolve, waitMs));
   }
 
   private async requestWithRetry<T>(path: string, init: RequestInit, maxAttempts: number): Promise<T> {
+    const queueKey = this.queueKey(path);
     for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
-      await this.waitForRequestSlot();
+      await this.waitForRequestSlot(queueKey);
       const response = await fetch(`${this.baseUrl}${path}`, { ...init, signal: init.signal ?? AbortSignal.timeout(10000), headers: { ...this.headers(), ...(init.headers ?? {}) } });
       const body = await response.text();
       let parsed: any = body;

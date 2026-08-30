@@ -7,6 +7,7 @@ import { RedisService } from '../../infrastructure/redis/redis.service';
 import { WaxumClient } from '../../infrastructure/waxum/waxum.client';
 import { normalizeWaxumStatus } from '../../infrastructure/waxum/waxum-status';
 import { SdrGateway } from '../sdrs/sdr.gateway';
+import { runtimeHeartbeatKey, runtimeInstanceId } from '../../infrastructure/runtime-instance';
 
 type CallResource = {
   tenantId: string;
@@ -39,6 +40,7 @@ type CallResource = {
 export class DialerService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(DialerService.name);
   private timer?: NodeJS.Timeout;
+  private heartbeatTimer?: NodeJS.Timeout;
   private readonly ticking = new Set<string>();
   private readonly lastStatusSyncAt = new Map<string, number>();
   private readonly active = new Map<string, CallResource>();
@@ -47,7 +49,6 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
   // Consecutive "instant failure" count per WhatsApp line (no media frames, no
   // answer, closed in <FLAG_FAST_FAIL_MS). Repeated instant failures are the
   // signature of a WhatsApp reachout timelock (463 MissingTcToken).
-  private readonly lineFailures = new Map<string, number>();
   private readonly FLAG_FAILURE_THRESHOLD = 2;
   private readonly FLAG_FAST_FAIL_MS = 5000;
   private readonly flagQuarantineHours = Math.max(1, Number(process.env.WHATSAPP_FLAG_HOURS) || 6);
@@ -60,17 +61,21 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
   ) {}
 
   onModuleInit() {
+    void this.heartbeat();
+    this.heartbeatTimer = setInterval(() => void this.heartbeat(), 10_000);
     this.timer = setInterval(() => void this.tickAllTenants(), 1000);
     void this.resetStaleSdrPresence().then(() => this.recoverInterruptedCalls()).then(() => this.tickAllTenants());
   }
 
-  onModuleDestroy() {
+  async onModuleDestroy() {
     if (this.timer) clearInterval(this.timer);
-    for (const resource of this.active.values()) {
-      resource.answerAbort?.abort();
-      resource.media?.close();
-    }
+    if (this.heartbeatTimer) clearInterval(this.heartbeatTimer);
+    await Promise.allSettled([...this.active.keys()].map((callId) => this.finishCall(callId, 'failed', 'api_restarted', false)));
+    await this.redis.client.del(runtimeHeartbeatKey).catch(() => undefined);
+    this.gateway.closeAll();
   }
+
+  private heartbeat() { return this.redis.client.set(runtimeHeartbeatKey, runtimeInstanceId, 'EX', 30); }
 
   async getSettings(tenantId = legacyTenantId()) {
     await this.db.query('INSERT INTO dialer_settings (tenant_id) VALUES ($1) ON CONFLICT (tenant_id) DO NOTHING', [tenantId]);
@@ -78,9 +83,26 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
     return result.rows[0];
   }
 
-  getLogs(tenantId = legacyTenantId()) { return this.logs.filter((entry) => entry.tenantId === tenantId).slice(0, 100); }
+  async getLogs(tenantId = legacyTenantId()) {
+    const shared = await this.redis.client.lrange(`zapcall:tenant:${tenantId}:dialer:logs`, 0, 99).catch(() => [] as string[]);
+    if (shared.length) return shared.flatMap((entry) => { try { return [JSON.parse(entry)]; } catch { return []; } });
+    return this.logs.filter((entry) => entry.tenantId === tenantId).slice(0, 100);
+  }
 
   private normalizePhone(value: unknown) { return String(value ?? '').replace(/\D/g, ''); }
+
+  private relayAudio(socket: WebSocket | undefined, data: RawData) {
+    if (!socket || socket.readyState !== WebSocket.OPEN) return false;
+    // Audio is real-time data. Once the socket has a meaningful backlog, old
+    // frames are less useful than keeping latency bounded. Dropping a frame
+    // here prevents a slow browser/Waxum peer from growing memory without
+    // bound under concurrency.
+    if (socket.bufferedAmount > 256 * 1024) {
+      this.logger.warn('Audio relay backpressure: frame descartado por buffer cheio');
+      return false;
+    }
+    try { socket.send(data, { binary: true }); return true; } catch { return false; }
+  }
 
   // Resolve the VoIP recipient for a phone. WhatsApp calls require the callee's
   // LID (not the phone-number JID) to derive media keys. Cold numbers have no
@@ -183,6 +205,9 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
     const entry = { id: randomUUID(), at: new Date().toISOString(), level, message, callId, tenantId };
     this.logs.unshift(entry);
     if (this.logs.length > 100) this.logs.pop();
+    void this.redis.client.lpush(`zapcall:tenant:${tenantId}:dialer:logs`, JSON.stringify(entry))
+      .then(() => this.redis.client.ltrim(`zapcall:tenant:${tenantId}:dialer:logs`, 0, 99))
+      .catch(() => undefined);
     this.gateway.broadcast({ type: 'dialer_log', log: entry }, tenantId);
   }
 
@@ -332,6 +357,15 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
   }
 
   async getStatus(tenantId = legacyTenantId(), from?: string, to?: string) {
+    const cacheKey = `zapcall:tenant:${tenantId}:dashboard:${from ?? ''}:${to ?? ''}`;
+    const cached = await this.redis.client.get(cacheKey).catch(() => null);
+    if (cached) { try { return JSON.parse(cached); } catch { /* recompute corrupt cache */ } }
+    const result = await this.getStatusFresh(tenantId, from, to);
+    await this.redis.client.set(cacheKey, JSON.stringify(result), 'PX', Math.max(250, Number(process.env.DASHBOARD_CACHE_TTL_MS ?? 1500) || 1500)).catch(() => undefined);
+    return result;
+  }
+
+  private async getStatusFresh(tenantId = legacyTenantId(), from?: string, to?: string) {
     const settings = await this.getSettings(tenantId);
     const end = to && /^\d{4}-\d{2}-\d{2}$/.test(to) ? `${to}T23:59:59.999Z` : new Date().toISOString();
     const startDate = from && /^\d{4}-\d{2}-\d{2}$/.test(from) ? new Date(`${from}T00:00:00.000Z`) : new Date(Date.now() - 24 * 60 * 60 * 1000);
@@ -442,7 +476,9 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
     return {
       running: settings.running,
       settings,
-      active_calls: Array.from(this.active.values()).filter((resource) => resource.tenantId === tenantId).length,
+      // Read this from Postgres so the dashboard remains correct if work is
+      // ever handled by more than one API process.
+      active_calls: activeCalls.rows.length,
       available_sdrs: available.rows[0].count,
       call_counts: Object.fromEntries(counts.rows.map((row: any) => [row.status, row.count])),
       answered: answered.rows[0].answered,
@@ -630,7 +666,7 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
       await this.db.transaction(async (client) => {
         const folder = await client.query('SELECT folder_id, is_active FROM leads l JOIN lead_folders f ON f.tenant_id = l.tenant_id AND f.id = l.folder_id WHERE l.tenant_id = $1 AND l.id = $2 FOR UPDATE', [tenantId, lead.id]);
         if (!folder.rows[0]?.is_active) throw new Error('A pasta deste lead está inativa');
-        await client.query(`INSERT INTO calls (id, tenant_id, folder_id, lead_id, number_id, sdr_id, status, attempt_number, source, offer_expires_at) VALUES ($1,$2,$3,$4,$5,$6,'reserved',$7,$8,$9)`, [callId, tenantId, folder.rows[0].folder_id, lead.id, number.id, sdr.id, isAutomatic ? Number(lead.attempts) + 1 : 0, source, expires]);
+        await client.query(`INSERT INTO calls (id, tenant_id, folder_id, lead_id, number_id, sdr_id, status, attempt_number, source, offer_expires_at, owner_instance_id) VALUES ($1,$2,$3,$4,$5,$6,'reserved',$7,$8,$9,$10)`, [callId, tenantId, folder.rows[0].folder_id, lead.id, number.id, sdr.id, isAutomatic ? Number(lead.attempts) + 1 : 0, source, expires, runtimeInstanceId]);
         if (isAutomatic) {
           await client.query(`UPDATE leads SET status = 'reserved', attempts = attempts + 1, last_auto_round = $1 WHERE tenant_id = $2 AND id = $3`, [Number(settings.dialer_round ?? 1), tenantId, lead.id]);
         }
@@ -653,10 +689,11 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
 
   private async recoverInterruptedCalls() {
     const result = await this.db.query(`
-      SELECT id, tenant_id FROM calls
+      SELECT id, tenant_id, owner_instance_id FROM calls
       WHERE status IN ('reserved', 'dialing', 'media_active')
     `);
     for (const row of result.rows) {
+      if (row.owner_instance_id && await this.redis.client.exists(`zapcall:runtime:${row.owner_instance_id}`)) continue;
       try {
         await this.finishCall(row.id, 'failed', 'api_restarted', false, row.tenant_id);
       } catch (error) {
@@ -666,7 +703,11 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
   }
 
   private async resetStaleSdrPresence() {
-    await this.db.query(`UPDATE sdrs SET available = false, session_id = '', state = CASE WHEN current_pause_id IS NULL THEN 'offline' ELSE 'post_call' END`);
+    const result = await this.db.query(`SELECT id, tenant_id, connection_instance_id FROM sdrs WHERE available = true OR connection_instance_id IS NOT NULL`);
+    for (const row of result.rows) {
+      if (row.connection_instance_id && await this.redis.client.exists(`zapcall:runtime:${row.connection_instance_id}`)) continue;
+      await this.db.query(`UPDATE sdrs SET available = false, session_id = '', connection_instance_id = NULL, state = CASE WHEN current_pause_id IS NULL THEN 'offline' ELSE 'post_call' END WHERE tenant_id = $1 AND id = $2`, [row.tenant_id, row.id]);
+    }
   }
 
   private async expireReservations(tenantId = legacyTenantId()) {
@@ -782,7 +823,7 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
           this.log('Cliente aceitou a chamada; áudio liberado para o SDR', 'info', callId);
         }
         if (browser.readyState === WebSocket.OPEN) {
-          try { browser.send(data, { binary: true }); } catch { /* browser disconnected */ }
+          this.relayAudio(browser, data);
         }
       });
       media.on('error', (error) => {
@@ -818,7 +859,7 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
         if (gotSignal) {
           // Healthy call (audio/answer reached) — the line is fine; clear any
           // instant-failure streak.
-          this.lineFailures.delete(resource.numberId);
+          void this.redis.client.del(`zapcall:line-failures:${resource.numberId}`);
         } else if (elapsed < this.FLAG_FAST_FAIL_MS) {
           // Opened then died instantly with no audio: reachout-block signature.
           void this.registerLineInstantFailure(resource.numberId, resource.tenantId, callId)
@@ -837,7 +878,7 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
           resource.browserAudioLogged = true;
           this.log(`Audio do microfone recebido (${Buffer.byteLength(data as any)} bytes)`, 'info', callId);
         }
-        if (isBinary && media.readyState === WebSocket.OPEN) media.send(data, { binary: true });
+        if (isBinary) this.relayAudio(media, data);
       };
       resource.browserCloseHandler = () => {
         void this.finishCall(callId, resource.mediaActive ? 'failed' : 'cancelled', 'browser_disconnected')
@@ -896,10 +937,11 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
   // healthy lines instead of hammering (and deepening the penalty on) a
   // flagged account. A single call that produces audio resets the counter.
   private async registerLineInstantFailure(numberId: string, tenantId: string, callId: string) {
-    const count = (this.lineFailures.get(numberId) ?? 0) + 1;
-    this.lineFailures.set(numberId, count);
+    const failureKey = `zapcall:line-failures:${numberId}`;
+    const count = await this.redis.client.incr(failureKey);
+    if (count === 1) await this.redis.client.expire(failureKey, 24 * 60 * 60);
     if (count < this.FLAG_FAILURE_THRESHOLD) return;
-    this.lineFailures.delete(numberId);
+    await this.redis.client.del(failureKey);
     const hours = this.flagQuarantineHours;
     await this.db.query(`UPDATE whatsapp_numbers SET flagged_until = now() + ($1 * interval '1 hour') WHERE id = $2 AND tenant_id = $3`, [hours, numberId, tenantId]);
     const label = await this.db.query(`SELECT label FROM whatsapp_numbers WHERE id = $1 AND tenant_id = $2`, [numberId, tenantId]);

@@ -7,6 +7,7 @@ import { WaxumClient } from '../../infrastructure/waxum/waxum.client';
 import { normalizeWaxumStatus } from '../../infrastructure/waxum/waxum-status';
 import { CreateNumberDto } from './dto/create-number.dto';
 import { UpdateNumberDto } from './dto/update-number.dto';
+import { RedisService } from '../../infrastructure/redis/redis.service';
 
 const digits = (value: unknown) => String(value ?? '').replace(/\D/g, '');
 
@@ -15,7 +16,7 @@ const digits = (value: unknown) => String(value ?? '').replace(/\D/g, '');
 export class NumbersController {
   private readonly qrRequests = new Map<string, Promise<any>>();
 
-  constructor(private readonly db: DatabaseService, private readonly waxum: WaxumClient, private readonly audit: AuditService) {}
+  constructor(private readonly db: DatabaseService, private readonly waxum: WaxumClient, private readonly audit: AuditService, private readonly redis: RedisService) {}
 
   @Roles('leader', 'super_admin')
   @Post(['/api/numbers', '/api/tenants/:tenantId/numbers'])
@@ -35,9 +36,14 @@ export class NumbersController {
   async list(@Query('limit') limit = '100', @Query('offset') offset = '0', @CurrentTenant() tenantId: string) {
     const safeLimit = Math.min(200, Math.max(1, Number(limit) || 100));
     const safeOffset = Math.max(0, Number(offset) || 0);
+    const cacheKey = `zapcall:tenant:${tenantId}:numbers:${safeLimit}:${safeOffset}`;
+    const cached = await this.redis.client.get(cacheKey).catch(() => null);
+    if (cached) { try { return JSON.parse(cached); } catch { /* recompute corrupt cache */ } }
     const total = await this.db.query("SELECT count(*)::int AS total FROM whatsapp_numbers WHERE tenant_id = $1 AND status <> 'removed'", [tenantId]);
     const items = await this.db.query("SELECT * FROM whatsapp_numbers WHERE tenant_id = $1 AND status <> 'removed' ORDER BY created_at DESC LIMIT $2 OFFSET $3", [tenantId, safeLimit, safeOffset]);
-    return { items: items.rows, total: Number(total.rows[0]?.total ?? 0), limit: safeLimit, offset: safeOffset };
+    const response = { items: items.rows, total: Number(total.rows[0]?.total ?? 0), limit: safeLimit, offset: safeOffset };
+    await this.redis.client.set(cacheKey, JSON.stringify(response), 'PX', 1500).catch(() => undefined);
+    return response;
   }
 
   @Roles('leader', 'super_admin')

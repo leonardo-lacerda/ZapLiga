@@ -12,7 +12,14 @@ types.setTypeParser(types.builtins.DATE, (value: string) => value);
 
 @Injectable()
 export class DatabaseService implements OnModuleInit, OnModuleDestroy {
-  readonly pool = new Pool({ connectionString: process.env.DATABASE_URL });
+  private readonly poolMax = Math.max(2, Number(process.env.PG_POOL_MAX ?? 10) || 10);
+  readonly pool = new Pool({
+    connectionString: process.env.DATABASE_URL,
+    max: this.poolMax,
+    idleTimeoutMillis: Math.max(1000, Number(process.env.PG_IDLE_TIMEOUT_MS ?? 30000) || 30000),
+    connectionTimeoutMillis: Math.max(1000, Number(process.env.PG_CONNECTION_TIMEOUT_MS ?? 5000) || 5000),
+    maxUses: Math.max(0, Number(process.env.PG_MAX_USES ?? 0) || 0) || undefined,
+  });
 
   async onModuleInit() {
     await this.migrate();
