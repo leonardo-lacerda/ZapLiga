@@ -300,7 +300,7 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
     let lead: any;
     const leadId = String(input.leadId ?? '').trim();
     if (leadId) {
-      const result = await this.db.query(`SELECT l.* FROM leads l JOIN lead_folders f ON f.tenant_id = l.tenant_id AND f.id = l.folder_id WHERE l.tenant_id = $1 AND l.id = $2 AND f.is_active = true AND l.do_not_call = false`, [tenantId, leadId]);
+      const result = await this.db.query(`SELECT l.* FROM leads l JOIN lead_folders f ON f.tenant_id = l.tenant_id AND f.id = l.folder_id WHERE l.tenant_id = $1 AND l.id = $2 AND l.do_not_call = false`, [tenantId, leadId]);
       lead = result.rows[0];
       if (lead) {
         const activeCall = await this.db.query(`SELECT 1 FROM calls WHERE tenant_id = $1 AND lead_id = $2 AND status IN ('reserved', 'dialing', 'media_active') LIMIT 1`, [tenantId, lead.id]);
@@ -309,7 +309,7 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
     } else {
       const phone = String(input.phone ?? '').replace(/\D/g, '');
       if (!phone) throw new Error('Informe um telefone valido');
-      const existing = await this.db.query(`SELECT l.* FROM leads l JOIN lead_folders f ON f.tenant_id = l.tenant_id AND f.id = l.folder_id WHERE l.tenant_id = $1 AND l.phone = $2 AND f.is_active = true LIMIT 1`, [tenantId, phone]);
+      const existing = await this.db.query(`SELECT l.* FROM leads l JOIN lead_folders f ON f.tenant_id = l.tenant_id AND f.id = l.folder_id WHERE l.tenant_id = $1 AND l.phone = $2 LIMIT 1`, [tenantId, phone]);
       if (existing.rows[0]) {
         lead = existing.rows[0];
         const activeCall = await this.db.query(`SELECT 1 FROM calls WHERE tenant_id = $1 AND lead_id = $2 AND status IN ('reserved', 'dialing', 'media_active') LIMIT 1`, [tenantId, lead.id]);
@@ -326,9 +326,7 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
           ]);
           if (Number(count.rows[0]?.count ?? 0) >= Number(tenant.rows[0]?.max_leads ?? 100000)) throw new Error('O limite de leads desta empresa foi atingido');
           const folderId = await this.defaultFolderId(tenantId);
-          const folder = await client.query('SELECT is_active FROM lead_folders WHERE tenant_id = $1 AND id = $2', [tenantId, folderId]);
-          if (!folder.rows[0]?.is_active) throw new Error('Nenhuma pasta de leads ativa');
-          return (await client.query('INSERT INTO leads (id, tenant_id, folder_id, name, phone) VALUES ($1, $2, $3, $4, $5) RETURNING *', [randomUUID(), tenantId, folderId, String(input.name ?? '').trim() || 'Ligacao manual', phone])).rows[0];
+          return (await client.query("INSERT INTO leads (id, tenant_id, folder_id, name, phone, status) VALUES ($1, $2, $3, $4, $5, 'manual') RETURNING *", [randomUUID(), tenantId, folderId, String(input.name ?? '').trim() || 'Ligacao manual', phone])).rows[0];
         });
       }
     }
@@ -688,7 +686,7 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
     try {
       await this.db.transaction(async (client) => {
         const folder = await client.query('SELECT folder_id, is_active FROM leads l JOIN lead_folders f ON f.tenant_id = l.tenant_id AND f.id = l.folder_id WHERE l.tenant_id = $1 AND l.id = $2 FOR UPDATE', [tenantId, lead.id]);
-        if (!folder.rows[0]?.is_active) throw new Error('A pasta deste lead está inativa');
+        if (isAutomatic && !folder.rows[0]?.is_active) throw new Error('A pasta deste lead está inativa');
         await client.query(`INSERT INTO calls (id, tenant_id, folder_id, lead_id, number_id, sdr_id, status, attempt_number, source, offer_expires_at, owner_instance_id) VALUES ($1,$2,$3,$4,$5,$6,'reserved',$7,$8,$9,$10)`, [callId, tenantId, folder.rows[0].folder_id, lead.id, number.id, sdr.id, isAutomatic ? Number(lead.attempts) + 1 : 0, source, expires, runtimeInstanceId]);
         if (isAutomatic) {
           await client.query(`UPDATE leads SET status = 'reserved', attempts = attempts + 1, last_auto_round = $1 WHERE tenant_id = $2 AND id = $3`, [Number(settings.dialer_round ?? 1), tenantId, lead.id]);

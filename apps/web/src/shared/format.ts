@@ -6,7 +6,7 @@ export const statusNames: Record<string, string> = {
   queued: 'Na fila', retry_wait: 'Aguardando retry', reserved: 'Reservada', dialing: 'Discando', media_active: 'Em chamada',
   connected: 'Conectado', disconnected: 'Desconectado', completed: 'Concluída', no_answer: 'Não atendeu', failed: 'Falhou',
   online: 'Online', ready: 'Pronto', authenticated: 'Autenticado', offline: 'Offline', available: 'Disponível', in_call: 'Em chamada',
-  post_call: 'Pós-atendimento', paused: 'Pausado', cancelled: 'Cancelada',
+  post_call: 'Pós-atendimento', paused: 'Pausado', cancelled: 'Cancelada', manual: 'Discagem manual',
 };
 
 export const labelStatus = (value: unknown) => statusNames[String(value)] ?? String(value ?? '—');
