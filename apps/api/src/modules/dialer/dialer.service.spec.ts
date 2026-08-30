@@ -90,6 +90,25 @@ describe('DialerService', () => {
       const result = await service.manualCall('lead-1', 'tenant-1');
 
       expect(result).toEqual(expect.objectContaining({ status: 'reserved' }));
+      expect((service as any).active.get(result.callId)).toEqual(expect.objectContaining({
+        previousSdrAvailable: false,
+        previousSdrState: 'offline',
+      }));
+    });
+
+    it('does not renew a Waxum rate-limit window with another manual attempt', async () => {
+      const gateway = makeGateway();
+      const redis = makeRedis();
+      const db = makeDb({
+        sdrs: [{ id: 'sdr-1', available: false, state: 'offline' }],
+        numbers: [{ id: 'num-1', phone: '5585989779394', max_concurrent_calls: 2, last_call_ended_at: new Date(Date.now() + 60_000) }],
+        leads: [{ id: 'lead-1', phone: '5511957632036', name: 'Lead' }],
+      });
+      const service = new DialerService(db as any, redis as any, makeWaxum() as any, gateway as any);
+
+      await expect(service.manualCall('lead-1', 'tenant-1')).rejects.toThrow('temporariamente protegida');
+      expect(redis.reserve).not.toHaveBeenCalled();
+      expect(db.transaction).not.toHaveBeenCalled();
     });
 
     it('refuses to dial when no SDR is connected', async () => {
@@ -145,16 +164,22 @@ describe('DialerService', () => {
       const client = { query: jest.fn().mockResolvedValue({ rows: [] }) };
       const db = { query: jest.fn().mockResolvedValue({ rows: [baseCallRow] }), transaction: jest.fn(async (cb: any) => cb(client)) };
       const redis = makeRedis();
-      const service = new DialerService(db as any, redis as any, makeWaxum() as any, makeGateway() as any);
-      (service as any).active.set('call-1', { tenantId: 'tenant-1', token: 'tok', numberId: 'num-1', leadId: 'lead-1', sdrId: 'sdr-1', mediaActive: false, rateLimitBackoffSeconds: 240 });
+      const gateway = makeGateway();
+      const serviceWithGateway = new DialerService(db as any, redis as any, makeWaxum() as any, gateway as any);
+      (serviceWithGateway as any).active.set('call-1', { tenantId: 'tenant-1', token: 'tok', numberId: 'num-1', leadId: 'lead-1', sdrId: 'sdr-1', mediaActive: false, rateLimitBackoffSeconds: 240, previousSdrAvailable: false, previousSdrState: 'offline' });
 
-      await (service as any).finishCall('call-1', 'cancelled', 'waxum_rate_limited', false, 'tenant-1');
+      await (serviceWithGateway as any).finishCall('call-1', 'cancelled', 'waxum_rate_limited', false, 'tenant-1');
 
       const leadUpdate = client.query.mock.calls.find((call: any[]) => call[0].includes("status = 'queued'"));
       expect(leadUpdate[1]).toEqual(['tenant-1', 'lead-1']);
       const numberUpdate = client.query.mock.calls.find((call: any[]) => call[0].includes('UPDATE whatsapp_numbers'));
       expect(numberUpdate[1]).toEqual([240, 'num-1']);
       expect(redis.release).toHaveBeenCalledWith(expect.objectContaining({ tenantId: 'tenant-1', numberId: 'num-1' }));
+      expect(gateway.sendToSdr).toHaveBeenCalledWith('sdr-1', expect.objectContaining({
+        type: 'call_finished',
+        available: false,
+        state: 'offline',
+      }));
     });
   });
 

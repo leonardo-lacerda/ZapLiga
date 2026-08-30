@@ -168,7 +168,7 @@ function AuthenticatedApp() {
       if (message.type === 'call_started' && message.lead?.name) { setAvailable(false); setActiveCall((current) => ({ ...(current ?? {}), ...message, phase: 'answered' })); startAudio(socket, message.callId); }
       if (message.type === 'media_open') { setActiveCall((current) => current ? { ...current, mediaOpen: true } : current); startAudio(socket, message.callId); }
       if (message.type === 'media_active') setActiveCall((current) => current ? { ...current, mediaActive: true, phase: 'answered' } : current);
-      if (message.type === 'call_finished') { if (audioCall.current === message.callId) audioCall.current = ''; setActiveCall(null); setMicMuted(false); void audio.current.stop(); if (message.pause) { setPostCall(message.pause); setAvailable(false); } else setAvailable(true); void load(); }
+      if (message.type === 'call_finished') { if (audioCall.current === message.callId) audioCall.current = ''; setActiveCall(null); setMicMuted(false); void audio.current.stop(); if (message.pause) { setPostCall(message.pause); setAvailable(false); } else setAvailable(Boolean(message.available)); if (message.outcome === 'waxum_rate_limited') setError('A linha WhatsApp atingiu um limite temporário de chamadas. Aguarde alguns minutos antes de tentar novamente.'); void load(); }
       if (message.type === 'pause_finished') { setPostCall(null); setAvailable(true); void load(); }
       if (message.type === 'error') setError(message.message);
     };

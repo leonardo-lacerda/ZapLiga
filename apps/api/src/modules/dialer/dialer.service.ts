@@ -44,6 +44,8 @@ type CallResource = {
   rateLimitBackoffSeconds?: number;
   callPlacedAt?: number;
   receivedAnyFrame?: boolean;
+  previousSdrAvailable: boolean;
+  previousSdrState: string;
 };
 
 @Injectable()
@@ -280,8 +282,10 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
     const lead = leads.rows[0];
     if (!lead) throw new Error('Este lead não está elegível para uma chamada manual');
     if (!sdr) throw new Error('Nenhum SDR conectado e disponível');
-    if (!numbers.rows.length) throw new Error('Nenhum número WhatsApp conectado e fora do cooldown');
-    const number = numbers.rows.find((row: any) => !isSelfCallNumber(row.phone, lead.phone));
+    if (!numbers.rows.length) throw new Error('Nenhum número WhatsApp conectado');
+    const readyNumbers = numbers.rows.filter((row: any) => !row.last_call_ended_at || new Date(row.last_call_ended_at).getTime() <= Date.now());
+    if (!readyNumbers.length) throw new Error('A linha WhatsApp está temporariamente protegida por limite de chamadas. Aguarde alguns minutos e tente novamente.');
+    const number = readyNumbers.find((row: any) => !isSelfCallNumber(row.phone, lead.phone));
     if (!number) throw new Error('O número de destino é a própria linha de WhatsApp conectada. Ligue para um número diferente.');
 
     const token = randomUUID();
@@ -348,9 +352,11 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
     const sdr = sdrs.rows.find((row: any) => this.gateway.isConnected(row.id));
     if (!sdr) throw new Error('Nenhum SDR conectado e disponivel');
     if (!numbers.rows.length) throw new Error('Nenhum numero WhatsApp conectado');
+    const readyNumbers = numbers.rows.filter((row: any) => !row.last_call_ended_at || new Date(row.last_call_ended_at).getTime() <= Date.now());
+    if (!readyNumbers.length) throw new Error('A linha WhatsApp esta temporariamente protegida por limite de chamadas. Aguarde alguns minutos e tente novamente.');
     // WhatsApp cannot place a call to the line's own number (self-call closes
     // the media socket immediately), so never pair a lead with its own line.
-    const number = numbers.rows.find((row: any) => !isSelfCallNumber(row.phone, lead.phone));
+    const number = readyNumbers.find((row: any) => !isSelfCallNumber(row.phone, lead.phone));
     if (!number) throw new Error('O numero de destino e a propria linha de WhatsApp conectada. Ligue para um numero diferente.');
 
     const token = randomUUID();
@@ -693,7 +699,16 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
         }
         await client.query(`UPDATE sdrs SET available = false, state = 'in_call', last_assigned_at = now() WHERE tenant_id = $1 AND id = $2`, [tenantId, sdr.id]);
       });
-      this.active.set(callId, { tenantId, token, numberId: number.id, leadId: lead.id, sdrId: sdr.id, mediaActive: false });
+      this.active.set(callId, {
+        tenantId,
+        token,
+        numberId: number.id,
+        leadId: lead.id,
+        sdrId: sdr.id,
+        mediaActive: false,
+        previousSdrAvailable: Boolean(sdr.available),
+        previousSdrState: String(sdr.state ?? (sdr.available ? 'available' : 'offline')),
+      });
       // Blind dialing: on automatic calls the SDR must not learn who is being
       // called until the lead actually answers (notifyAnswered reveals it).
       // Manual calls skip this — the SDR already chose the lead themselves.
@@ -949,7 +964,7 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
     // the window expires before we dial that line again, so it self-heals.
     const backoff = computeRateLimitBackoffSeconds(waitSeconds);
     if (resource) resource.rateLimitBackoffSeconds = backoff;
-    this.log(`Waxum limitou a linha (429); aguardando ${backoff}s antes de discar novamente nela`, 'warning', callId);
+    this.log(`Waxum limitou a linha (429); aguardando ${backoff}s antes de discar novamente nela`, 'warning', callId, resource?.tenantId);
     void this.finishCall(callId, 'cancelled', 'waxum_rate_limited')
       .catch((finishError) => this.logger.error(`Could not finish Waxum rate limit for ${callId}: ${String(finishError)}`));
   }
@@ -998,8 +1013,10 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
         attempts: Number(row.attempts), maxAttemptsPerLead: Number(row.max_attempts_per_lead),
       });
       const requiresPostCall = Boolean(row.connected_at);
+      const restoredAvailable = resource?.previousSdrAvailable ?? (isAutomatic ? true : false);
+      const restoredState = restoredAvailable ? 'available' : (resource?.previousSdrState ?? 'offline');
       let pause: any = null;
-      this.log(`Chamada encerrada: ${finalCallStatus} (${outcome})`, transientRateLimit ? 'warning' : finalCallStatus === 'failed' ? 'error' : 'info', callId);
+      this.log(`Chamada encerrada: ${finalCallStatus} (${outcome})`, transientRateLimit ? 'warning' : finalCallStatus === 'failed' ? 'error' : 'info', callId, tenantId);
       await this.db.transaction(async (client) => {
         await client.query(`UPDATE calls SET status = $1, ended_at = now(), duration_seconds = CASE WHEN COALESCE(connected_at, started_at) IS NULL THEN 0 ELSE EXTRACT(EPOCH FROM (now() - COALESCE(connected_at, started_at)))::int END, ring_duration_seconds = CASE WHEN started_at IS NULL THEN NULL ELSE GREATEST(0, EXTRACT(EPOCH FROM (COALESCE(connected_at, now()) - started_at))::int) END, connected_duration_seconds = CASE WHEN connected_at IS NULL THEN NULL ELSE GREATEST(0, EXTRACT(EPOCH FROM (now() - connected_at))::int) END, outcome = $2, failure_reason = CASE WHEN $4 IN ('failed','no_answer') OR $2 = 'waxum_rate_limited' THEN $2 ELSE failure_reason END WHERE tenant_id = $5 AND id = $3 AND status NOT IN ('completed','no_answer','failed','cancelled')`, [finalCallStatus, outcome, callId, status, tenantId]);
         if (!isAutomatic) {
@@ -1030,7 +1047,7 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
           };
           await client.query(`UPDATE sdrs SET available = false, state = 'post_call', current_pause_id = $1 WHERE tenant_id = $2 AND id = $3`, [pauseId, tenantId, row.sdr_id]);
         } else {
-          await client.query(`UPDATE sdrs SET available = true, state = 'available', current_pause_id = NULL WHERE tenant_id = $1 AND id = $2`, [tenantId, row.sdr_id]);
+          await client.query(`UPDATE sdrs SET available = $1, state = $2, current_pause_id = NULL WHERE tenant_id = $3 AND id = $4`, [restoredAvailable, restoredState, tenantId, row.sdr_id]);
         }
         if (transientRateLimit) {
           // WhatsApp rate-limited this line. Push its next-eligible time out by
@@ -1045,8 +1062,10 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
         }
       });
       if (resource) await this.redis.release({ tenantId: resource.tenantId, token: resource.token, numberId: resource.numberId, leadId: resource.leadId, sdrId: resource.sdrId });
-      this.gateway.sendToSdr(row.sdr_id, { type: 'call_finished', callId, status: finalCallStatus, outcome, pause });
-      this.gateway.broadcast({ type: 'sdr_state_changed', sdrId: row.sdr_id, state: requiresPostCall ? 'post_call' : 'available', available: !requiresPostCall, pause }, tenantId);
+      const nextState = requiresPostCall ? 'post_call' : restoredState;
+      const nextAvailable = requiresPostCall ? false : restoredAvailable;
+      this.gateway.sendToSdr(row.sdr_id, { type: 'call_finished', callId, status: finalCallStatus, outcome, pause, state: nextState, available: nextAvailable });
+      this.gateway.broadcast({ type: 'sdr_state_changed', sdrId: row.sdr_id, state: nextState, available: nextAvailable, pause }, tenantId);
     } finally {
       this.active.delete(callId);
       this.finishingCalls.delete(callId);

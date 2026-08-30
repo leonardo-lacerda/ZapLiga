@@ -2,17 +2,19 @@
 
 ## Versão validada
 
-- Versão: `0.12.2`
-- Imagem: `fdciabdul/waxum:0.12.2`
-- Digest do manifesto multi-arquitetura: `sha256:b939815637dc8f382504083fcc83b8b8e66577adfd6e0aee60025feac548122b`
-- Digest Linux/amd64: `sha256:57e75022185d2950e52d370b77f597ad2a533792a17df49925370bad5f121e19`
-- Validada em: `2026-08-27`
+- Versão: `0.12.4`
+- Imagem: `fdciabdul/waxum:0.12.4`
+- Digest do manifesto multi-arquitetura: `sha256:056342ba0f4d269563057573d796de848df8e3b52043463f344bd68065227e18`
+- Digest Linux/amd64: `sha256:7a2c551b83b7eb0d7cd92a76d9f76f82a2888228c2993ef8a04e4e842ec3a576`
+- Validada em: `2026-08-30`
 
 ## Build usado pelo ZapLiga
 
-- Commit oficial: `1d1b6ba6a1280878ac51677a2f0e4c30dcec9d2e` (`v0.12.2`)
+- Commit oficial: `4cfb4e44983e5381667396799bd0e6442a32c4c4` (`v0.12.4`)
 - Imagem oficial fixada pelo digest do manifesto acima.
 - Sem fork ou patch local do Waxum.
+- Middleware global de rate limit do Waxum desativado explicitamente com
+  `RATE_LIMIT_ENABLED=false`; o controle de cadência fica no ZapLiga.
 
 O endpoint de diagnóstico `events/tail` do Waxum limita o payload a 160 caracteres e não deve ser usado para detectar atendimento. O ZapLiga consome o evento completo `wa.events.<session_id>.incoming_call` publicado pelo Waxum no NATS JetStream e correlaciona o `call_id` e a ação `Accept`.
 
