@@ -12,6 +12,7 @@ export class AudioBridge {
   private outgoingSamples: number[] = [];
   private readonly frameSamples = 960;
   private muted = false;
+  private pendingPlayback: ArrayBuffer[] = [];
 
   /**
    * Opens the browser microphone from an explicit user action. Preparing it
@@ -100,6 +101,8 @@ export class AudioBridge {
     source.connect(this.processor);
     this.processor.connect(silent);
     silent.connect(context.destination);
+    const pending = this.pendingPlayback.splice(0);
+    pending.forEach((frame) => this.enqueuePlayback(frame));
   }
 
   setMuted(muted: boolean) {
@@ -112,8 +115,23 @@ export class AudioBridge {
   }
 
   play(raw: ArrayBuffer) {
+    if (raw.byteLength < 2) return;
+    if (!this.context) {
+      // Media can arrive in the same turn as media_open, before getUserMedia
+      // and the AudioContext have finished initializing. Keep a bounded queue
+      // instead of dropping the first inbound voice frames.
+      if (this.pendingPlayback.length < 100) this.pendingPlayback.push(raw.slice(0));
+      return;
+    }
+    if (this.context.state === 'suspended') {
+      void this.context.resume().then(() => this.enqueuePlayback(raw));
+      return;
+    }
+    this.enqueuePlayback(raw);
+  }
+
+  private enqueuePlayback(raw: ArrayBuffer) {
     if (!this.context || raw.byteLength < 2) return;
-    if (this.context.state === 'suspended') void this.context.resume();
     const sampleCount = Math.floor(raw.byteLength / 2);
     const pcm = new Int16Array(sampleCount);
     const view = new DataView(raw);
@@ -144,6 +162,7 @@ export class AudioBridge {
     this.sourceCursor = 0;
     this.outgoingSamples = [];
     this.muted = false;
+    this.pendingPlayback = [];
   }
 
   /** Waxum expects mono PCM16 at exactly 16 kHz. Browsers may run the
