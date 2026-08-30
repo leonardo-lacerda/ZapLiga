@@ -264,7 +264,7 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
     const [sdrs, numbers, leads] = await Promise.all([
       this.db.query(`
         SELECT s.* FROM sdrs s
-        WHERE s.tenant_id = $1 AND s.available = true AND s.state = 'available'
+        WHERE s.tenant_id = $1 AND s.state NOT IN ('in_call', 'post_call')
           AND NOT EXISTS (
             SELECT 1 FROM calls c
             WHERE c.tenant_id = s.tenant_id AND c.sdr_id = s.id AND c.status IN ('reserved', 'dialing', 'media_active')
@@ -337,7 +337,7 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
     const [sdrs, numbers] = await Promise.all([
       this.db.query(`
         SELECT s.* FROM sdrs s
-        WHERE s.tenant_id = $1 AND s.available = true AND s.state = 'available'
+        WHERE s.tenant_id = $1 AND s.state NOT IN ('in_call', 'post_call')
           AND ($2::text IS NULL OR s.user_id = $2)
           AND NOT EXISTS (
             SELECT 1 FROM calls c

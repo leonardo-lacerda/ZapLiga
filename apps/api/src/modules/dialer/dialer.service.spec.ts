@@ -78,6 +78,20 @@ describe('DialerService', () => {
       expect(db.transaction).toHaveBeenCalledTimes(1);
     });
 
+    it('allows manual dialing for a connected but unavailable SDR', async () => {
+      const gateway = makeGateway();
+      const db = makeDb({
+        sdrs: [{ id: 'sdr-1', available: false, state: 'offline' }],
+        numbers: [{ id: 'num-1', phone: '5585989779394', max_concurrent_calls: 2 }],
+        leads: [{ id: 'lead-1', phone: '5511957632036', name: 'Lead' }],
+      });
+      const service = new DialerService(db as any, makeRedis() as any, makeWaxum() as any, gateway as any);
+
+      const result = await service.manualCall('lead-1', 'tenant-1');
+
+      expect(result).toEqual(expect.objectContaining({ status: 'reserved' }));
+    });
+
     it('refuses to dial when no SDR is connected', async () => {
       const gateway = makeGateway();
       gateway.isConnected.mockReturnValue(false);

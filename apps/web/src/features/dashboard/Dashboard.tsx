@@ -10,7 +10,7 @@ type SdrPresence = 'offline' | 'connecting' | 'connected' | 'available' | 'diali
 const presenceCopy: Record<SdrPresence, { label: string; description: string; tone: 'neutral' | 'info' | 'success' | 'warning' }> = {
   offline: { label: 'Desconectado', description: 'Conecte seu painel para começar a receber chamadas.', tone: 'neutral' },
   connecting: { label: 'Conectando', description: 'Estabelecendo o canal seguro com a operação…', tone: 'info' },
-  connected: { label: 'Conectado · indisponível', description: 'Você está conectado, mas ainda não receberá chamadas.', tone: 'neutral' },
+  connected: { label: 'Conectado · indisponível', description: 'Você pode fazer discagens manuais, mas ainda não receberá chamadas automáticas.', tone: 'neutral' },
   available: { label: 'Disponível', description: 'Aguardando uma chamada da fila.', tone: 'success' },
   dialing: { label: 'Chamando', description: 'A chamada está tocando para o lead.', tone: 'info' },
   'in-call': { label: 'Em atendimento', description: 'O lead atendeu. Fale com ele pelo seu headset.', tone: 'success' },
@@ -69,7 +69,7 @@ export function Dashboard({ isSdr, status, available, connected, connecting, sdr
       <form className="form-row" onSubmit={(event) => void manualDial(event)}>
         <input type="tel" placeholder="Telefone com DDD" value={manualPhone} onChange={(event) => setManualPhone(event.target.value)} aria-label="Telefone para discagem manual" required />
         <input placeholder="Nome do contato (opcional)" value={manualName} onChange={(event) => setManualName(event.target.value)} aria-label="Nome do contato" />
-        <Button variant="success" icon="phone" disabled={manualCalling || !connected || !sdrReady || !available}>{manualCalling ? 'Iniciando...' : 'Ligar agora'}</Button>
+        <Button variant="success" icon="phone" disabled={manualCalling || !connected || !sdrReady || Boolean(postCall)}>{manualCalling ? 'Iniciando...' : 'Ligar agora'}</Button>
       </form>
     </Panel>}
     {activeCall?.lead && (() => { const answered = activeCall.phase === 'answered' || activeCall.mediaActive; return <Panel className={`active-call-card${answered ? '' : ' is-ringing'}`}><div><span className="eyebrow">{answered ? 'EM CHAMADA' : 'DISCANDO'}</span><h2>{activeCall.lead.name}</h2><p>{activeCall.lead.phone} · {answered ? <>{activeCall.mediaActive ? 'Áudio conectado' : 'Conectando áudio…'} · <LiveTimer startedAt={activeCall.connectedAt ?? activeCall.connected_at ?? activeCall.callStartedAt} /></> : 'Chamando o cliente…'}</p></div><Button variant="danger" icon="close" onClick={hangup}>{answered ? 'Encerrar' : 'Desligar'}</Button></Panel>; })()}
