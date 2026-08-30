@@ -65,6 +65,16 @@ export const formatSeconds = (value: unknown) => {
   return `${minutes}min${remainder ? ` ${remainder}s` : ''} restantes`;
 };
 
+export const formatDurationCompact = (value: unknown) => {
+  const seconds = Math.max(0, Math.round(Number(value) || 0));
+  if (seconds < 60) return `${seconds}s`;
+  const hours = Math.floor(seconds / 3600);
+  const minutes = Math.floor((seconds % 3600) / 60);
+  const remainder = seconds % 60;
+  if (hours) return `${hours}h${minutes ? ` ${minutes}min` : ''}`;
+  return `${minutes}min${remainder ? ` ${remainder}s` : ''}`;
+};
+
 export const formatNextAttempt = (value: unknown) => {
   if (!value) return 'agora';
   const date = new Date(String(value));

@@ -15,12 +15,12 @@ export class SdrsController {
   @Get(['/api/me/sdr', '/api/tenants/:tenantId/me/sdr'])
   @Roles('sdr')
   async own(@CurrentTenant() tenantId: string, @CurrentUser() user: any) {
-    const existing = await this.db.query('SELECT * FROM sdrs WHERE tenant_id = $1 AND user_id = $2 LIMIT 1', [tenantId, user.id]);
-    if (existing.rows[0]) return existing.rows[0];
+    const existing = await this.db.query('SELECT id FROM sdrs WHERE tenant_id = $1 AND user_id = $2 LIMIT 1', [tenantId, user.id]);
+    if (existing.rows[0]) return this.dialer.getSdrState(existing.rows[0].id, tenantId);
     await this.assertSdrQuota(tenantId);
     const profile = await this.db.query('SELECT name FROM users WHERE id = $1', [user.id]);
     const created = await this.db.query(`INSERT INTO sdrs (id, tenant_id, user_id, name) VALUES ($1, $2, $3, $4) RETURNING *`, [randomUUID(), tenantId, user.id, profile.rows[0]?.name ?? 'SDR']);
-    return created.rows[0];
+    return this.dialer.getSdrState(created.rows[0].id, tenantId);
   }
 
   private async assertSdrQuota(tenantId: string) {

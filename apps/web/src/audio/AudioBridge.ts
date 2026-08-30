@@ -52,10 +52,12 @@ export class AudioBridge {
       });
     } catch (error) {
       const name = error instanceof DOMException ? error.name : 'AudioError';
-      const detail = error instanceof Error ? error.message : String(error);
       let inputs = 0;
       try { inputs = (await navigator.mediaDevices.enumerateDevices()).filter((device) => device.kind === 'audioinput').length; } catch { /* diagnóstico opcional */ }
-      throw new Error(`${name}: ${detail}. Microfones detectados: ${inputs}. Verifique o dispositivo de entrada do Windows.`);
+      if (name === 'NotAllowedError' || name === 'SecurityError') throw new Error('O acesso ao microfone está bloqueado. Libere a permissão do microfone para este site e tente conectar novamente.');
+      if (name === 'NotFoundError' || !inputs) throw new Error('Nenhum microfone foi encontrado. Conecte um headset ou microfone e tente novamente.');
+      if (name === 'NotReadableError' || name === 'AbortError') throw new Error('O microfone está sendo usado ou bloqueado por outro aplicativo. Feche o outro aplicativo e tente novamente.');
+      throw new Error('Não foi possível preparar o áudio. Verifique o dispositivo de entrada do Windows e tente novamente.');
     }
     if (this.stopRequested) {
       stream.getTracks().forEach((track) => track.stop());

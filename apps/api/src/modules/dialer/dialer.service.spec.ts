@@ -222,4 +222,116 @@ describe('DialerService', () => {
       expect(gateway.broadcast).not.toHaveBeenCalled();
     });
   });
+
+  describe('SDR workspace contract', () => {
+    it('returns personal metrics scoped to the authenticated SDR', async () => {
+      const query = jest.fn(async (sql: string, params: any[]) => {
+        if (sql.includes('SELECT id, name FROM sdrs')) return { rows: [{ id: 'sdr-own', name: 'Ana' }] };
+        expect(params[0]).toBe('tenant-1');
+        expect(params[1]).toBe('sdr-own');
+        if (sql.includes('AS wrap_up_seconds')) return { rows: [{ calls: 10, answered: 6, conversation_seconds: 900, wrap_up_seconds: 180, positive: 3, meetings: 1 }] };
+        if (sql.includes('AS code') && sql.includes('GROUP BY')) return { rows: [{ code: 'interessado', count: 2 }] };
+        if (sql.includes('AS day')) return { rows: [{ day: '2026-08-30', calls: 10, answered: 6, conversation_seconds: 900 }] };
+        if (sql.includes('ORDER BY c.created_at DESC LIMIT 10')) return { rows: [{ id: 'call-1', lead_name: 'Cliente' }] };
+        return { rows: [] };
+      });
+      const service = new DialerService({ query } as any, makeRedis() as any, makeWaxum() as any, makeGateway() as any);
+
+      const result = await service.getSdrMetrics('tenant-1', 'user-1', '2026-08-01', '2026-08-30');
+
+      expect(result).toEqual(expect.objectContaining({
+        sdr: { id: 'sdr-own', name: 'Ana' },
+        summary: expect.objectContaining({ calls: 10, answered: 6, answer_rate: 60, average_conversation_seconds: 150, average_wrap_up_seconds: 30, positive: 3, meetings: 1 }),
+        outcomes: [{ code: 'interessado', count: 2 }],
+        trend: [{ day: '2026-08-30', calls: 10, answered: 6, conversation_seconds: 900 }],
+      }));
+      expect(query).toHaveBeenCalledWith(expect.stringContaining('user_id = $2'), ['tenant-1', 'user-1']);
+    });
+
+    it('returns an empty personal dashboard when the user has no SDR profile', async () => {
+      const query = jest.fn().mockResolvedValue({ rows: [] });
+      const service = new DialerService({ query } as any, makeRedis() as any, makeWaxum() as any, makeGateway() as any);
+
+      const result = await service.getSdrMetrics('tenant-1', 'user-without-sdr');
+
+      expect(result.sdr).toBeNull();
+      expect(result.summary.calls).toBe(0);
+      expect(query).toHaveBeenCalledTimes(1);
+    });
+
+    it('returns actionable queue and personal data instead of placeholder zeros', async () => {
+      const query = jest.fn(async (sql: string) => {
+        if (sql.includes('INSERT INTO dialer_settings')) return { rows: [] };
+        if (sql.includes('SELECT * FROM dialer_settings')) return { rows: [{ ...settings, running: true }] };
+        if (sql.includes('SELECT id FROM sdrs') && sql.includes('user_id')) return { rows: [{ id: 'sdr-1' }] };
+        if (sql.includes('SELECT EXISTS') && sql.includes('whatsapp_numbers')) return { rows: [{ ready: true }] };
+        if (sql.includes('SELECT s.id, s.name')) return { rows: [{ id: 'sdr-1', name: 'Ana', available: true, state: 'available', current_pause_id: null }] };
+        if (sql.includes('COUNT(*)::int AS total') && sql.includes('FROM leads')) return { rows: [{ total: 12, ready: 8, waiting: 4 }] };
+        if (sql.includes('conversation_seconds')) return { rows: [{ calls: 9, answered: 5, conversation_seconds: 720, wrap_up_seconds: 180 }] };
+        return { rows: [] };
+      });
+      const service = new DialerService({ query } as any, makeRedis() as any, makeWaxum() as any, makeGateway() as any);
+
+      const result = await service.getSdrStatus('tenant-1', 'user-1');
+
+      expect(result).toEqual(expect.objectContaining({
+        running: true,
+        line_ready: true,
+        next_action: 'Aguardando uma conversa da fila',
+        queue: { total: 12, ready: 8, waiting: 4 },
+        personal: { calls: 9, answered: 5, conversation_seconds: 720, wrap_up_seconds: 180 },
+      }));
+    });
+
+    it('finishes wrap-up without making the SDR available when a pause is requested', async () => {
+      const client = { query: jest.fn(async (sql: string) => {
+        if (sql.includes('SELECT p.*')) return { rows: [{ id: 'pause-1', call_id: 'call-1', lead_id: 'lead-1', started_at: new Date(Date.now() - 10_000) }] };
+        if (sql.includes('SELECT pipeline_stage')) return { rows: [{ pipeline_stage: 'contatado' }] };
+        return { rows: [] };
+      }) };
+      const db = { query: jest.fn(), transaction: jest.fn(async (cb: any) => cb(client)) };
+      const gateway = makeGateway();
+      const service = new DialerService(db as any, makeRedis() as any, makeWaxum() as any, gateway as any);
+
+      const result = await service.finishPause('sdr-1', 'pause-1', { callResult: 'sem_interesse', pipelineStage: 'perdido', notes: '', continueAvailable: false }, 'tenant-1');
+
+      expect(result).toEqual(expect.objectContaining({ available: false, state: 'offline' }));
+      const sdrUpdate = (client.query.mock.calls as any[][]).find((call) => call[0].includes('UPDATE sdrs SET available'));
+      expect(sdrUpdate?.[1]).toEqual(['tenant-1', 'sdr-1', 'pause-1', false, 'offline']);
+      expect(gateway.sendToSdr).toHaveBeenCalledWith('sdr-1', expect.objectContaining({ type: 'pause_finished', available: false }));
+    });
+
+    it('requires a future date and schedules the lead when the result is a callback', async () => {
+      const client = { query: jest.fn(async (sql: string) => {
+        if (sql.includes('SELECT p.*')) return { rows: [{ id: 'pause-1', call_id: 'call-1', lead_id: 'lead-1', started_at: new Date(Date.now() - 10_000) }] };
+        if (sql.includes('SELECT pipeline_stage')) return { rows: [{ pipeline_stage: 'novo' }] };
+        return { rows: [] };
+      }) };
+      const db = { query: jest.fn(), transaction: jest.fn(async (cb: any) => cb(client)) };
+      const service = new DialerService(db as any, makeRedis() as any, makeWaxum() as any, makeGateway() as any);
+
+      await expect(service.finishPause('sdr-1', 'pause-1', { callResult: 'retornar', pipelineStage: 'contatado', notes: 'Ligar amanhã' }, 'tenant-1')).rejects.toThrow('data futura');
+      const callbackAt = new Date(Date.now() + 60 * 60 * 1000).toISOString();
+      await service.finishPause('sdr-1', 'pause-1', { callResult: 'retornar', pipelineStage: 'contatado', notes: 'Ligar amanhã', callbackAt }, 'tenant-1');
+
+      const leadUpdate = (client.query.mock.calls as any[][]).find((call) => call[0].includes("status = CASE"));
+      expect(leadUpdate?.[1]).toEqual(['contatado', 'tenant-1', 'lead-1', callbackAt]);
+    });
+
+    it('rejects a pipeline stage that conflicts with the selected result', async () => {
+      const db = { query: jest.fn(), transaction: jest.fn() };
+      const service = new DialerService(db as any, makeRedis() as any, makeWaxum() as any, makeGateway() as any);
+      await expect(service.finishPause('sdr-1', 'pause-1', { callResult: 'numero_invalido', pipelineStage: 'qualificado' }, 'tenant-1')).rejects.toThrow('não corresponde');
+      expect(db.transaction).not.toHaveBeenCalled();
+    });
+
+    it('never marks a disconnected SDR as available after wrap-up', async () => {
+      const db = { query: jest.fn(), transaction: jest.fn() };
+      const gateway = makeGateway();
+      gateway.isConnected.mockReturnValue(false);
+      const service = new DialerService(db as any, makeRedis() as any, makeWaxum() as any, gateway as any);
+      await expect(service.finishPause('sdr-1', 'pause-1', { callResult: 'interessado', pipelineStage: 'qualificado', notes: 'Enviar proposta', continueAvailable: true }, 'tenant-1')).rejects.toThrow('Conecte o canal');
+      expect(db.transaction).not.toHaveBeenCalled();
+    });
+  });
 });

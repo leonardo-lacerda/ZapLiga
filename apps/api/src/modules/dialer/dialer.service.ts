@@ -157,7 +157,9 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
       SELECT s.id, s.name, s.available, s.state, s.current_pause_id,
         p.pause_type, p.started_at AS pause_started_at, p.call_id AS pause_call_id,
         c.lead_id AS pause_lead_id, l.name AS pause_lead_name, l.phone AS pause_lead_phone,
-        c.connected_at AS pause_call_started_at
+        c.connected_at AS pause_call_started_at,
+        COALESCE(c.connected_duration_seconds, c.duration_seconds, 0)::int AS pause_call_duration_seconds,
+        CASE WHEN p.started_at IS NULL THEN 0 ELSE GREATEST(0, EXTRACT(EPOCH FROM (now() - p.started_at))::int) END AS pause_elapsed_seconds
       FROM sdrs s
       LEFT JOIN sdr_pauses p ON p.tenant_id = s.tenant_id AND p.id = s.current_pause_id AND p.ended_at IS NULL
       LEFT JOIN calls c ON c.tenant_id = s.tenant_id AND c.id = p.call_id
@@ -191,11 +193,27 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
     return this.getSdrState(sdrId, tenantId);
   }
 
-  async finishPause(sdrId: string, pauseId: string, input: { callResult?: string; pipelineStage?: string; notes?: string }, tenantId = legacyTenantId()) {
+  async finishPause(sdrId: string, pauseId: string, input: { callResult?: string; pipelineStage?: string; notes?: string; continueAvailable?: boolean; callbackAt?: string }, tenantId = legacyTenantId()) {
     const callResult = String(input.callResult ?? '').trim();
     const pipelineStage = String(input.pipelineStage ?? '').trim();
     const notes = String(input.notes ?? '').trim();
-    if (!callResult || !pipelineStage || !notes) throw new Error('Resultado, etapa da tubulação e anotação são obrigatórios');
+    const continueAvailable = input.continueAvailable !== false;
+    const stageByResult: Record<string, string> = {
+      interessado: 'qualificado',
+      sem_interesse: 'perdido',
+      retornar: 'contatado',
+      reuniao_agendada: 'reuniao',
+      numero_invalido: 'perdido',
+    };
+    if (!callResult || !pipelineStage) throw new Error('Resultado e etapa da tubulação são obrigatórios');
+    if (continueAvailable && !this.gateway.isConnected(sdrId)) throw new Error('Conecte o canal do SDR antes de continuar disponível');
+    if (!['sem_interesse', 'numero_invalido'].includes(callResult) && !notes) throw new Error('Inclua uma anotação com o contexto e o próximo passo');
+    if (stageByResult[callResult] && stageByResult[callResult] !== pipelineStage) throw new Error('A etapa selecionada não corresponde ao resultado da ligação');
+    let callbackAt: Date | null = null;
+    if (callResult === 'retornar') {
+      callbackAt = new Date(String(input.callbackAt ?? ''));
+      if (!Number.isFinite(callbackAt.getTime()) || callbackAt.getTime() <= Date.now()) throw new Error('Informe uma data futura para o retorno');
+    }
     return this.db.transaction(async (client) => {
       const pauseResult = await client.query(`SELECT p.*, c.lead_id FROM sdr_pauses p LEFT JOIN calls c ON c.tenant_id = p.tenant_id AND c.id = p.call_id WHERE p.tenant_id = $1 AND p.id = $2 AND p.sdr_id = $3 FOR UPDATE OF p`, [tenantId, pauseId, sdrId]);
       const pause = pauseResult.rows[0];
@@ -206,17 +224,21 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
       if (pause.call_id) {
         await client.query(`UPDATE calls SET call_result = $1, pipeline_stage = $2, notes = $3, wrap_up_completed_at = $4 WHERE tenant_id = $5 AND id = $6`, [callResult, pipelineStage, notes, endedAt, tenantId, pause.call_id]);
         const previousStage = await client.query(`SELECT pipeline_stage FROM leads WHERE tenant_id = $1 AND id = $2`, [tenantId, pause.lead_id]);
-        await client.query(`UPDATE leads SET pipeline_stage = $1 WHERE tenant_id = $2 AND id = $3`, [pipelineStage, tenantId, pause.lead_id]);
+        await client.query(`UPDATE leads SET pipeline_stage = $1,
+          status = CASE WHEN $4::timestamptz IS NULL THEN status ELSE 'retry_wait' END,
+          next_eligible_at = COALESCE($4::timestamptz, next_eligible_at)
+          WHERE tenant_id = $2 AND id = $3`, [pipelineStage, tenantId, pause.lead_id, callbackAt?.toISOString() ?? null]);
         const fromStage = previousStage.rows[0]?.pipeline_stage ?? null;
         if (fromStage !== pipelineStage) {
           await client.query(`INSERT INTO lead_stage_history (id, tenant_id, lead_id, from_stage, to_stage, source, call_id) VALUES ($1, $2, $3, $4, $5, 'wrap_up', $6)`, [randomUUID(), tenantId, pause.lead_id, fromStage, pipelineStage, pause.call_id]);
         }
       }
-      await client.query(`UPDATE sdrs SET available = true, state = 'available', current_pause_id = NULL WHERE tenant_id = $1 AND id = $2 AND current_pause_id = $3`, [tenantId, sdrId, pauseId]);
-      return { id: pauseId, ended_at: endedAt.toISOString(), duration_seconds: Math.max(0, Math.floor((endedAt.getTime() - new Date(pause.started_at).getTime()) / 1000)), call_result: callResult, pipeline_stage: pipelineStage, notes };
+      const nextState = continueAvailable ? 'available' : 'offline';
+      await client.query(`UPDATE sdrs SET available = $4, state = $5, current_pause_id = NULL WHERE tenant_id = $1 AND id = $2 AND current_pause_id = $3`, [tenantId, sdrId, pauseId, continueAvailable, nextState]);
+      return { id: pauseId, ended_at: endedAt.toISOString(), duration_seconds: Math.max(0, Math.floor((endedAt.getTime() - new Date(pause.started_at).getTime()) / 1000)), call_result: callResult, pipeline_stage: pipelineStage, notes, callback_at: callbackAt?.toISOString() ?? null, available: continueAvailable, state: nextState };
     }).then((result) => {
-      this.gateway.sendToSdr(sdrId, { type: 'pause_finished', pauseId, state: 'available' });
-      this.gateway.broadcast({ type: 'sdr_state_changed', sdrId, state: 'available', available: true }, tenantId);
+      this.gateway.sendToSdr(sdrId, { type: 'pause_finished', pauseId, state: result.state, available: result.available });
+      this.gateway.broadcast({ type: 'sdr_state_changed', sdrId, state: result.state, available: result.available }, tenantId);
       return result;
     });
   }
@@ -521,13 +543,136 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
   }
 
   async getSdrStatus(tenantId: string, userId: string) {
-    const [settings, sdr, pool] = await Promise.all([
+    const [settings, ownSdr, pool] = await Promise.all([
       this.getSettings(tenantId),
-      this.db.query(`SELECT id, name, available, state, current_pause_id FROM sdrs WHERE tenant_id = $1 AND user_id = $2 LIMIT 1`, [tenantId, userId]),
+      this.db.query(`SELECT id FROM sdrs WHERE tenant_id = $1 AND user_id = $2 LIMIT 1`, [tenantId, userId]),
       // Per-tenant lines: expose only whether a line is available, never how many.
       this.db.query(`SELECT EXISTS (SELECT 1 FROM whatsapp_numbers WHERE tenant_id = $1 AND status IN ('connected', 'online', 'ready', 'authenticated') AND (flagged_until IS NULL OR flagged_until <= now())) AS ready`, [tenantId]),
     ]);
-    return { running: Boolean(settings?.running), sdr: sdr.rows[0] ?? null, line_ready: Boolean(pool.rows[0]?.ready) };
+    const sdr = ownSdr.rows[0] ? await this.getSdrState(ownSdr.rows[0].id, tenantId) : null;
+    const [queueResult, personalResult] = await Promise.all([
+      this.db.query(`
+        SELECT COUNT(*)::int AS total,
+          COUNT(*) FILTER (WHERE l.next_eligible_at <= now())::int AS ready,
+          COUNT(*) FILTER (WHERE l.next_eligible_at > now())::int AS waiting
+        FROM leads l
+        JOIN lead_folders f ON f.tenant_id = l.tenant_id AND f.id = l.folder_id
+        WHERE l.tenant_id = $1 AND f.is_active = true AND l.do_not_call = false
+          AND l.status IN ('queued', 'retry_wait') AND l.attempts < $2
+      `, [tenantId, settings.max_attempts_per_lead]),
+      sdr ? this.db.query(`
+        SELECT COUNT(*)::int AS calls,
+          COUNT(*) FILTER (WHERE connected_at IS NOT NULL)::int AS answered,
+          COALESCE(SUM(connected_duration_seconds), 0)::int AS conversation_seconds,
+          COALESCE(SUM(EXTRACT(EPOCH FROM (sp.ended_at - sp.started_at))) FILTER (WHERE sp.ended_at IS NOT NULL), 0)::int AS wrap_up_seconds
+        FROM calls c
+        LEFT JOIN sdr_pauses sp ON sp.tenant_id = c.tenant_id AND sp.call_id = c.id
+        WHERE c.tenant_id = $1 AND c.sdr_id = $2 AND c.created_at >= now() - interval '24 hours'
+      `, [tenantId, sdr.id]) : Promise.resolve({ rows: [{ calls: 0, answered: 0, conversation_seconds: 0, wrap_up_seconds: 0 }] }),
+    ]);
+    const queue = queueResult.rows[0] ?? { total: 0, ready: 0, waiting: 0 };
+    const personal = personalResult.rows[0] ?? { calls: 0, answered: 0, conversation_seconds: 0, wrap_up_seconds: 0 };
+    const lineReady = Boolean(pool.rows[0]?.ready);
+    let nextAction = 'Conecte seu painel para iniciar';
+    if (sdr?.current_pause_id) nextAction = 'Finalize o pós-atendimento';
+    else if (!lineReady) nextAction = 'Aguardando uma linha do WhatsApp';
+    else if (!settings.running) nextAction = 'Operação pausada pelo gestor';
+    else if (!Number(queue.total)) nextAction = 'Fila sem contatos no momento';
+    else if (!Number(queue.ready)) nextAction = 'Aguardando o horário da próxima tentativa';
+    else if (!sdr?.available) nextAction = 'Fique disponível para receber chamadas';
+    else nextAction = 'Aguardando uma conversa da fila';
+    return {
+      running: Boolean(settings.running),
+      sdr,
+      line_ready: lineReady,
+      queue: { total: Number(queue.total), ready: Number(queue.ready), waiting: Number(queue.waiting) },
+      personal: {
+        calls: Number(personal.calls), answered: Number(personal.answered),
+        conversation_seconds: Number(personal.conversation_seconds), wrap_up_seconds: Number(personal.wrap_up_seconds),
+      },
+      next_action: nextAction,
+    };
+  }
+
+  async getSdrMetrics(tenantId: string, userId: string, from?: string, to?: string) {
+    const datePattern = /^\d{4}-\d{2}-\d{2}$/;
+    const today = new Date();
+    const endDate = to && datePattern.test(to) ? new Date(`${to}T23:59:59.999Z`) : today;
+    const defaultStart = new Date(endDate.getTime() - 29 * 24 * 60 * 60 * 1000);
+    let startDate = from && datePattern.test(from) ? new Date(`${from}T00:00:00.000Z`) : defaultStart;
+    if (!Number.isFinite(startDate.getTime()) || startDate > endDate) startDate = defaultStart;
+    // Keep personal analytics bounded even if somebody edits the query string.
+    if (endDate.getTime() - startDate.getTime() > 366 * 24 * 60 * 60 * 1000) {
+      startDate = new Date(endDate.getTime() - 365 * 24 * 60 * 60 * 1000);
+    }
+    const start = startDate.toISOString();
+    const end = endDate.toISOString();
+    const ownSdr = await this.db.query(`SELECT id, name FROM sdrs WHERE tenant_id = $1 AND user_id = $2 LIMIT 1`, [tenantId, userId]);
+    const sdr = ownSdr.rows[0];
+    const emptySummary = { calls: 0, answered: 0, answer_rate: 0, conversation_seconds: 0, average_conversation_seconds: 0, wrap_up_seconds: 0, average_wrap_up_seconds: 0, positive: 0, meetings: 0 };
+    if (!sdr) return { period: { from: start.slice(0, 10), to: end.slice(0, 10) }, sdr: null, summary: emptySummary, outcomes: [], trend: [], recent: [] };
+
+    const [summaryResult, outcomesResult, trendResult, recentResult] = await Promise.all([
+      this.db.query(`
+        SELECT COUNT(*)::int AS calls,
+          COUNT(*) FILTER (WHERE c.connected_at IS NOT NULL)::int AS answered,
+          COALESCE(SUM(c.connected_duration_seconds) FILTER (WHERE c.connected_at IS NOT NULL), 0)::int AS conversation_seconds,
+          COALESCE(SUM(wrap.seconds), 0)::int AS wrap_up_seconds,
+          COUNT(*) FILTER (WHERE c.call_result IN ('interessado', 'reuniao_agendada'))::int AS positive,
+          COUNT(*) FILTER (WHERE c.call_result = 'reuniao_agendada')::int AS meetings
+        FROM calls c
+        LEFT JOIN LATERAL (
+          SELECT COALESCE(SUM(COALESCE(sp.duration_seconds, GREATEST(0, EXTRACT(EPOCH FROM (sp.ended_at - sp.started_at))::int))), 0)::int AS seconds
+          FROM sdr_pauses sp WHERE sp.tenant_id = c.tenant_id AND sp.call_id = c.id AND sp.ended_at IS NOT NULL
+        ) wrap ON true
+        WHERE c.tenant_id = $1 AND c.sdr_id = $2 AND c.created_at >= $3 AND c.created_at <= $4
+      `, [tenantId, sdr.id, start, end]),
+      this.db.query(`
+        SELECT c.call_result AS code, COUNT(*)::int AS count
+        FROM calls c
+        WHERE c.tenant_id = $1 AND c.sdr_id = $2 AND c.created_at >= $3 AND c.created_at <= $4
+          AND c.call_result IS NOT NULL
+        GROUP BY c.call_result ORDER BY count DESC, code ASC
+      `, [tenantId, sdr.id, start, end]),
+      this.db.query(`
+        SELECT to_char(c.created_at AT TIME ZONE 'America/Sao_Paulo', 'YYYY-MM-DD') AS day,
+          COUNT(*)::int AS calls,
+          COUNT(*) FILTER (WHERE c.connected_at IS NOT NULL)::int AS answered,
+          COALESCE(SUM(c.connected_duration_seconds) FILTER (WHERE c.connected_at IS NOT NULL), 0)::int AS conversation_seconds
+        FROM calls c
+        WHERE c.tenant_id = $1 AND c.sdr_id = $2 AND c.created_at >= $3 AND c.created_at <= $4
+        GROUP BY day ORDER BY day ASC
+      `, [tenantId, sdr.id, start, end]),
+      this.db.query(`
+        SELECT c.id, c.created_at, c.connected_at, c.ended_at, c.status, c.call_result, c.pipeline_stage,
+          COALESCE(c.connected_duration_seconds, 0)::int AS conversation_seconds,
+          l.name AS lead_name, l.phone AS lead_phone
+        FROM calls c
+        LEFT JOIN leads l ON l.tenant_id = c.tenant_id AND l.id = c.lead_id
+        WHERE c.tenant_id = $1 AND c.sdr_id = $2 AND c.created_at >= $3 AND c.created_at <= $4
+        ORDER BY c.created_at DESC LIMIT 10
+      `, [tenantId, sdr.id, start, end]),
+    ]);
+    const row = summaryResult.rows[0] ?? emptySummary;
+    const calls = Number(row.calls) || 0;
+    const answered = Number(row.answered) || 0;
+    const conversationSeconds = Number(row.conversation_seconds) || 0;
+    const wrapUpSeconds = Number(row.wrap_up_seconds) || 0;
+    return {
+      period: { from: start.slice(0, 10), to: end.slice(0, 10) },
+      sdr: { id: sdr.id, name: sdr.name },
+      summary: {
+        calls, answered, answer_rate: calls ? Math.round((answered / calls) * 100) : 0,
+        conversation_seconds: conversationSeconds,
+        average_conversation_seconds: answered ? Math.round(conversationSeconds / answered) : 0,
+        wrap_up_seconds: wrapUpSeconds,
+        average_wrap_up_seconds: answered ? Math.round(wrapUpSeconds / answered) : 0,
+        positive: Number(row.positive) || 0, meetings: Number(row.meetings) || 0,
+      },
+      outcomes: outcomesResult.rows.map((item: any) => ({ code: item.code, count: Number(item.count) || 0 })),
+      trend: trendResult.rows.map((item: any) => ({ day: item.day, calls: Number(item.calls) || 0, answered: Number(item.answered) || 0, conversation_seconds: Number(item.conversation_seconds) || 0 })),
+      recent: recentResult.rows,
+    };
   }
 
   async tick(tenantId = legacyTenantId()) {

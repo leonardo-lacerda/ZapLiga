@@ -2,6 +2,7 @@ import type { TabKey } from '../types';
 
 export const tabPaths: Record<TabKey, string> = {
   dashboard: '/app/',
+  sdrMetrics: '/app/meus-resultados',
   metrics: '/app/metricas',
   numbers: '/app/numeros',
   leads: '/app/leads',
