@@ -4,18 +4,18 @@ import { DateRangePopover } from '../../components/DateRangePopover';
 import { activeFilterCount, defaultMetricsFilters, MetricsFiltersState } from './useMetrics';
 import { CALL_RESULT_OPTIONS, CALL_STATUS_OPTIONS, PIPELINE_STAGE_OPTIONS, SOURCE_OPTIONS } from './metrics.definitions';
 
-function selectedValues(select: HTMLSelectElement) {
-  return Array.from(select.selectedOptions).map((option) => option.value);
-}
-
 function MultiSelect({ label, options, value, onChange }: { label: string; options: [string, string][]; value: string[]; onChange: (next: string[]) => void }) {
-  return <label className="metrics-filter-field">
+  const toggle = (code: string) => onChange(value.includes(code) ? value.filter((existing) => existing !== code) : [...value, code]);
+  return <div className="metrics-filter-field">
     <span>{label}{value.length > 0 && <em className="metrics-filter-field-count">{value.length}</em>}</span>
-    <select multiple value={value} onChange={(event) => onChange(selectedValues(event.target))} size={5}>
-      {options.length === 0 && <option disabled>Nenhuma opção</option>}
-      {options.map(([code, optionLabel]) => <option key={code} value={code}>{optionLabel}</option>)}
-    </select>
-  </label>;
+    <div className="metrics-filter-options">
+      {options.length === 0 && <span className="metrics-filter-empty">Nenhuma opção</span>}
+      {options.map(([code, optionLabel]) => <label key={code} className={`metrics-filter-option${value.includes(code) ? ' selected' : ''}`}>
+        <input type="checkbox" checked={value.includes(code)} onChange={() => toggle(code)} />
+        <span>{optionLabel}</span>
+      </label>)}
+    </div>
+  </div>;
 }
 
 export function MetricsFilters({ filters, onChange, leadFolders, sdrs, numbers }: { filters: MetricsFiltersState; onChange: (next: MetricsFiltersState) => void; leadFolders: AnyRow[]; sdrs: AnyRow[]; numbers: AnyRow[] }) {

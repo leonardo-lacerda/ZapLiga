@@ -446,22 +446,25 @@ input, select { min-height: 35px; min-width: 0; padding: 8px 10px; border: 1px s
 .metrics-filter-field-count { display: inline-flex; align-items: center; justify-content: center; min-width: 16px; height: 16px; padding: 0 4px; border-radius: 999px; background: var(--primary); color: #fff; font-size: 9px; font-weight: 700; text-transform: none; letter-spacing: normal; }
 .metrics-filter-field-inline { padding: 6px 10px; }
 .metrics-filter-field-inline select { min-height: 33px; }
-.metrics-filter-field select[multiple] {
+.metrics-filter-options {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  max-height: 150px;
+  overflow-y: auto;
   padding: 4px;
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   background: var(--surface);
-  font-size: 11px;
-  font-weight: 400;
-  text-transform: none;
-  letter-spacing: normal;
-  color: var(--text);
 }
-.metrics-filter-field select[multiple] option { padding: 4px 6px; border-radius: 4px; }
-.metrics-filter-field select[multiple] option:checked { background: var(--primary-soft); color: var(--navy); }
-.metrics-filter-field select[multiple]::-webkit-scrollbar { width: 8px; }
-.metrics-filter-field select[multiple]::-webkit-scrollbar-thumb { background: var(--border); border-radius: 999px; }
-.metrics-filter-field select[multiple]::-webkit-scrollbar-track { background: transparent; }
+.metrics-filter-option { display: flex; align-items: center; gap: 7px; padding: 5px 6px; border-radius: 4px; font-size: 11px; font-weight: 400; text-transform: none; letter-spacing: normal; color: var(--text); cursor: pointer; }
+.metrics-filter-option:hover { background: var(--surface-subtle); }
+.metrics-filter-option.selected { background: var(--primary-soft); color: var(--navy); }
+.metrics-filter-option input { min-height: 0; width: 14px; height: 14px; flex: none; }
+.metrics-filter-empty { padding: 5px 6px; font-size: 11px; font-weight: 400; text-transform: none; letter-spacing: normal; color: var(--muted); }
+.metrics-filter-options::-webkit-scrollbar { width: 8px; }
+.metrics-filter-options::-webkit-scrollbar-thumb { background: var(--border); border-radius: 999px; }
+.metrics-filter-options::-webkit-scrollbar-track { background: transparent; }
 
 .metrics-kpi-grid { grid-template-columns: repeat(5, minmax(0, 1fr)); }
 .metrics-kpi-card { display: flex; flex-direction: column; }

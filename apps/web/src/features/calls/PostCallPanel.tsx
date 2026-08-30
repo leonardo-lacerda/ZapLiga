@@ -2,23 +2,7 @@ import { useState } from 'react';
 import type { AnyRow } from '../../types';
 import { Button, Panel } from '../../components/ui';
 import { LiveTimer, formatDuration } from '../../components/LiveTimer';
-
-const results = [
-  ['interessado', 'Interessado'],
-  ['sem_interesse', 'Sem interesse'],
-  ['retornar', 'Solicitou retorno'],
-  ['reuniao_agendada', 'Reunião agendada'],
-  ['numero_invalido', 'Número inválido'],
-] as const;
-
-const stages = [
-  ['novo', 'Novo'],
-  ['contatado', 'Contatado'],
-  ['qualificado', 'Qualificado'],
-  ['reuniao', 'Reunião'],
-  ['ganho', 'Ganho'],
-  ['perdido', 'Perdido'],
-] as const;
+import { callResultOptions as results, pipelineStageOptions as stages } from '../../shared/format';
 
 export function PostCallPanel({ pause, onFinish, submitting }: { pause: AnyRow; onFinish: (input: AnyRow) => void; submitting: boolean }) {
   const [callResult, setCallResult] = useState('');

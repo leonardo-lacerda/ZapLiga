@@ -43,6 +43,9 @@ function AuthenticatedApp() {
   const [calls, setCalls] = useState<AnyRow[]>([]);
   const [callsTotal, setCallsTotal] = useState(0);
   const [callsOffset, setCallsOffset] = useState(0);
+  const [callsSearch, setCallsSearch] = useState('');
+  const [callsStatus, setCallsStatus] = useState('');
+  const [callsResult, setCallsResult] = useState('');
   const [logs, setLogs] = useState<AnyRow[]>([]);
   const [tab, setTab] = useState<TabKey>(() => tabFromPath(window.location.pathname));
   const [error, setError] = useState('');
@@ -74,9 +77,13 @@ function AuthenticatedApp() {
 
   const load = useCallback(async () => {
     try {
+      const callsParams = new URLSearchParams({ from: dateRange.from, to: dateRange.to, limit: String(PAGE_SIZE), offset: String(callsOffset) });
+      if (callsSearch.trim()) callsParams.set('search', callsSearch.trim());
+      if (callsStatus) callsParams.set('status', callsStatus);
+      if (callsResult) callsParams.set('result', callsResult);
       const [nextStatus, numbersPage, nextFolders, nextSdrs, callsPage, events] = isSdr
         ? [await json('/api/dialer/sdr-status'), { items: [], total: 0 }, [], [await json('/api/me/sdr')], { items: [], total: 0 }, []]
-        : await Promise.all([json(`/api/dialer/status?from=${dateRange.from}&to=${dateRange.to}`), json(`/api/numbers?limit=${PAGE_SIZE}&offset=${numbersOffset}`), json('/api/lead-folders'), json('/api/sdrs?limit=500').then((page) => page.items), json(`/api/calls?from=${dateRange.from}&to=${dateRange.to}&limit=${PAGE_SIZE}&offset=${callsOffset}`), json('/api/dialer/logs')]);
+        : await Promise.all([json(`/api/dialer/status?from=${dateRange.from}&to=${dateRange.to}`), json(`/api/numbers?limit=${PAGE_SIZE}&offset=${numbersOffset}`), json('/api/lead-folders'), json('/api/sdrs?limit=500').then((page) => page.items), json(`/api/calls?${callsParams}`), json('/api/dialer/logs')]);
       const folderId = !isSdr ? (nextFolders.find((folder: AnyRow) => folder.id === selectedFolderId)?.id ?? nextFolders.find((folder: AnyRow) => folder.is_active)?.id ?? nextFolders[0]?.id ?? '') : '';
       const [leadsPage, nextMetrics] = !isSdr && folderId
         ? await Promise.all([json(`/api/lead-folders/${folderId}/leads?limit=${PAGE_SIZE}&offset=${leadsOffset}`), json(`/api/lead-folders/${folderId}/metrics?from=${dateRange.from}&to=${dateRange.to}`)])
@@ -94,7 +101,7 @@ function AuthenticatedApp() {
     } catch (e) {
       setError(e instanceof TypeError ? 'API temporariamente indisponível. Tentando reconectar...' : String(e));
     }
-  }, [sdrId, postCall, activeTenantId, isSdr, selectedFolderId, dateRange.from, dateRange.to, leadsOffset, callsOffset, numbersOffset]);
+  }, [sdrId, postCall, activeTenantId, isSdr, selectedFolderId, dateRange.from, dateRange.to, leadsOffset, callsOffset, callsSearch, callsStatus, callsResult, numbersOffset]);
 
   useEffect(() => { if (!isSdr) { if (sdrId) setSdrId(''); return; } if (!sdrId && sdrs[0]?.id) setSdrId(sdrs[0].id); }, [isSdr, sdrId, sdrs]);
   useEffect(() => { setSdrId(''); setActiveCall(null); setPostCall(null); setQr(null); setQrNumberId(''); }, [activeTenantId]);
@@ -109,7 +116,7 @@ function AuthenticatedApp() {
     if (tabFromPath(window.location.pathname) !== tab) navigateToTab(tab);
   }, [isSdr, tab]);
   useEffect(() => { setLeadsOffset(0); }, [selectedFolderId]);
-  useEffect(() => { setCallsOffset(0); }, [dateRange.from, dateRange.to]);
+  useEffect(() => { setCallsOffset(0); }, [dateRange.from, dateRange.to, callsSearch, callsStatus, callsResult]);
 
   useEffect(() => {
     void load();
@@ -209,7 +216,7 @@ function AuthenticatedApp() {
         {activeCall?.lead && (() => { const answered = activeCall.phase === 'answered' || activeCall.mediaActive; const blind = !answered && !activeCall.lead.name; return <div className={`answered-call-banner${answered ? '' : ' is-ringing'}`} role="status"><div className="answered-call-contact"><span className={`answered-call-icon${answered ? '' : ' is-ringing'}`}><Icon name="phone" size={18} /></span><div><span>{answered ? 'CLIENTE ATENDEU' : 'CHAMANDO…'}</span><strong>{blind ? 'Discando para um contato da fila…' : activeCall.lead.name}</strong><small>{blind ? 'O nome aparece assim que o lead atender' : <>{activeCall.lead.phone} · {answered ? <LiveTimer startedAt={activeCall.connectedAt ?? activeCall.connected_at ?? activeCall.callStartedAt} /> : 'Tocando no WhatsApp…'}</>}</small></div></div><Button variant="danger" icon="close" onClick={hangup}>{answered ? 'Encerrar chamada' : 'Desligar'}</Button></div>; })()}
         {isSdr && postCall && <PostCallPanel pause={postCall} onFinish={finishPostCall} submitting={finishingPause} />}
         {error && <div className="alert" role="alert"><Icon name="alert" size={17} /><span>{error}</span><button onClick={() => setError('')} aria-label="Fechar erro"><Icon name="close" size={16} /></button></div>}
-        <div className="page-content">{tab === 'dashboard' && <Dashboard isSdr={isSdr} status={status} available={available} connected={connected} connecting={connecting} sdrReady={sdrReady} sdrs={sdrs} connectSdr={connectSdr} setAvailability={setAvailability} manualDial={manualDial} manualPhone={manualPhone} setManualPhone={setManualPhone} manualName={manualName} setManualName={setManualName} manualCalling={manualCalling} logs={logs} activeCall={activeCall} hangup={hangup} micMuted={micMuted} toggleMicMute={toggleMicMute} connectedNumbers={connectedNumbers} postCall={postCall} dateRange={dateRange} />}{tab === 'metrics' && activeTenantId && <MetricsPage tenantId={activeTenantId} leadFolders={leadFolders} sdrs={sdrs} numbers={numbers} />}{tab === 'numbers' && <NumbersPage numbers={numbers} numbersTotal={numbersTotal} numbersOffset={numbersOffset} onNumbersPageChange={setNumbersOffset} numberForm={numberForm} setNumberForm={setNumberForm} createNumber={createNumber} showQr={showQr} reconnectNumber={reconnectNumber} removeNumber={removeNumber} qrLoading={qrLoading} qr={qr} closeQr={closeQr} canManageNumbers={!isSdr} />}{tab === 'leads' && <LeadsPage leads={leads} leadsTotal={leadsTotal} leadsOffset={leadsOffset} onLeadsPageChange={setLeadsOffset} folders={leadFolders} selectedFolderId={selectedFolderId} selectedFolder={leadFolders.find((folder) => folder.id === selectedFolderId)} metrics={folderMetrics} setSelectedFolderId={setSelectedFolderId} createFolder={createFolder} updateFolder={updateFolder} removeFolder={removeFolder} leadForm={leadForm} setLeadForm={setLeadForm} createLead={createLead} importCsv={importCsv} importResult={importResult} clearFolder={clearFolder} manualCall={manualCall} resetLead={resetLead} removeLead={removeLead} />}{tab === 'sdrs' && <SdrsPage tenantId={activeTenantId} sdrs={sdrs} />}{tab === 'calls' && <CallsPage calls={calls} callsTotal={callsTotal} callsOffset={callsOffset} onCallsPageChange={setCallsOffset} />}{tab === 'access' && activeTenantId && <AccessPage tenantId={activeTenantId} role={isSuperAdmin ? 'super_admin' : activeTenant?.role ?? ''} />}{tab === 'admin' && isSuperAdmin && <AdminPage onChanged={reload} onOpenTenant={(tenantId) => { selectTenant(tenantId); setTab('dashboard'); }} />}</div>
+        <div className="page-content">{tab === 'dashboard' && <Dashboard isSdr={isSdr} status={status} available={available} connected={connected} connecting={connecting} sdrReady={sdrReady} sdrs={sdrs} connectSdr={connectSdr} setAvailability={setAvailability} manualDial={manualDial} manualPhone={manualPhone} setManualPhone={setManualPhone} manualName={manualName} setManualName={setManualName} manualCalling={manualCalling} logs={logs} activeCall={activeCall} hangup={hangup} micMuted={micMuted} toggleMicMute={toggleMicMute} connectedNumbers={connectedNumbers} postCall={postCall} dateRange={dateRange} />}{tab === 'metrics' && activeTenantId && <MetricsPage tenantId={activeTenantId} leadFolders={leadFolders} sdrs={sdrs} numbers={numbers} />}{tab === 'numbers' && <NumbersPage numbers={numbers} numbersTotal={numbersTotal} numbersOffset={numbersOffset} onNumbersPageChange={setNumbersOffset} numberForm={numberForm} setNumberForm={setNumberForm} createNumber={createNumber} showQr={showQr} reconnectNumber={reconnectNumber} removeNumber={removeNumber} qrLoading={qrLoading} qr={qr} closeQr={closeQr} canManageNumbers={!isSdr} />}{tab === 'leads' && <LeadsPage leads={leads} leadsTotal={leadsTotal} leadsOffset={leadsOffset} onLeadsPageChange={setLeadsOffset} folders={leadFolders} selectedFolderId={selectedFolderId} selectedFolder={leadFolders.find((folder) => folder.id === selectedFolderId)} metrics={folderMetrics} setSelectedFolderId={setSelectedFolderId} createFolder={createFolder} updateFolder={updateFolder} removeFolder={removeFolder} leadForm={leadForm} setLeadForm={setLeadForm} createLead={createLead} importCsv={importCsv} importResult={importResult} clearFolder={clearFolder} manualCall={manualCall} resetLead={resetLead} removeLead={removeLead} />}{tab === 'sdrs' && <SdrsPage tenantId={activeTenantId} sdrs={sdrs} />}{tab === 'calls' && <CallsPage calls={calls} callsTotal={callsTotal} callsOffset={callsOffset} onCallsPageChange={setCallsOffset} search={callsSearch} onSearchChange={setCallsSearch} status={callsStatus} onStatusChange={setCallsStatus} result={callsResult} onResultChange={setCallsResult} />}{tab === 'access' && activeTenantId && <AccessPage tenantId={activeTenantId} role={isSuperAdmin ? 'super_admin' : activeTenant?.role ?? ''} />}{tab === 'admin' && isSuperAdmin && <AdminPage onChanged={reload} onOpenTenant={(tenantId) => { selectTenant(tenantId); setTab('dashboard'); }} />}</div>
       </main></div>
   </div></>;
 }

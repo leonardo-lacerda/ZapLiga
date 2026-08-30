@@ -28,6 +28,35 @@ export const formatCallReason = (value: unknown) => {
   return callReasonNames[reason] ?? reason.replaceAll('_', ' ');
 };
 
+export const callResultOptions = [
+  ['interessado', 'Interessado'],
+  ['sem_interesse', 'Sem interesse'],
+  ['retornar', 'Solicitou retorno'],
+  ['reuniao_agendada', 'Reunião agendada'],
+  ['numero_invalido', 'Número inválido'],
+] as const;
+
+export const pipelineStageOptions = [
+  ['novo', 'Novo'],
+  ['contatado', 'Contatado'],
+  ['qualificado', 'Qualificado'],
+  ['reuniao', 'Reunião'],
+  ['ganho', 'Ganho'],
+  ['perdido', 'Perdido'],
+] as const;
+
+const callResultNames: Record<string, string> = Object.fromEntries(callResultOptions);
+const pipelineStageNames: Record<string, string> = Object.fromEntries(pipelineStageOptions);
+export const formatCallResult = (value: unknown) => value ? (callResultNames[String(value)] ?? String(value)) : '—';
+export const formatPipelineStage = (value: unknown) => value ? (pipelineStageNames[String(value)] ?? String(value)) : '—';
+
+export const callStatusOptions = [
+  ['completed', 'Concluída'],
+  ['no_answer', 'Não atendeu'],
+  ['failed', 'Falhou'],
+  ['cancelled', 'Cancelada'],
+] as const;
+
 export const formatSeconds = (value: unknown) => {
   const seconds = Math.max(0, Number(value) || 0);
   if (seconds <= 0) return 'Livre';
