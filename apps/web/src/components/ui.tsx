@@ -14,6 +14,7 @@ const iconPaths: Record<string, string> = {
   calendar: 'M7 2v4M17 2v4M3 9h18M5 4h14a2 2 0 0 1 2 2v13a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2Z', filter: 'M4 5h16M7 12h10M10 19h4', plus: 'M12 5v14M5 12h14', upload: 'M12 16V4m0 0L7 9m5-5 5 5M5 20h14',
   qr: 'M4 4h6v6H4zM14 4h6v6h-6zM4 14h6v6H4zM14 14h2v2h-2zM18 14h2v6h-6v-2', plug: 'M8 12h8M12 8v8M7 4v4M17 4v4M5 8h14v5a7 7 0 0 1-14 0V8Z', pause: 'M8 5v14M16 5v14', play: 'm8 5 11 7-11 7V5Z',
   headset: 'M4 14v-2a8 8 0 0 1 16 0v2M4 14h3v5H5a1 1 0 0 1-1-1v-4Zm16 0h-3v5h2a1 1 0 0 0 1-1v-4Z', check: 'm5 12 4 4L19 6', alert: 'M12 9v4M12 17h.01M10.3 3.4 2.2 18a2 2 0 0 0 1.7 3h16.2a2 2 0 0 0 1.7-3L13.7 3.4a2 2 0 0 0-3.4 0', more: 'M5 12h.01M12 12h.01M19 12h.01', bot: 'M12 3v3m-5 3h10M5 9h14v9H5zM8 13h.01M16 13h.01M9 16h6', chart: 'M4 19V5m0 14h16M8 16v-4m4 4V8m4 8v-7',
+  unlock: 'M8 11V7a4 4 0 0 1 7.6-1.8M5 11h14v10H5z', archive: 'M3 4h18v4H3zM5 8v12h14V8M10 12h4', note: 'M14 3v5h5M6 3h8l5 5v13H6zM9 13h6M9 17h6',
 };
 
 export function Icon({ name, size = 16 }: { name: string; size?: number }) { return <svg className="icon" width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d={iconPaths[name] ?? iconPaths.dashboard} /></svg>; }

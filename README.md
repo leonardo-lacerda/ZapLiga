@@ -1,10 +1,41 @@
-# ZapLiga — MVP local
+# ZapLiga
 
-Discador local para chamadas de voz do WhatsApp usando Waxum como gateway não oficial. O projeto é um protótipo técnico: use somente números e leads autorizados, respeite a legislação aplicável e aceite o risco operacional de contas não oficiais.
+Plataforma de operação SDR para chamadas de voz pelo WhatsApp. O ZapLiga centraliza discagem, leads, equipe, números, histórico e métricas em um painel multiempresa.
 
-## Rodar
+> A integração de voz utiliza o Waxum como gateway não oficial. Use somente números e leads autorizados, respeite a legislação aplicável e considere os riscos operacionais desse tipo de integração.
 
-Pré-requisitos: Node.js 20+, Docker e Docker Compose.
+## O que o ZapLiga oferece
+
+| Área | Recursos |
+| --- | --- |
+| Operação | Dashboard, fila de discagem, chamadas manuais, disponibilidade de SDRs, pausas pós-atendimento e acompanhamento em tempo real |
+| Leads | Pastas, cadastro individual, importação CSV, etapas do funil, tentativas e reset de contato |
+| Números | Cadastro, QR Code, reconexão, status e configurações dos números do WhatsApp |
+| Equipe | SDRs, memberships, permissões, convites por link e gestão de acesso por empresa |
+| Métricas | Resumo operacional, tendências, funil, rankings por SDR/pasta/número, metas, alertas, visualizações salvas e exportações CSV/PDF |
+| Plataforma | Login, refresh token rotativo, isolamento por `tenant_id`, auditoria, Redis, NATS JetStream e suporte a múltiplas instâncias da API |
+
+## Stack e arquitetura
+
+- **Frontend:** React, TypeScript e Vite em `apps/web`.
+- **Backend:** NestJS, TypeScript e WebSocket em `apps/api`.
+- **Persistência:** PostgreSQL 16, com migrations versionadas em `apps/api/src/database/migrations`.
+- **Coordenação e cache:** Redis 7.
+- **Eventos:** NATS 2.10 com JetStream.
+- **Telefonia:** Waxum 0.12.2, com imagem fixada por digest no Compose.
+- **Execução:** Docker Compose para desenvolvimento e produção; Nginx faz o roteamento externo no deploy.
+
+No ambiente de produção, o Compose mantém duas instâncias da API (`api-a` e `api-b`), além dos serviços compartilhados, backups diários do PostgreSQL e o painel web.
+
+## Desenvolvimento local
+
+### Pré-requisitos
+
+- Node.js 20 ou superior
+- Docker e Docker Compose
+- Um navegador com permissão para microfone, caso vá realizar chamadas
+
+### Subir o ambiente
 
 ```powershell
 Copy-Item .env.example .env
@@ -13,29 +44,46 @@ docker compose up -d postgres redis waxum
 npm run dev
 ```
 
-Painel: http://localhost:5173  
-API: http://localhost:3000  
-Health check: http://localhost:3000/health
+O comando do Waxum inicia também o NATS, que é uma dependência do gateway. As migrations do banco são aplicadas automaticamente quando a API inicia.
 
-O serviço Waxum é parametrizado por `WAXUM_IMAGE`. Para produção de testes, fixe essa variável em uma tag ou digest validado por sua equipe, em vez de usar `latest`.
-O Compose usa `WAXUM_API_KEY` para autenticar a API do Waxum; altere o valor no `.env` antes de qualquer ambiente compartilhado.
+| Serviço | Endereço local |
+| --- | --- |
+| Painel de desenvolvimento | http://localhost:5173 |
+| API | http://localhost:3000 |
+| Health check | http://localhost:3000/health |
+| PostgreSQL | `localhost:5432` |
+| Redis | `localhost:6379` |
+| Waxum | `localhost:3451` |
 
-## Fluxo rápido
+Para subir o stack completo em containers, incluindo `api-a`, `api-b` e `web`:
 
-1. Cadastre um número no painel e abra o QR Code.
-2. Escaneie o QR no WhatsApp do telefone controlado.
-3. Cadastre um SDR, entre como SDR e ative “Disponível”.
-4. Importe um CSV com `name,phone` ou cadastre um lead.
-5. Inicie o discador.
-6. Aceite a oferta no navegador; o áudio PCM 16 kHz mono é encaminhado ao WebSocket de mídia do Waxum.
+```powershell
+docker compose up -d --build
+```
 
-## API
+Nesse modo, o painel continua disponível em http://localhost:5173 e a API principal em http://localhost:3000.
 
-O cadastro publico do ZapLiga fica em `/app/cadastro` (tambem disponivel em `/cadastro`) e cria somente a empresa e seu organizador (`leader`). Nao existe cadastro publico para SDR ou Admin; o organizador convida SDRs pelo painel.
+## Primeiro acesso
 
-As rotas operacionais legadas continuam descritas no plano do MVP. A fundação de autenticação agora inclui login, refresh token rotativo, empresas, memberships, convites e auditoria.
+1. Abra `/app/cadastro` — também disponível em `/cadastro` — e crie a empresa e o primeiro organizador (`leader`).
+2. Entre no painel e cadastre um número do WhatsApp.
+3. Abra o QR Code e escaneie-o no telefone controlado.
+4. Na área **SDRs**, convide os operadores e envie manualmente o link gerado.
+5. Crie uma pasta de leads e importe um CSV com as colunas `name,phone`, ou cadastre os contatos individualmente.
+6. Entre como SDR, conecte a linha, ative **Disponível** e aceite a chamada no navegador.
+7. Inicie o discador pela visão geral da operação.
 
-Para criar o primeiro Admin supremo em desenvolvimento:
+O áudio PCM mono em 16 kHz é encaminhado ao WebSocket de mídia do Waxum durante a chamada.
+
+## Usuários e permissões
+
+| Perfil | Responsabilidade |
+| --- | --- |
+| `leader` | Administra a empresa, números, leads, SDRs, discador, métricas e convites |
+| `sdr` | Opera a fila, recebe chamadas, registra o resultado e conclui a pausa pós-atendimento |
+| `super_admin` | Administra a plataforma, empresas, usuários, sessões, saúde operacional e auditoria global |
+
+O cadastro público não cria SDRs nem administradores. SDRs entram por convite; o primeiro `super_admin` de desenvolvimento é criado pela rotina abaixo:
 
 ```powershell
 $env:SUPERADMIN_EMAIL = "admin@example.com"
@@ -44,17 +92,99 @@ $env:SUPERADMIN_NAME = "Admin"
 npm --workspace apps/api run bootstrap:admin
 ```
 
-O fluxo de login usa `POST /api/auth/login`, `POST /api/auth/refresh`, `POST /api/auth/logout` e `GET /api/auth/me`. Empresas são criadas por `super_admin`; líderes e SDRs entram por convite. Os endpoints operacionais são escopados por `tenant_id`; as rotas explícitas usam `/api/tenants/:tenantId/...` e aliases antigos exigem `x-tenant-id` compatível.
+### Convites
 
-## Convite de SDR por link
+O link de convite é gerado na página de SDR e deve ser copiado e enviado manualmente. O convite expira conforme `INVITATION_TTL_SECONDS` — 48 horas por padrão — e gerar um novo link revoga o anterior.
 
-Na página de SDR, o organizador informa o nome e o e-mail do operador e gera um link de cadastro. O link deve ser copiado e enviado manualmente ao SDR; nenhum e-mail automático é disparado por esse fluxo. O convite expira conforme `INVITATION_TTL_SECONDS` (48 horas por padrão), e gerar um novo link revoga o anterior.
+Para que o link funcione fora do ambiente local, `WEB_ORIGIN` deve apontar para o endereço público do painel. `RESEND_API_KEY` e `RESEND_FROM` são usados somente pelos convites genéricos de líder da área de acesso; o convite de SDR por link não dispara e-mail automaticamente.
 
-O `WEB_ORIGIN` deve apontar para o endereço público do painel para que o link funcione fora do ambiente local. `RESEND_API_KEY`/`RESEND_FROM` continuam sendo necessários apenas para os convites genéricos de líder usados na área de acesso.
+## Configuração
 
-## Limitações deliberadas do MVP
+Comece sempre por `.env.example`. As variáveis mais importantes são:
 
-- Sem gravação ou CRM no escopo atual; multi-tenant e autenticação fazem parte da base implementada.
+| Variável | Finalidade |
+| --- | --- |
+| `DATABASE_URL` | Conexão com o PostgreSQL |
+| `REDIS_URL` | Conexão com o Redis |
+| `WAXUM_URL` | Endereço do gateway Waxum |
+| `WAXUM_API_KEY` / `WAXUM_JWT_SECRET` | Autenticação entre a API e o Waxum |
+| `JWT_ACCESS_SECRET` | Assinatura das sessões de acesso |
+| `WEB_ORIGIN` | Origem pública usada nos links e cookies do painel |
+| `AUTH_COOKIE_SECURE` | Use `true` quando o painel estiver atrás de HTTPS |
+| `INVITATION_TTL_SECONDS` | Validade dos convites |
+| `RESEND_API_KEY` / `RESEND_FROM` | E-mail dos convites genéricos de líder |
+| `SENTRY_DSN` / `SENTRY_ENVIRONMENT` | Monitoramento opcional de erros |
+
+Antes de compartilhar ou publicar um ambiente, substitua todos os segredos padrão do `.env.example`, especialmente `WAXUM_API_KEY`, `WAXUM_JWT_SECRET`, `JWT_ACCESS_SECRET` e `SUPERADMIN_PASSWORD`.
+
+## API e tempo real
+
+As rotas explícitas usam `/api/tenants/:tenantId/...`. Aliases legados continuam disponíveis para compatibilidade e exigem um `x-tenant-id` compatível com a sessão autenticada.
+
+| Grupo | Escopo |
+| --- | --- |
+| `/api/auth` | Login, refresh, logout, sessão atual e ticket para WebSocket |
+| `/api/tenants` | Empresas e memberships |
+| `/api/numbers`, `/api/leads`, `/api/lead-folders` | Números, contatos e organização da base |
+| `/api/sdrs`, `/api/calls`, `/api/dialer` | Equipe, chamadas, fila, status e configurações da operação |
+| `/api/metrics` | Indicadores, metas, visualizações e exportações |
+| `/api/admin`, `/api/admin/audit` | Administração da plataforma e auditoria |
+
+Endpoints centrais de autenticação:
+
+```text
+POST /api/auth/login
+POST /api/auth/refresh
+POST /api/auth/logout
+GET  /api/auth/me
+POST /api/auth/ws-ticket
+```
+
+O canal operacional do SDR usa WebSocket em `/ws/tenants/:tenantId/sdr`; o ticket temporário é obtido pela API antes da conexão.
+
+## Comandos úteis
+
+| Comando | Uso |
+| --- | --- |
+| `npm run dev` | Inicia API e frontend em modo de desenvolvimento |
+| `npm run typecheck` | Verifica os tipos de API e frontend |
+| `npm test` | Executa os testes do backend |
+| `npm run build` | Limpa artefatos, valida a estrutura e gera os builds |
+| `npm run check:structure` | Valida a organização esperada do workspace |
+| `npm run verify:multitenant` | Verifica regras de isolamento multiempresa |
+| `npm --workspace apps/api run db:migrate:status` | Exibe o estado das migrations |
+| `npm --workspace apps/api run db:migrate` | Executa migrations manualmente quando necessário |
+
+Antes de abrir um pull request, rode pelo menos:
+
+```powershell
+npm run typecheck
+npm test
+npm run build
+```
+
+## Deploy e operação
+
+O deploy automático é disparado por push em `main` e valida `typecheck`, testes e build antes de publicar. No servidor, o fluxo:
+
+1. mantém PostgreSQL, backups, Redis, NATS e Waxum como infraestrutura compartilhada;
+2. atualiza `api-a` e `api-b` uma por vez, aguardando o health check de cada instância;
+3. publica o frontend e recarrega o Nginx;
+4. preserva tags de rollback e os últimos builds para recuperação.
+
+As migrations são de ida e rodam no boot da API. Se uma migration causar problema, o rollback da imagem não desfaz alterações no banco: siga o procedimento de restauração de backup no [runbook de deploy e recuperação](docs/deploy-runbook.md).
+
+## Limitações e cuidados operacionais
+
+- Gravação de chamadas e CRM completo não fazem parte do escopo atual.
 - A detecção de atendimento usa o primeiro áudio recebido pelo WebSocket do Waxum.
-- A criação da sessão, QR e reconexão dependem do contrato do Waxum instalado.
-- O navegador precisa permitir microfone e permanecer conectado durante a chamada.
+- Sessão, QR Code e reconexão dependem do contrato do Waxum 0.12.2 instalado.
+- O navegador precisa permitir o microfone e permanecer conectado durante a chamada.
+- A operação com gateway não oficial pode resultar em instabilidade ou bloqueio de contas; mantenha consentimento, opt-out e conformidade com a legislação aplicável.
+
+## Documentação adicional
+
+- [Organização e arquitetura do código](docs/architecture.md)
+- [Runbook de deploy, rollback e recuperação](docs/deploy-runbook.md)
+- [Troubleshooting](docs/troubleshooting.md)
+- [Versão validada do Waxum](docs/waxum-version.md)

@@ -4,7 +4,7 @@ import { AdminService } from './admin.service';
 describe('AdminService', () => {
   const query = jest.fn();
   const ping = jest.fn();
-  const service = new AdminService({ query } as any, { client: { ping } } as any);
+  const service = new AdminService({ query } as any, { client: { ping } } as any, {} as any);
 
   beforeEach(() => { query.mockReset(); ping.mockReset(); });
 

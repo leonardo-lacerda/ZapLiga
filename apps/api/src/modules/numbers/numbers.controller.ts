@@ -78,13 +78,18 @@ export class NumbersController {
 
   @Roles('leader', 'super_admin')
   @Post(['/api/numbers/:id/reconnect', '/api/tenants/:tenantId/numbers/:id/reconnect'])
-  async reconnect(@Param('id') id: string, @CurrentTenant() tenantId: string) {
+  async reconnect(@Param('id') id: string, @CurrentTenant() tenantId: string, @CurrentUser() user: any) {
     let number = await this.find(id, tenantId);
-    try { return await this.waxum.reconnect(number.waxum_session_id); }
-    catch (error) {
+    try {
+      const result = await this.waxum.reconnect(number.waxum_session_id);
+      await this.audit.record({ actorUserId: user.id, tenantId, action: 'number.reconnect_requested', entityType: 'whatsapp_number', entityId: id });
+      return result;
+    } catch (error) {
       if ((error as Error & { statusCode?: number }).statusCode !== 404) throw error;
       number = await this.replaceMissingSession(number);
-      return this.waxum.reconnect(number.waxum_session_id);
+      const result = await this.waxum.reconnect(number.waxum_session_id);
+      await this.audit.record({ actorUserId: user.id, tenantId, action: 'number.reconnect_requested', entityType: 'whatsapp_number', entityId: id });
+      return result;
     }
   }
 

@@ -1,4 +1,4 @@
-import { Inject, Injectable, Logger, OnModuleDestroy, OnModuleInit, forwardRef } from '@nestjs/common';
+import { ConflictException, Inject, Injectable, Logger, NotFoundException, OnModuleDestroy, OnModuleInit, forwardRef } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
 import WebSocket, { RawData } from 'ws';
 import { DatabaseService } from '../../database/database.service';
@@ -975,7 +975,7 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
     this.gateway.broadcast({ type: 'number_flagged', numberId, flaggedHours: hours }, tenantId);
   }
 
-  private async finishCall(callId: string, status: string, reason?: string, forceNoRetry = false, tenantId = legacyTenantId()) {
+  async finishCall(callId: string, status: string, reason?: string, forceNoRetry = false, tenantId = legacyTenantId()) {
     if (this.finishingCalls.has(callId)) return;
     this.finishingCalls.add(callId);
     const resource = this.active.get(callId);
@@ -1053,5 +1053,42 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
       this.active.delete(callId);
       this.finishingCalls.delete(callId);
     }
+  }
+
+  // Admin break-glass: force-finish a call the operator flagged as stuck
+  // ("zombie") — e.g. a runtime crashed mid-call and recoverInterruptedCalls
+  // hasn't run yet, or the owning instance is unreachable. Reuses finishCall
+  // so calls/leads/sdrs/number cooldown update exactly like a normal finish.
+  async adminForceFinishCall(callId: string, tenantId: string, confirmActiveOwner = false) {
+    const call = await this.db.query('SELECT id, status, owner_instance_id FROM calls WHERE tenant_id = $1 AND id = $2', [tenantId, callId]);
+    if (!call.rows[0]) throw new NotFoundException('Chamada não encontrada');
+    if (['completed', 'no_answer', 'failed', 'cancelled'].includes(call.rows[0].status)) throw new ConflictException('Chamada já finalizada');
+    const ownerInstanceId = call.rows[0].owner_instance_id;
+    const ownerAlive = ownerInstanceId ? Boolean(await this.redis.client.exists(`zapcall:runtime:${ownerInstanceId}`)) : false;
+    if (ownerAlive && !confirmActiveOwner) throw new ConflictException('A instância dona da chamada ainda está ativa — confirme para forçar mesmo assim');
+    await this.finishCall(callId, 'failed', 'admin_force_finished', true, tenantId);
+    return { ok: true, ownerAlive };
+  }
+
+  // Admin break-glass: reset an SDR that is stuck in_call/post_call without a
+  // valid path back to available (e.g. a crashed browser tab never sent the
+  // post-call result). Finishes any active call first, then clears the pause.
+  async adminForceReleaseSdr(sdrId: string, tenantId: string, confirmActiveOwner = false) {
+    const sdr = await this.db.query('SELECT id, state, current_pause_id FROM sdrs WHERE tenant_id = $1 AND id = $2', [tenantId, sdrId]);
+    if (!sdr.rows[0]) throw new NotFoundException('SDR não encontrado');
+    if (!['in_call', 'post_call'].includes(sdr.rows[0].state)) throw new ConflictException('SDR não está travado (não está em chamada nem em pós-atendimento)');
+    const activeCall = await this.db.query(`SELECT id FROM calls WHERE tenant_id = $1 AND sdr_id = $2 AND status IN ('reserved','dialing','media_active') LIMIT 1`, [tenantId, sdrId]);
+    let hadActiveCall = false;
+    if (activeCall.rows[0]) {
+      hadActiveCall = true;
+      await this.adminForceFinishCall(activeCall.rows[0].id, tenantId, confirmActiveOwner);
+    }
+    const hadOpenPause = Boolean(sdr.rows[0].current_pause_id);
+    await this.db.transaction(async (client) => {
+      await client.query(`UPDATE sdr_pauses SET ended_at = now() WHERE tenant_id = $1 AND sdr_id = $2 AND ended_at IS NULL`, [tenantId, sdrId]);
+      await client.query(`UPDATE sdrs SET available = true, state = 'available', current_pause_id = NULL WHERE tenant_id = $1 AND id = $2`, [tenantId, sdrId]);
+    });
+    this.gateway.broadcast({ type: 'sdr_state_changed', sdrId, state: 'available', available: true, pause: null }, tenantId);
+    return { ok: true, hadActiveCall, hadOpenPause };
   }
 }
