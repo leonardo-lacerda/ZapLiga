@@ -21,4 +21,65 @@ export function capacityIsAvailable(globalActive: number, globalMax: number, num
   return globalActive < globalMax && numberActive < numberMax;
 }
 
+export function normalizePhone(value: unknown) {
+  return String(value ?? '').replace(/\D/g, '');
+}
 
+// WhatsApp closes the media socket immediately when a line dials its own
+// number, so a lead must never be paired with the WhatsApp line that shares
+// its phone number.
+export function isSelfCallNumber(numberPhone: unknown, leadPhone: unknown) {
+  return normalizePhone(numberPhone) === normalizePhone(leadPhone);
+}
+
+// WhatsApp/Waxum answers 429 ("wait for Ns") when it throttles outbound call
+// initiation. Floor the backoff ABOVE WhatsApp's largest observed call-rate
+// window (~177s) — retrying before the penalty window clears just refreshes
+// it and the line never recovers.
+export function computeRateLimitBackoffSeconds(waitSeconds?: number) {
+  return Math.min(600, Math.max(180, Math.round(waitSeconds ?? 180)));
+}
+
+// Future-dates a line's `last_call_ended_at` so the normal cooldown gate
+// (`last_call_ended_at <= now() - cooldown`) keeps the line out of rotation
+// until the rate-limit backoff itself has elapsed, not just the cooldown.
+export function computeRateLimitCooldownWindowSeconds(cooldownSeconds: number, backoffSeconds?: number) {
+  return Math.min(600, Math.max(Number(cooldownSeconds ?? 60), Number(backoffSeconds ?? 180)));
+}
+
+// A call that opens media and closes almost instantly with no audio and no
+// answer is the signature of a WhatsApp reachout timelock (463 MissingTcToken).
+export function isInstantFailure(elapsedMs: number, fastFailThresholdMs: number) {
+  return elapsedMs < fastFailThresholdMs;
+}
+
+export function shouldQuarantineLine(failureCount: number, threshold: number) {
+  return failureCount >= threshold;
+}
+
+// Decides how a finished call and its lead should transition, mirroring the
+// three cases finishCall() must reconcile: a transient Waxum rate limit (put
+// the line and lead back as if nothing happened), a retryable failure within
+// the attempt budget, or a terminal outcome.
+export function computeCallOutcome(input: {
+  status: string;
+  reason?: string;
+  forceNoRetry: boolean;
+  isAutomatic: boolean;
+  attempts: number;
+  maxAttemptsPerLead: number;
+}) {
+  const outcome = input.reason ?? input.status;
+  const transientRateLimit = outcome === 'waxum_rate_limited';
+  const retryable = input.isAutomatic && !transientRateLimit
+    && ['no_answer', 'failed'].includes(input.status)
+    && !input.forceNoRetry
+    && input.attempts < input.maxAttemptsPerLead;
+  const finalCallStatus = transientRateLimit ? 'cancelled' : retryable ? 'retry_wait' : input.status;
+  const leadStatus = transientRateLimit ? 'queued'
+    : retryable ? 'retry_wait'
+    : input.status === 'completed' ? 'completed'
+    : input.status === 'cancelled' ? 'queued'
+    : input.status;
+  return { outcome, transientRateLimit, retryable, finalCallStatus, leadStatus };
+}

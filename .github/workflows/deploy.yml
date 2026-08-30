@@ -79,7 +79,7 @@ jobs:
 
           tar --exclude=.git --exclude=.env -czf - . | ssh -i "$deploy_key" -p "${DEPLOY_PORT:-22}" -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes "$DEPLOY_USER@$DEPLOY_HOST" 'mkdir -p /opt/zapliga && tar -xzf - -C /opt/zapliga'
 
-          ssh -i "$deploy_key" -p "${DEPLOY_PORT:-22}" -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes "$DEPLOY_USER@$DEPLOY_HOST" 'bash -se' <<'REMOTE'
+          ssh -i "$deploy_key" -p "${DEPLOY_PORT:-22}" -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes "$DEPLOY_USER@$DEPLOY_HOST" "GITHUB_SHA=$GITHUB_SHA bash -se" <<'REMOTE'
           set -Eeuo pipefail
 
           APP_DIR=/opt/zapliga
@@ -96,24 +96,75 @@ jobs:
           fi
 
           docker compose up -d postgres postgres-backup redis nats waxum
+
+          # Resolve the exact image reference Compose will build/run for each
+          # instance (rather than assuming a project-name convention), and
+          # normalize a missing tag to :latest so the tag operations below
+          # always have a concrete reference to work with.
+          resolve_image() {
+            local image
+            image=$(docker compose config --images "$1")
+            case "$image" in *:*) echo "$image" ;; *) echo "$image:latest" ;; esac
+          }
+          IMAGE_API_A=$(resolve_image api-a)
+          IMAGE_API_B=$(resolve_image api-b)
+          SHA_TAG="${GITHUB_SHA:0:12}"
+
+          # Snapshot whatever is currently live as the rollback target BEFORE
+          # building — the build below overwrites each image's :latest tag,
+          # so the previous version would otherwise be gone with no way back.
+          for img in "$IMAGE_API_A" "$IMAGE_API_B"; do
+            docker image inspect "$img" >/dev/null 2>&1 && docker tag "$img" "${img%:*}:rollback" || true
+          done
+
           docker compose build api-a api-b web
           docker compose stop api >/dev/null 2>&1 || true
           docker compose rm -sf api >/dev/null 2>&1 || true
-          docker compose up -d --remove-orphans api-a api-b web
 
-          for port in 3000 3001; do
+          # Roll api-a and api-b out one at a time instead of together. The
+          # nginx upstream (infra/nginx/api.zapliga.com.conf) already routes
+          # around whichever instance is down (ip_hash + max_fails), so a bad
+          # image degrades capacity for a few seconds instead of taking the
+          # whole API down — and if api-a's healthcheck fails, api-b never
+          # receives the bad image at all.
+          deploy_instance() {
+            local service="$1" port="$2" image="$3"
+            echo "Subindo $service ($image)..."
+            docker compose up -d --no-deps "$service"
+            local attempt
             for attempt in $(seq 1 30); do
-            if curl -fsS "http://127.0.0.1:${port}/health" >/dev/null; then
-              echo "API saudável"
-              break
-            fi
-            if [ "$attempt" -eq 30 ]; then
-              echo "API não ficou saudável a tempo" >&2
-              docker compose logs --tail=80 api-a api-b >&2 || true
-              exit 1
-            fi
-            sleep 2
+              if curl -fsS "http://127.0.0.1:${port}/health" >/dev/null; then
+                echo "$service saudável"
+                docker tag "$image" "${image%:*}:$SHA_TAG"
+                return 0
+              fi
+              if [ "$attempt" -eq 30 ]; then
+                echo "$service não ficou saudável a tempo" >&2
+                docker compose logs --tail=80 "$service" >&2 || true
+                if docker image inspect "${image%:*}:rollback" >/dev/null 2>&1; then
+                  echo "Revertendo $service para a imagem anterior" >&2
+                  docker tag "${image%:*}:rollback" "$image"
+                  docker compose up -d --no-deps --no-build "$service"
+                else
+                  echo "Nenhuma imagem anterior disponível para reverter $service (primeiro deploy?)" >&2
+                fi
+                return 1
+              fi
+              sleep 2
             done
+          }
+          deploy_instance api-a 3000 "$IMAGE_API_A"
+          deploy_instance api-b 3001 "$IMAGE_API_B"
+
+          docker compose up -d --remove-orphans web
+
+          # Keep the rollback tag plus the last 5 SHA tags per API image so the
+          # host doesn't accumulate every build indefinitely.
+          for img in "$IMAGE_API_A" "$IMAGE_API_B"; do
+            repo="${img%:*}"
+            docker images --format '{{.CreatedAt}}\t{{.Repository}}:{{.Tag}}' "$repo" \
+              | grep -vE ':(rollback|latest)$' | sort -r | tail -n +6 | cut -f2 \
+              | xargs -r docker rmi >/dev/null 2>&1 || true
           done
 
           NGINX_CONF=/etc/icontainer/apps/nginx/nginx/conf/conf.d/api.zapliga.com.conf

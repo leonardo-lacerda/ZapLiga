@@ -211,7 +211,7 @@ export class AuthService {
     response.clearCookie(REFRESH_COOKIE, { httpOnly: true, secure: this.cookieSecure, sameSite: 'lax', path: '/api/auth' });
   }
 
-  private get cookieSecure() { return process.env.AUTH_COOKIE_SECURE === 'true' || (process.env.NODE_ENV === 'production' && process.env.AUTH_COOKIE_SECURE !== 'false'); }
+  private get cookieSecure() { return process.env.AUTH_COOKIE_SECURE !== 'false' && process.env.NODE_ENV !== 'development' && process.env.NODE_ENV !== 'test'; }
 
   private async createSession(userId: string, request?: Request) {
     const refreshToken = randomBytes(48).toString('base64url');

@@ -50,7 +50,7 @@ O fluxo de login usa `POST /api/auth/login`, `POST /api/auth/refresh`, `POST /ap
 
 Na página de SDR, o organizador informa o nome e o e-mail do operador e gera um link de cadastro. O link deve ser copiado e enviado manualmente ao SDR; nenhum e-mail automático é disparado por esse fluxo. O convite expira conforme `INVITATION_TTL_SECONDS` (48 horas por padrão), e gerar um novo link revoga o anterior.
 
-O `WEB_ORIGIN` deve apontar para o endereço público do painel para que o link funcione fora do ambiente local. SMTP continua sendo necessário apenas para os convites genéricos de líder usados na área de acesso.
+O `WEB_ORIGIN` deve apontar para o endereço público do painel para que o link funcione fora do ambiente local. `RESEND_API_KEY`/`RESEND_FROM` continuam sendo necessários apenas para os convites genéricos de líder usados na área de acesso.
 
 ## Limitações deliberadas do MVP
 

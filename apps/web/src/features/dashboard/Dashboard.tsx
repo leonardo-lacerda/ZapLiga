@@ -5,8 +5,33 @@ import { LiveTimer } from '../../components/LiveTimer';
 import { formatDateRangeLabel } from '../../components/DateRangePopover';
 import { formatNextAttempt, formatSeconds, labelStatus } from '../../shared/format';
 
-export function Dashboard({ isSdr, status, available, connected, sdrReady, sdrs, connectSdr, setAvailability, manualDial, manualPhone, setManualPhone, manualName, setManualName, manualCalling, logs, activeCall, hangup, connectedNumbers, dateRange }: AnyRow) {
+type SdrPresence = 'offline' | 'connecting' | 'connected' | 'available' | 'dialing' | 'in-call' | 'post-call';
+
+const presenceCopy: Record<SdrPresence, { label: string; description: string; tone: 'neutral' | 'info' | 'success' | 'warning' }> = {
+  offline: { label: 'Desconectado', description: 'Conecte seu painel para começar a receber chamadas.', tone: 'neutral' },
+  connecting: { label: 'Conectando', description: 'Estabelecendo o canal seguro com a operação…', tone: 'info' },
+  connected: { label: 'Conectado · indisponível', description: 'Você está conectado, mas ainda não receberá chamadas.', tone: 'neutral' },
+  available: { label: 'Disponível', description: 'Aguardando uma chamada da fila.', tone: 'success' },
+  dialing: { label: 'Chamando', description: 'A chamada está tocando para o lead.', tone: 'info' },
+  'in-call': { label: 'Em atendimento', description: 'O lead atendeu. Fale com ele pelo seu headset.', tone: 'success' },
+  'post-call': { label: 'Pós-atendimento', description: 'Registre o resultado da chamada para continuar.', tone: 'warning' },
+};
+
+function getSdrPresence({ connecting, connected, sdrReady, available, activeCall, postCall, manualCalling }: AnyRow): SdrPresence {
+  if (postCall) return 'post-call';
+  if (activeCall) return activeCall.phase === 'answered' || activeCall.mediaActive ? 'in-call' : 'dialing';
+  if (manualCalling) return 'dialing';
+  if (connecting || (connected && !sdrReady)) return 'connecting';
+  if (available) return 'available';
+  if (connected && sdrReady) return 'connected';
+  return 'offline';
+}
+
+export function Dashboard({ isSdr, status, available, connected, connecting, sdrReady, sdrs, connectSdr, setAvailability, manualDial, manualPhone, setManualPhone, manualName, setManualName, manualCalling, logs, activeCall, postCall, hangup, connectedNumbers, dateRange }: AnyRow) {
   const rangeLabel = dateRange ? formatDateRangeLabel(dateRange) : 'período selecionado';
+  const presence = getSdrPresence({ connecting, connected, sdrReady, available, activeCall, postCall, manualCalling });
+  const presenceInfo = presenceCopy[presence];
+  const presenceStep = ['offline', 'connecting'].includes(presence) ? 1 : presence === 'connected' ? 2 : ['available', 'dialing'].includes(presence) ? 3 : 4;
   return <>
     <div className="page-heading">
       <div><span className="eyebrow">OPERAÇÃO</span><h1>Visão geral</h1><p>Acompanhe a saúde do discador e mantenha sua equipe em movimento.</p></div>
@@ -37,6 +62,7 @@ export function Dashboard({ isSdr, status, available, connected, sdrReady, sdrs,
     {isSdr && <Panel>
       <SectionHeader eyebrow="SEU PAINEL" title="Operar como SDR" description="Seu acesso está vinculado ao seu usuário. Você não pode selecionar outro SDR." action={<Badge tone={connected ? 'success' : 'neutral'}>{connected ? (sdrReady ? 'Conectado' : 'Identificando...') : 'Offline'}</Badge>} />
       <div className="form-row"><div className="sdr-identity"><Icon name="headset" size={16} /><strong>{sdrs[0]?.name ?? 'Carregando SDR...'}</strong></div><Button icon="plug" onClick={() => void connectSdr()}>Conectar</Button><Button variant={available ? 'success' : 'secondary'} icon={available ? 'check' : 'headset'} onClick={() => setAvailability(!available)} disabled={!connected || !sdrReady}>{available ? 'Disponível' : sdrReady ? 'Ficar disponível' : 'Aguardando conexão'}</Button></div>
+      <div className={`sdr-presence sdr-presence-${presence}`} role="status" aria-live="polite"><div className="sdr-presence-icon"><Icon name={presence === 'offline' ? 'headset' : presence === 'post-call' ? 'check' : 'phone'} size={18} /></div><div className="sdr-presence-copy"><span className="eyebrow">STATUS AGORA</span><strong>{presenceInfo.label}</strong><small>{presence === 'dialing' && activeCall?.lead?.name ? `${presenceInfo.description} ${activeCall.lead.name}.` : presenceInfo.description}</small></div><div className="sdr-presence-progress" aria-label={`Etapa ${presenceStep} de 4`}><span className={presenceStep >= 1 ? 'active' : ''}>Conexão</span><span className={presenceStep >= 2 ? 'active' : ''}>Pronto</span><span className={presenceStep >= 3 ? 'active' : ''}>Chamada</span><span className={presenceStep >= 4 ? 'active' : ''}>Registro</span></div></div>
     </Panel>}
     {isSdr && <Panel>
       <SectionHeader eyebrow="DISCAGEM MANUAL" title="Ligar para um telefone" description="Faça uma chamada fora da fila usando um número informado por você." />

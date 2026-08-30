@@ -8,6 +8,8 @@ import { DialerService } from '../dialer/dialer.service';
 import { legacyTenantId } from '../../database/tenant-context';
 import { AuthService } from '../auth/auth.service';
 import { runtimeInstanceId } from '../../infrastructure/runtime-instance';
+import { Sentry } from '../../infrastructure/sentry/sentry';
+import { parseSdrSocketPath } from './sdr-socket-path';
 
 @Injectable()
 export class SdrGateway implements OnModuleDestroy {
@@ -22,23 +24,17 @@ export class SdrGateway implements OnModuleDestroy {
   attach(httpServer: Server) {
     this.server = new WebSocketServer({ noServer: true });
     httpServer.on('upgrade', (request, socket, head) => {
-      const pathname = new URL(request.url ?? '/', 'http://localhost').pathname;
       const url = new URL(request.url ?? '/', 'http://localhost');
-      const scopedControl = pathname.match(/^\/ws\/tenants\/([^/]+)\/sdr$/);
-      const scopedMedia = pathname.match(/^\/ws\/tenants\/([^/]+)\/sdr\/([^/]+)\/call\/([^/]+)$/);
-      const legacyMedia = pathname.match(/^\/ws\/sdr\/([^/]+)\/call\/([^/]+)$/);
-      const control = pathname === '/ws/sdr' || Boolean(scopedControl);
-      const media = scopedMedia ?? legacyMedia;
-      if (!control && !media) return;
+      const route = parseSdrSocketPath(url.pathname);
+      if (route.kind === 'none') return;
       const ticket = url.searchParams.get('ticket');
       if (!ticket) { socket.destroy(); return; }
       void this.auth.consumeWebsocketTicket(ticket).then((identity) => {
         if (!identity) { socket.destroy(); return; }
-        const requestedTenant = scopedControl?.[1] ?? scopedMedia?.[1];
-        if (requestedTenant && decodeURIComponent(requestedTenant) !== identity.tenantId) { socket.destroy(); return; }
-        const mediaSdrId = scopedMedia?.[2] ?? legacyMedia?.[1];
-        const mediaCallId = scopedMedia?.[3] ?? legacyMedia?.[2];
-        this.server?.handleUpgrade(request, socket, head, (ws) => control ? this.handleControl(ws, identity) : this.handleMedia(ws, decodeURIComponent(mediaSdrId!), decodeURIComponent(mediaCallId!), identity));
+        if (route.tenantId && decodeURIComponent(route.tenantId) !== identity.tenantId) { socket.destroy(); return; }
+        this.server?.handleUpgrade(request, socket, head, (ws) => route.kind === 'control'
+          ? this.handleControl(ws, identity)
+          : this.handleMedia(ws, decodeURIComponent(route.sdrId), decodeURIComponent(route.callId), identity));
       }).catch(() => socket.destroy());
     });
   }
@@ -120,6 +116,7 @@ export class SdrGateway implements OnModuleDestroy {
       }
     } catch (error) {
       this.logger.warn(`SDR socket message failed: ${String(error)}`);
+      Sentry.captureException(error);
       try { socket.send(JSON.stringify({ type: 'error', message: 'Não foi possível processar a mensagem' })); } catch { /* socket closed */ }
     }
   }

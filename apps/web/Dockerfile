@@ -7,6 +7,8 @@ RUN npm ci
 COPY apps/web apps/web
 ARG VITE_API_URL=http://localhost:3000
 ENV VITE_API_URL=$VITE_API_URL
+ARG VITE_SENTRY_DSN=
+ENV VITE_SENTRY_DSN=$VITE_SENTRY_DSN
 RUN npm --workspace apps/web run build
 
 FROM nginx:1.27-alpine

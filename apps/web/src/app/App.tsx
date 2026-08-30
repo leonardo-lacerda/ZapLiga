@@ -55,6 +55,7 @@ function AuthenticatedApp() {
   const [manualName, setManualName] = useState('');
   const [manualCalling, setManualCalling] = useState(false);
   const [sdrId, setSdrId] = useState('');
+  const [connecting, setConnecting] = useState(false);
   const [available, setAvailable] = useState(false);
   const [connected, setConnected] = useState(false);
   const [sdrReady, setSdrReady] = useState(false);
@@ -141,16 +142,17 @@ function AuthenticatedApp() {
     const sdr = sdrs.find((item) => item.id === sdrId);
     if (!sdr) return;
     disconnect();
+    setConnecting(true);
     const ticketResult = await json('/api/auth/ws-ticket', { method: 'POST' }).catch((e) => { setError(e instanceof Error ? e.message : String(e)); return null; });
-    if (!ticketResult?.ticket) return;
+    if (!ticketResult?.ticket) { setConnecting(false); return; }
     const socket = new WebSocket(`${wsUrl()}/ws/tenants/${encodeURIComponent(activeTenantId)}/sdr?ticket=${encodeURIComponent(ticketResult.ticket)}`);
     control.current = socket;
     socket.binaryType = 'arraybuffer';
-    socket.onopen = () => { setConnected(true); socket.send(JSON.stringify({ type: 'identify' })); };
+    socket.onopen = () => { setConnecting(false); setConnected(true); socket.send(JSON.stringify({ type: 'identify' })); };
     socket.onmessage = (event) => {
       if (typeof event.data !== 'string') { audio.current.play(event.data); return; }
       const message = JSON.parse(event.data);
-      if (message.type === 'identified') { setSdrReady(true); setAvailable(Boolean(message.sdr?.available)); const pause = pauseFromSdr(message.sdr); if (pause) setPostCall(pause); }
+      if (message.type === 'identified') { setConnecting(false); setSdrReady(true); setAvailable(Boolean(message.sdr?.available)); const pause = pauseFromSdr(message.sdr); if (pause) setPostCall(pause); }
       if (message.type === 'availability_changed') setAvailable(Boolean(message.available));
       if (message.type === 'sdr_state_changed' && message.sdrId === sdrId) setAvailable(Boolean(message.available));
       if (message.type === 'dialer_log') setLogs((current) => [message.log, ...current].slice(0, 100));
@@ -162,8 +164,8 @@ function AuthenticatedApp() {
       if (message.type === 'pause_finished') { setPostCall(null); setAvailable(true); void load(); }
       if (message.type === 'error') setError(message.message);
     };
-    socket.onerror = () => setError('Não foi possível conectar o canal do SDR. Tente novamente.');
-    socket.onclose = () => { audioCall.current = ''; setAvailable(false); setConnected(false); setSdrReady(false); void audio.current.stop(); setActiveCall(null); };
+    socket.onerror = () => { setConnecting(false); setError('Não foi possível conectar o canal do SDR. Tente novamente.'); };
+    socket.onclose = () => { setConnecting(false); audioCall.current = ''; setAvailable(false); setConnected(false); setSdrReady(false); void audio.current.stop(); setActiveCall(null); };
   };
 
   const setAvailability = async (value: boolean) => {
@@ -205,7 +207,7 @@ function AuthenticatedApp() {
         {activeCall?.lead && (() => { const answered = activeCall.phase === 'answered' || activeCall.mediaActive; const blind = !answered && !activeCall.lead.name; return <div className={`answered-call-banner${answered ? '' : ' is-ringing'}`} role="status"><div className="answered-call-contact"><span className={`answered-call-icon${answered ? '' : ' is-ringing'}`}><Icon name="phone" size={18} /></span><div><span>{answered ? 'CLIENTE ATENDEU' : 'CHAMANDO…'}</span><strong>{blind ? 'Discando para um contato da fila…' : activeCall.lead.name}</strong><small>{blind ? 'O nome aparece assim que o lead atender' : <>{activeCall.lead.phone} · {answered ? <LiveTimer startedAt={activeCall.connectedAt ?? activeCall.connected_at ?? activeCall.callStartedAt} /> : 'Tocando no WhatsApp…'}</>}</small></div></div><Button variant="danger" icon="close" onClick={hangup}>{answered ? 'Encerrar chamada' : 'Desligar'}</Button></div>; })()}
         {isSdr && postCall && <PostCallPanel pause={postCall} onFinish={finishPostCall} submitting={finishingPause} />}
         {error && <div className="alert" role="alert"><Icon name="alert" size={17} /><span>{error}</span><button onClick={() => setError('')} aria-label="Fechar erro"><Icon name="close" size={16} /></button></div>}
-        <div className="page-content">{tab === 'dashboard' && <Dashboard isSdr={isSdr} status={status} available={available} connected={connected} sdrReady={sdrReady} sdrs={sdrs} connectSdr={connectSdr} setAvailability={setAvailability} manualDial={manualDial} manualPhone={manualPhone} setManualPhone={setManualPhone} manualName={manualName} setManualName={setManualName} manualCalling={manualCalling} logs={logs} activeCall={activeCall} hangup={hangup} connectedNumbers={connectedNumbers} postCall={postCall} dateRange={dateRange} />}{tab === 'metrics' && activeTenantId && <MetricsPage tenantId={activeTenantId} leadFolders={leadFolders} sdrs={sdrs} numbers={numbers} />}{tab === 'numbers' && <NumbersPage numbers={numbers} numbersTotal={numbersTotal} numbersOffset={numbersOffset} onNumbersPageChange={setNumbersOffset} numberForm={numberForm} setNumberForm={setNumberForm} createNumber={createNumber} showQr={showQr} reconnectNumber={reconnectNumber} removeNumber={removeNumber} qrLoading={qrLoading} qr={qr} closeQr={closeQr} canManageNumbers={!isSdr} />}{tab === 'leads' && <LeadsPage leads={leads} leadsTotal={leadsTotal} leadsOffset={leadsOffset} onLeadsPageChange={setLeadsOffset} folders={leadFolders} selectedFolderId={selectedFolderId} selectedFolder={leadFolders.find((folder) => folder.id === selectedFolderId)} metrics={folderMetrics} setSelectedFolderId={setSelectedFolderId} createFolder={createFolder} updateFolder={updateFolder} removeFolder={removeFolder} leadForm={leadForm} setLeadForm={setLeadForm} createLead={createLead} importCsv={importCsv} importResult={importResult} clearFolder={clearFolder} manualCall={manualCall} resetLead={resetLead} removeLead={removeLead} />}{tab === 'sdrs' && <SdrsPage tenantId={activeTenantId} sdrs={sdrs} />}{tab === 'calls' && <CallsPage calls={calls} callsTotal={callsTotal} callsOffset={callsOffset} onCallsPageChange={setCallsOffset} />}{tab === 'access' && activeTenantId && <AccessPage tenantId={activeTenantId} role={isSuperAdmin ? 'super_admin' : activeTenant?.role ?? ''} />}{tab === 'admin' && isSuperAdmin && <AdminPage onChanged={reload} onOpenTenant={(tenantId) => { selectTenant(tenantId); setTab('dashboard'); }} />}</div>
+        <div className="page-content">{tab === 'dashboard' && <Dashboard isSdr={isSdr} status={status} available={available} connected={connected} connecting={connecting} sdrReady={sdrReady} sdrs={sdrs} connectSdr={connectSdr} setAvailability={setAvailability} manualDial={manualDial} manualPhone={manualPhone} setManualPhone={setManualPhone} manualName={manualName} setManualName={setManualName} manualCalling={manualCalling} logs={logs} activeCall={activeCall} hangup={hangup} connectedNumbers={connectedNumbers} postCall={postCall} dateRange={dateRange} />}{tab === 'metrics' && activeTenantId && <MetricsPage tenantId={activeTenantId} leadFolders={leadFolders} sdrs={sdrs} numbers={numbers} />}{tab === 'numbers' && <NumbersPage numbers={numbers} numbersTotal={numbersTotal} numbersOffset={numbersOffset} onNumbersPageChange={setNumbersOffset} numberForm={numberForm} setNumberForm={setNumberForm} createNumber={createNumber} showQr={showQr} reconnectNumber={reconnectNumber} removeNumber={removeNumber} qrLoading={qrLoading} qr={qr} closeQr={closeQr} canManageNumbers={!isSdr} />}{tab === 'leads' && <LeadsPage leads={leads} leadsTotal={leadsTotal} leadsOffset={leadsOffset} onLeadsPageChange={setLeadsOffset} folders={leadFolders} selectedFolderId={selectedFolderId} selectedFolder={leadFolders.find((folder) => folder.id === selectedFolderId)} metrics={folderMetrics} setSelectedFolderId={setSelectedFolderId} createFolder={createFolder} updateFolder={updateFolder} removeFolder={removeFolder} leadForm={leadForm} setLeadForm={setLeadForm} createLead={createLead} importCsv={importCsv} importResult={importResult} clearFolder={clearFolder} manualCall={manualCall} resetLead={resetLead} removeLead={removeLead} />}{tab === 'sdrs' && <SdrsPage tenantId={activeTenantId} sdrs={sdrs} />}{tab === 'calls' && <CallsPage calls={calls} callsTotal={callsTotal} callsOffset={callsOffset} onCallsPageChange={setCallsOffset} />}{tab === 'access' && activeTenantId && <AccessPage tenantId={activeTenantId} role={isSuperAdmin ? 'super_admin' : activeTenant?.role ?? ''} />}{tab === 'admin' && isSuperAdmin && <AdminPage onChanged={reload} onOpenTenant={(tenantId) => { selectTenant(tenantId); setTab('dashboard'); }} />}</div>
       </main></div>
   </div></>;
 }
