@@ -510,7 +510,10 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
 
   async tick(tenantId = legacyTenantId()) {
     const tickToken = randomUUID();
-    const tickLock = `zapcall:tenant:${tenantId}:lock:dialer-tick`;
+    // Reservations are globally atomic in Redis, so independent API
+    // instances can process their locally-connected SDRs without one
+    // instance blocking another instance's WebSocket connections.
+    const tickLock = `zapcall:tenant:${tenantId}:lock:dialer-tick:${runtimeInstanceId}`;
     if (!await this.redis.acquireLock(tickLock, tickToken, 30_000)) return;
     if (this.ticking.has(tenantId)) { await this.redis.releaseLock(tickLock, tickToken); return; }
     this.ticking.add(tenantId);
@@ -518,8 +521,13 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
       await this.expireReservations(tenantId);
       const lastStatusSyncAt = this.lastStatusSyncAt.get(tenantId) ?? 0;
       if (Date.now() - lastStatusSyncAt >= 15000) {
-        this.lastStatusSyncAt.set(tenantId, Date.now());
-        await this.syncNumberStatuses(tenantId);
+        const syncToken = randomUUID();
+        const syncLock = `zapcall:tenant:${tenantId}:lock:number-status-sync`;
+        if (await this.redis.acquireLock(syncLock, syncToken, 15000)) {
+          this.lastStatusSyncAt.set(tenantId, Date.now());
+          try { await this.syncNumberStatuses(tenantId); }
+          finally { await this.redis.releaseLock(syncLock, syncToken); }
+        }
       }
       const settings = await this.getSettings(tenantId);
       if (!settings?.running) return;
@@ -644,7 +652,7 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
 
   private async syncNumberStatuses(tenantId = legacyTenantId()) {
     const result = await this.db.query("SELECT id, tenant_id, waxum_session_id FROM whatsapp_numbers WHERE tenant_id = $1 AND status <> 'removed'", [tenantId]);
-    for (const number of result.rows) {
+    await Promise.all(result.rows.map(async (number) => {
       try {
         const status = normalizeWaxumStatus(await this.waxum.getStatus(number.waxum_session_id));
         await this.db.query('UPDATE whatsapp_numbers SET status = $1, phone = COALESCE($2, phone) WHERE id = $3 AND tenant_id = $4', [status.status, status.phone, number.id, tenantId]);
@@ -655,7 +663,7 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
         // Waxum may be temporarily unavailable; keep the last status unless
         // the session is definitively missing.
       }
-    }
+    }));
   }
 
   private async startReservedCall(sdr: any, number: any, lead: any, settings: any, token: string, source: string, tenantId = legacyTenantId()) {
