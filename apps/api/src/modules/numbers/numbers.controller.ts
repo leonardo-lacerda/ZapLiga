@@ -1,4 +1,4 @@
-import { BadRequestException, Body, Controller, Delete, Get, Param, Patch, Post, NotFoundException, Query, UseGuards } from '@nestjs/common';
+import { BadRequestException, Body, Controller, Delete, Get, HttpException, HttpStatus, Param, Patch, Post, NotFoundException, Query, UseGuards } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
 import { DatabaseService } from '../../database/database.service';
 import { AuthGuard, CurrentTenant, CurrentUser, Roles, RolesGuard, TenantMembershipGuard } from '../auth/auth.guards';
@@ -15,6 +15,8 @@ const digits = (value: unknown) => String(value ?? '').replace(/\D/g, '');
 @UseGuards(AuthGuard, TenantMembershipGuard, RolesGuard)
 export class NumbersController {
   private readonly qrRequests = new Map<string, Promise<any>>();
+  private readonly waxumCreateCooldownKey = 'zapcall:waxum:create-session:cooldown';
+  private readonly waxumCreateLockKey = 'zapcall:waxum:create-session:lock';
 
   constructor(private readonly db: DatabaseService, private readonly waxum: WaxumClient, private readonly audit: AuditService, private readonly redis: RedisService) {}
 
@@ -24,11 +26,14 @@ export class NumbersController {
     const label = String(body.label ?? '').trim();
     if (!label) throw new BadRequestException('label é obrigatório');
     try {
-      const session = await this.waxum.createSession(label);
+      const session = await this.createWaxumSession(label);
       const result = await this.db.query(`INSERT INTO whatsapp_numbers (id,tenant_id,label,phone,waxum_session_id,max_concurrent_calls,cooldown_seconds) VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING *`, [randomUUID(), tenantId, label, digits(body.phone) || null, session.id, Number(body.maxConcurrentCalls ?? 1), Number(body.cooldownSeconds ?? 60)]);
       await this.audit.record({ actorUserId: user.id, tenantId, action: 'number.created', entityType: 'whatsapp_number', entityId: result.rows[0].id });
       return result.rows[0];
-    } catch (error) { throw new BadRequestException(`Não foi possível criar a sessão Waxum: ${String(error)}`); }
+    } catch (error) {
+      if (error instanceof HttpException) throw error;
+      throw new BadRequestException(`Não foi possível criar a sessão Waxum: ${String(error)}`);
+    }
   }
 
   @Roles('leader', 'super_admin')
@@ -109,9 +114,50 @@ export class NumbersController {
   }
 
   private async replaceMissingSession(number: any) {
-    const session = await this.waxum.createSession(number.label);
+    const session = await this.createWaxumSession(number.label);
     const result = await this.db.query(`UPDATE whatsapp_numbers SET waxum_session_id = $1, status = 'disconnected' WHERE id = $2 AND tenant_id = $3 RETURNING *`, [session.id, number.id, number.tenant_id]);
     return result.rows[0];
+  }
+
+  /**
+   * Session creation is a Waxum control-plane operation. Serialize it across
+   * both API instances and persist a 429 cooldown in Redis so browser retries
+   * cannot create a penalty storm after a restart.
+   */
+  private async createWaxumSession(label: string) {
+    const cooldown = await this.redis.client.ttl(this.waxumCreateCooldownKey).catch(() => -1);
+    if (cooldown > 0) throw this.waxumCooldownError(cooldown);
+
+    const token = randomUUID();
+    const locked = await this.redis.acquireLock(this.waxumCreateLockKey, token, 30_000).catch(() => false);
+    if (!locked) throw new HttpException('Outra criação de sessão está em andamento. Aguarde alguns segundos.', HttpStatus.TOO_MANY_REQUESTS);
+
+    try {
+      const lockCooldown = await this.redis.client.ttl(this.waxumCreateCooldownKey).catch(() => -1);
+      if (lockCooldown > 0) throw this.waxumCooldownError(lockCooldown);
+      return await this.waxum.createSession(label);
+    } catch (error) {
+      const typed = error as Error & { statusCode?: number; retryAfterSeconds?: number };
+      if (typed.statusCode === 429 || /\b429\b|too many requests/i.test(String(typed))) {
+        const retryAfter = this.parseWaxumWaitSeconds(typed);
+        await this.redis.client.set(this.waxumCreateCooldownKey, '1', 'EX', retryAfter).catch(() => undefined);
+        throw this.waxumCooldownError(retryAfter);
+      }
+      throw error;
+    } finally {
+      await this.redis.releaseLock(this.waxumCreateLockKey, token).catch(() => undefined);
+    }
+  }
+
+  private parseWaxumWaitSeconds(error: Error & { retryAfterSeconds?: number }) {
+    const headerValue = Number(error.retryAfterSeconds);
+    const messageValue = Number(String(error).match(/wait for\s+(\d+)\s*s?/i)?.[1]);
+    const seconds = Number.isFinite(headerValue) && headerValue > 0 ? headerValue : messageValue;
+    return Math.min(86_400, Math.max(1, Math.floor(Number.isFinite(seconds) && seconds > 0 ? seconds : 180)));
+  }
+
+  private waxumCooldownError(seconds: number) {
+    return new HttpException(`O Waxum está temporariamente limitando novas sessões. Aguarde ${seconds} segundos antes de tentar novamente.`, HttpStatus.TOO_MANY_REQUESTS);
   }
 
   private async loadQr(id: string, tenantId: string) {
