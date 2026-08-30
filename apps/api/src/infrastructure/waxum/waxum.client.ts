@@ -138,4 +138,18 @@ export class WaxumClient implements OnModuleDestroy {
     const httpUrl = `${this.baseUrl}/api/v1/sessions/${encodeURIComponent(sessionId)}/calls/media/ws?to=${encodeURIComponent(recipient)}&kind=audio`;
     return new WebSocket(httpUrl.replace(/^http/, 'ws'), { headers: this.apiKey ? { authorization: `Bearer ${this.apiKey}` } : undefined });
   }
+
+  // Explicitly hang up an outgoing call. Closing the media WS alone can leave
+  // the callee's WhatsApp showing "Reconnecting…" instead of ending the call
+  // (the media transport drops without a `<terminate>` signalling stanza).
+  // While the call is still active in Waxum, `terminate` looks it up by
+  // `call_id` and calls `handle.hangup()` directly (the `peer` is ignored on
+  // that path), so this reliably sends the terminate stanza to the lead.
+  terminateCall(sessionId: string, peer: string, callId: string, reason = 'hangup') {
+    return this.request<any>(
+      `/api/v1/sessions/${encodeURIComponent(sessionId)}/calls/terminate`,
+      { method: 'POST', body: JSON.stringify({ peer, call_id: callId, reason }) },
+      1,
+    );
+  }
 }

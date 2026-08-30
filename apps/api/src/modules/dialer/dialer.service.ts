@@ -44,6 +44,14 @@ type CallResource = {
   rateLimitBackoffSeconds?: number;
   callPlacedAt?: number;
   receivedAnyFrame?: boolean;
+  // VoIP recipient (`<lid>@lid`) and Waxum session, kept so we can send an
+  // explicit `POST /calls/terminate` when the SDR hangs up.
+  recipient?: string;
+  waxumSessionId?: string;
+  // Diagnostic counters for the audio bridge, logged when the call finishes.
+  inboundRelayed?: number;
+  inboundDroppedPreAnswer?: number;
+  micFramesRelayed?: number;
   previousSdrAvailable: boolean;
   previousSdrState: string;
 };
@@ -800,6 +808,8 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
       if (resource.finishing) return;
       const media = this.waxum.openMedia(call.rows[0].waxum_session_id, recipient);
       resource.media = media;
+      resource.recipient = recipient;
+      resource.waxumSessionId = call.rows[0].waxum_session_id;
       resource.callPlacedAt = Date.now();
       resource.ringTimeout = setTimeout(() => {
         if (!resource.mediaActive && !resource.answerSignalReceived) void this.finishCall(callId, 'no_answer', 'ring_timeout').catch((error) => this.logger.error(`Could not finish timed out call ${callId}: ${String(error)}`));
@@ -849,6 +859,7 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
             resource.answerEventLogged = true;
             this.log('Áudio recebido durante o toque; aguardando confirmação de atendimento', 'info', callId);
           }
+          resource.inboundDroppedPreAnswer = (resource.inboundDroppedPreAnswer ?? 0) + 1;
           return;
         }
         const firstActiveFrame = !resource.mediaActive;
@@ -862,7 +873,7 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
           this.log('Cliente aceitou a chamada; áudio liberado para o SDR', 'info', callId);
         }
         if (browser.readyState === WebSocket.OPEN) {
-          this.relayAudio(browser, data);
+          if (this.relayAudio(browser, data)) resource.inboundRelayed = (resource.inboundRelayed ?? 0) + 1;
         }
       });
       media.on('error', (error) => {
@@ -917,7 +928,7 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
           resource.browserAudioLogged = true;
           this.log(`Audio do microfone recebido (${Buffer.byteLength(data as any)} bytes)`, 'info', callId);
         }
-        if (isBinary) this.relayAudio(media, data);
+        if (isBinary && this.relayAudio(media, data)) resource.micFramesRelayed = (resource.micFramesRelayed ?? 0) + 1;
       };
       resource.browserCloseHandler = () => {
         void this.finishCall(callId, resource.mediaActive ? 'failed' : 'cancelled', 'browser_disconnected')
@@ -1001,6 +1012,15 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
         if (resource.browser && resource.browserMessageHandler) resource.browser.off('message', resource.browserMessageHandler);
         if (resource.browser && resource.browserCloseHandler) resource.browser.off('close', resource.browserCloseHandler);
         if (resource.browser && resource.browserErrorHandler) resource.browser.off('error', resource.browserErrorHandler);
+        this.log(`Áudio da chamada: entrada repassada=${resource.inboundRelayed ?? 0}, entrada descartada(pré-atendimento)=${resource.inboundDroppedPreAnswer ?? 0}, microfone repassado=${resource.micFramesRelayed ?? 0}, atendimento sinalizado=${Boolean(resource.answerSignalReceived)}, mediaAtiva=${resource.mediaActive}`, 'info', callId, tenantId);
+        // Explicitly hang up the WhatsApp call. Closing the media WS alone can
+        // leave the lead's phone stuck on "Reconnecting…"; terminating by
+        // call_id makes Waxum send the `<terminate>` stanza reliably.
+        if (resource.waxumSessionId && resource.recipient && resource.waxumCallId) {
+          await this.waxum.terminateCall(resource.waxumSessionId, resource.recipient, resource.waxumCallId)
+            .then(() => this.log('Chamada encerrada no WhatsApp (terminate enviado)', 'info', callId, tenantId))
+            .catch((error) => this.logger.warn(`Waxum terminate falhou para ${callId}: ${String(error)}`));
+        }
         if (resource.media && resource.media.readyState === WebSocket.OPEN) resource.media.close();
       }
       const call = await this.db.query(`SELECT c.*, s.id AS sdr_id, n.id AS number_id, n.cooldown_seconds, l.attempts, ds.max_attempts_per_lead, ds.retry_delay_minutes FROM calls c JOIN sdrs s ON s.tenant_id = c.tenant_id AND s.id = c.sdr_id JOIN whatsapp_numbers n ON n.id = c.number_id JOIN leads l ON l.tenant_id = c.tenant_id AND l.id = c.lead_id JOIN dialer_settings ds ON ds.tenant_id = c.tenant_id WHERE c.tenant_id = $1 AND c.id = $2`, [tenantId, callId]);
