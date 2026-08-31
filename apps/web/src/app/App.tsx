@@ -298,24 +298,24 @@ function AuthenticatedApp() {
   const suppressLead = async (phone: string, name: string) => { if (!window.confirm(`Adicionar ${name || phone} à lista de não contato? O telefone não poderá receber chamadas manuais ou automáticas.`)) return; const notes = window.prompt('Observação opcional sobre a solicitação de não contato:') ?? ''; try { await json(`/api/tenants/${activeTenantId}/contact-suppressions`, { method: 'POST', body: JSON.stringify({ phone, reason: 'requested_opt_out', source: 'lead_action', notes: notes.trim() || undefined }) }); await load(); } catch (e) { setError(e instanceof Error ? e.message : String(e)); } };
   const removeLead = async (id: string, name: string, phone: string) => { if (!window.confirm(`Remover o lead ${name || phone}? O contato e seu histórico de chamadas serão excluídos.`)) return; try { await json(`/api/leads/${id}`, { method: 'DELETE' }); await load(); } catch (e) { setError(String(e)); } };
   const clearLeads = async () => { if (!window.confirm('Limpar todos os contatos e o histórico de chamadas? Esta ação não pode ser desfeita.')) return; try { await json('/api/leads', { method: 'DELETE' }); await load(); } catch (e) { setError(String(e)); } };
-  const navItems: { key: TabKey; label: string; icon: string; group: 'Operação' | 'Configuração' | 'Administração' }[] = [
+  const navItems: { key: TabKey; label: string; icon: string; group: 'Operação' | 'Configuração' | 'Conta' | 'Administração' }[] = [
     { key: 'dashboard', label: isSdr ? 'Minha estação' : 'Visão geral', icon: 'dashboard', group: 'Operação' },
     ...(isSdr ? [{ key: 'sdrMetrics' as TabKey, label: 'Meus resultados', icon: 'chart', group: 'Operação' as const }] : []),
-    { key: 'metrics', label: 'Métricas', icon: 'chart', group: 'Operação' },
     { key: 'leads', label: 'Leads', icon: 'users', group: 'Operação' },
     { key: 'callbacks', label: 'Retornos', icon: 'calendar', group: 'Operação' },
-    { key: 'compliance', label: 'Não contato', icon: 'alert', group: 'Configuração' },
-    { key: 'privacy', label: 'Privacidade', icon: 'archive', group: 'Configuração' },
-    { key: 'settings', label: 'Discador', icon: 'settings', group: 'Configuração' },
-    { key: 'profile', label: 'Meu perfil', icon: 'users', group: 'Configuração' },
     { key: 'calls', label: 'Histórico', icon: 'history', group: 'Operação' },
+    { key: 'metrics', label: 'Métricas', icon: 'chart', group: 'Operação' },
+    { key: 'settings', label: 'Discador', icon: 'settings', group: 'Configuração' },
     { key: 'numbers', label: 'Números', icon: 'phone', group: 'Configuração' },
     { key: 'sdrs', label: 'SDRs', icon: 'headset', group: 'Configuração' },
     { key: 'access', label: 'Acesso', icon: 'users', group: 'Configuração' },
+    { key: 'compliance', label: 'Não contato', icon: 'alert', group: 'Configuração' },
+    { key: 'privacy', label: 'Privacidade', icon: 'archive', group: 'Configuração' },
+    { key: 'profile', label: 'Meu perfil', icon: 'user', group: 'Conta' },
   ];
   if (isSuperAdmin) navItems.push({ key: 'admin', label: 'Admin', icon: 'settings', group: 'Administração' });
   const connectedNumbers = (status.numbers ?? []).filter((number: AnyRow) => ['connected', 'online', 'ready', 'authenticated'].includes(String(number.status).toLowerCase())).length;
-  const navigationGroups = (['Operação', 'Configuração', 'Administração'] as const).map((group) => ({ label: group, items: navItems.filter((item) => item.group === group && (!isSdr || ['dashboard', 'sdrMetrics', 'callbacks', 'profile'].includes(item.key))) })).filter((group) => group.items.length > 0);
+  const navigationGroups = (['Operação', 'Configuração', 'Conta', 'Administração'] as const).map((group) => ({ label: group, items: navItems.filter((item) => item.group === group && (!isSdr || ['dashboard', 'sdrMetrics', 'callbacks', 'profile'].includes(item.key))) })).filter((group) => group.items.length > 0);
   const moduleTitle = navItems.find((item) => item.key === tab)?.label ?? 'Visão geral';
   const queuedLeads = isSdr ? (status.queue?.total ?? 0) : (status.lead_counts?.queued ?? 0);
   const availableSdrs = isSdr ? (status.sdr?.available ? 1 : 0) : (status.available_sdrs ?? 0);

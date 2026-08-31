@@ -3,7 +3,7 @@ import type { ButtonVariant } from '../types';
 import { formatNumber } from '../shared/format';
 
 const iconPaths: Record<string, string> = {
-  dashboard: 'M4 13h6V4H4v9Zm10 7h6v-9h-6v9ZM4 20h6v-3H4v3Zm10-12h6V4h-6v4Z',
+  dashboard: 'M4 13h6V4H4v9Zm10 7h6v-9h-6v9ZM4 20h6v-3H4v3Zm10-12h6V4h-6v4Z', user: 'M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2M12 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8',
   phone: 'M21 15.5v3a2 2 0 0 1-2.18 2 19.8 19.8 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6A19.8 19.8 0 0 1 1.12 2.8 2 2 0 0 1 3.11.62h3a2 2 0 0 1 2 1.72c.12.9.34 1.78.65 2.63a2 2 0 0 1-.45 2.11L7.04 8.34a16 16 0 0 0 6 6l1.26-1.26a2 2 0 0 1 2.11-.45c.85.31 1.73.53 2.63.65a2 2 0 0 1 1.72 2.22Z',
   users: 'M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8Zm13 10v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75',
   history: 'M3 12a9 9 0 1 0 3-6.7M3 4v5h5M12 7v5l3 2',
