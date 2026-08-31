@@ -157,7 +157,10 @@ export class AuthService {
       };
     });
     const result = this.authResponse(rotated.user, rotated.refreshToken, rotated.id, rotated.expiresAt, request);
-    await this.audit.record({ actorUserId: rotated.user.id, action: rotated.concurrent ? 'auth.refresh_concurrent' : 'auth.refresh', entityType: 'session', entityId: rotated.id, ...requestMeta(request) });
+    // The rotation is already committed and the new cookie can be returned.
+    // An audit insert failure must not turn a successful refresh into a 500,
+    // leaving the browser with the old (now rotated) cookie.
+    await this.audit.record({ actorUserId: rotated.user.id, action: rotated.concurrent ? 'auth.refresh_concurrent' : 'auth.refresh', entityType: 'session', entityId: rotated.id, ...requestMeta(request) }).catch(() => undefined);
     return result;
   }
 
@@ -331,7 +334,7 @@ export class AuthService {
   }
 
   clearRefreshCookie(response: Response) {
-    response.clearCookie(REFRESH_COOKIE, { httpOnly: true, secure: this.cookieSecure, sameSite: 'lax', path: '/api/auth' });
+    response.clearCookie(REFRESH_COOKIE, { httpOnly: true, secure: this.cookieSecure, sameSite: process.env.AUTH_COOKIE_SAME_SITE === 'none' ? 'none' : 'lax', path: '/api/auth' });
   }
 
   private get cookieSecure() { return process.env.AUTH_COOKIE_SECURE !== 'false' && process.env.NODE_ENV !== 'development' && process.env.NODE_ENV !== 'test'; }

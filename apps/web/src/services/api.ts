@@ -4,6 +4,7 @@ let activeTenantId = '';
 let tenantRequestController = new AbortController();
 let refreshInFlight: Promise<boolean> | null = null;
 let accessTokenRevision = 0;
+let lastRefreshFailure: 'unauthorized' | 'transient' | null = null;
 const refreshChannel = typeof BroadcastChannel !== 'undefined' ? new BroadcastChannel('zapliga-auth') : null;
 
 export const apiBaseUrl = API;
@@ -62,12 +63,33 @@ const fetchJson = async (path: string, init?: RequestInit) => {
 export const apiFetch = fetchJson;
 
 const rotateRefreshToken = async () => {
-  const response = await fetch(`${API}/api/auth/refresh`, { method: 'POST', credentials: 'include' });
-  const body = await response.json().catch(() => ({}));
-  if (!response.ok || !body.accessToken) { clearAccessToken(); return false; }
-  setAccessToken(body.accessToken);
-  return true;
+  // A transient 5xx/network failure must not turn an otherwise valid session
+  // into a logout. A rotated token may also briefly race with another tab, so
+  // retry a few times before declaring the refresh unavailable.
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    try {
+      const response = await fetch(`${API}/api/auth/refresh`, { method: 'POST', credentials: 'include', cache: 'no-store' });
+      const body = await response.json().catch(() => ({}));
+      if (response.ok && body.accessToken) {
+        lastRefreshFailure = null;
+        setAccessToken(body.accessToken);
+        return true;
+      }
+      if (response.status === 401 || response.status === 403) {
+        lastRefreshFailure = 'unauthorized';
+        clearAccessToken();
+        return false;
+      }
+    } catch {
+      // Retry below; the refresh cookie remains intact.
+    }
+    lastRefreshFailure = 'transient';
+    if (attempt < 2) await new Promise((resolve) => window.setTimeout(resolve, 500 * 2 ** attempt));
+  }
+  return false;
 };
+
+export const refreshFailureReason = () => lastRefreshFailure;
 
 export const refreshAccessToken = () => {
   // Several API calls can receive 401 at the same time (for example when a

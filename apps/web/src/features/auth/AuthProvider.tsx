@@ -1,5 +1,5 @@
-import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
-import { clearAccessToken, clearActiveTenantId, json, refreshAccessToken, setAccessToken, setActiveTenantId, shouldRefreshAccessToken } from '../../services/api';
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
+import { clearAccessToken, clearActiveTenantId, json, refreshAccessToken, refreshFailureReason, setAccessToken, setActiveTenantId, shouldRefreshAccessToken } from '../../services/api';
 
 export type AuthUser = {
   id: string;
@@ -37,6 +37,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [session, setSession] = useState<AuthSession | null>(null);
   const [activeTenantId, setActiveTenantState] = useState('');
   const [loading, setLoading] = useState(true);
+  const sessionRef = useRef<AuthSession | null>(null);
+
+  useEffect(() => { sessionRef.current = session; }, [session]);
 
   const selectTenant = useCallback((tenantId: string) => {
     if (!session?.tenants.some((tenant) => tenant.id === tenantId && tenant.status === 'active')) return;
@@ -59,7 +62,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const reload = useCallback(async () => {
     try {
-      if (!await refreshAccessToken()) { setSession(null); return; }
+      if (!await refreshAccessToken()) {
+        // Keep an already authenticated session during a transient network or
+        // server failure. The next interval/401 will retry the refresh.
+        if (refreshFailureReason() === 'transient' && sessionRef.current) return;
+        setSession(null);
+        return;
+      }
       applySession(await json('/api/auth/me', undefined, false));
     } catch {
       clearAccessToken();
@@ -85,6 +94,17 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       document.removeEventListener('visibilitychange', refreshOnResume);
       window.removeEventListener('pageshow', refreshOnResume);
     };
+  }, [reload, session]);
+
+  // Access tokens are intentionally short-lived. Refresh while the tab is
+  // open so a user does not get logged out simply because the dashboard was
+  // left open without a visibility change or API request.
+  useEffect(() => {
+    if (!session) return undefined;
+    const timer = window.setInterval(() => {
+      if (document.visibilityState === 'visible' && shouldRefreshAccessToken(180)) void reload();
+    }, 30_000);
+    return () => window.clearInterval(timer);
   }, [reload, session]);
 
   useEffect(() => {
