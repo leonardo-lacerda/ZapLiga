@@ -1,4 +1,4 @@
-import { authRouteFromPath, tabFromPath, tabPaths } from './routes';
+import { authRouteFromPath, isPublicAuthPath, tabFromPath, tabPaths } from './routes';
 
 describe('navigation routes', () => {
   it('maps every protected feature to a stable URL', () => {
@@ -7,5 +7,9 @@ describe('navigation routes', () => {
   it('recognizes account recovery links and their token', () => {
     window.history.replaceState({}, '', '/redefinir-senha?token=token-123');
     expect(authRouteFromPath(window.location.pathname)).toEqual({ type: 'reset', token: 'token-123' });
+  });
+  it('keeps the friendly sign-in URL public', () => {
+    expect(isPublicAuthPath('/entrar')).toBe(true);
+    expect(authRouteFromPath('/entrar')).toEqual({ type: 'login' });
   });
 });
