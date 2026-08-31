@@ -5,6 +5,7 @@ import { LiveTimer } from '../../components/LiveTimer';
 import { formatDateRangeLabel } from '../../components/DateRangePopover';
 import { formatDurationCompact, formatNextAttempt, formatSeconds, labelStatus } from '../../shared/format';
 import { PostCallPanel } from '../calls/PostCallPanel';
+import { OnboardingChecklist } from '../onboarding/OnboardingChecklist';
 
 type SdrPresence = 'offline' | 'connecting' | 'connected' | 'available' | 'dialing' | 'in-call' | 'post-call';
 
@@ -34,8 +35,13 @@ export function Dashboard(props: AnyRow) {
   const presence = getSdrPresence({ connecting, connected, sdrReady, available, activeCall, postCall, manualCalling });
   const presenceInfo = presenceCopy[presence];
   const presenceStep = ['offline', 'connecting'].includes(presence) ? 1 : presence === 'connected' ? 2 : ['available', 'dialing'].includes(presence) ? 3 : 4;
+  const requiredDialerSettings = ['global_max_concurrent_calls', 'max_attempts_per_lead', 'retry_delay_minutes', 'ring_timeout_seconds', 'default_number_cooldown_seconds'];
+  const settingsLoaded = Boolean(status.settings && Object.keys(status.settings).length);
+  const configurationIncomplete = !isSdr && settingsLoaded && (!status.schedule?.timezone || requiredDialerSettings.some((key) => !Number.isFinite(Number(status.settings[key]))));
   if (isSdr) return <SdrWorkspace {...props} presence={presence} presenceInfo={presenceInfo} presenceStep={presenceStep} />;
   return <>
+    <OnboardingChecklist />
+    {configurationIncomplete && <div className="alert app-alert" role="alert"><Icon name="alert" size={17} /><span>A configuração do discador está incompleta. Revise a agenda, o fuso e os limites antes de iniciar novas chamadas.</span></div>}
     <div className="page-heading">
       <div><span className="eyebrow">OPERAÇÃO</span><h1>Visão geral</h1><p>Acompanhe a saúde do discador e mantenha sua equipe em movimento.</p></div>
       <Badge tone={status.running ? 'success' : 'neutral'}><i className="badge-dot"></i>{status.running ? 'Discador operando' : 'Discador pausado'}</Badge>
@@ -50,7 +56,7 @@ export function Dashboard(props: AnyRow) {
       <Panel>
         <SectionHeader eyebrow="FILA DE ESPERA" title="Próximos contatos" action={<Badge>{status.queue?.total ?? 0} no total</Badge>} />
         <div className="queue-summary"><div><strong>{status.queue?.ready ?? 0}</strong><span>prontos agora</span></div><div><strong>{status.queue?.waiting ?? 0}</strong><span>aguardando horário</span></div></div>
-        <div className="insight-box"><span className="insight-icon"><Icon name="sparkles" size={15} /></span><div><span className="eyebrow">PRÓXIMA AÇÃO</span><strong>{status.next_action ?? 'Carregando...'}</strong>{status.next_lead && <small>{status.next_lead.name} · tentativa {Number(status.next_lead.attempts) + 1} · {formatNextAttempt(status.next_lead.next_eligible_at)}</small>}</div></div>
+        <div className="insight-box"><span className="insight-icon"><Icon name="sparkles" size={15} /></span><div><span className="eyebrow">PRÓXIMA AÇÃO</span><strong>{status.next_action ?? 'Carregando...'}</strong>{status.next_lead && <small>{status.next_lead.name} · tentativa {Number(status.next_lead.attempts) + 1} · {formatNextAttempt(status.next_lead.next_eligible_at)}</small>}{status.schedule && status.schedule.allowed === false && status.schedule.next_open_at && <small>Próxima abertura: {new Date(status.schedule.next_open_at).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' })} ({status.schedule.timezone})</small>}</div></div>
         <div className="queue-list">{(status.queue?.preview ?? []).map((lead: AnyRow) => <div className="queue-row" key={lead.id}><span className="queue-position">#{lead.queue_position}</span><div><strong>{lead.name}</strong><small>{lead.phone}</small></div><span className={lead.next_eligible_at && new Date(lead.next_eligible_at).getTime() <= Date.now() ? 'text-success' : 'text-muted'}>{labelStatus(lead.status)} · {formatNextAttempt(lead.next_eligible_at)}</span></div>)}{!(status.queue?.preview ?? []).length && <EmptyState title="Nenhum contato na fila" description="Contatos elegíveis aparecerão aqui." />}</div>
       </Panel>
       {isSdr ? <Panel>
@@ -113,6 +119,8 @@ function SdrWorkspace({ status, available, connected, connecting, sdrReady, sdrs
       <article><span>Tempo em conversa</span><strong>{formatDurationCompact(personal.conversation_seconds ?? 0)}</strong><small>últimas 24 horas</small></article>
       <article><span>Fila pronta</span><strong>{status.queue?.ready ?? 0}</strong><small>{status.queue?.waiting ?? 0} aguardando horário</small></article>
     </div>}
+
+    {!activeCall && !postCall && <Panel><SectionHeader eyebrow="PRÓXIMOS RETORNOS" title="Sua agenda" action={<Badge tone={status.overdue_callbacks ? 'warning' : 'info'}>{status.overdue_callbacks ?? 0} atrasados</Badge>} /><div className="queue-list">{(status.callbacks ?? []).map((item: AnyRow) => <div className="queue-row" key={item.id}><span className="queue-position"><Icon name="calendar" size={14} /></span><div><strong>{item.lead_name}</strong><small>{item.lead_phone}</small></div><span className={item.overdue ? 'text-warning' : 'text-muted'}>{new Date(item.due_at).toLocaleString('pt-BR')}</span></div>)}{!(status.callbacks ?? []).length && <EmptyState title="Nenhum retorno agendado" description="Seus próximos retornos aparecerão aqui." />}</div></Panel>}
 
     {!activeCall && !postCall && <div className="sdr-secondary-grid"><Panel>
       <SectionHeader eyebrow="DISCAGEM MANUAL" title="Ligar para um telefone" description="Use apenas quando precisar ligar fora da fila automática." />

@@ -13,6 +13,9 @@
     "build:api": "npm --workspace apps/api run build",
     "build:web": "npm --workspace apps/web run build",
     "test": "npm --workspace apps/api run test",
+    "test:web": "npm --workspace apps/web run test",
+    "test:e2e": "npm --workspace apps/web run test:e2e",
+    "test:all": "npm test && npm run test:web",
     "verify:multitenant": "node scripts/verify-multitenant.mjs"
   },
   "devDependencies": {

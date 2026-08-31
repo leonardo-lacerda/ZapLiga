@@ -16,7 +16,8 @@ const buildService = (current: any) => {
   const audit = { record: jest.fn().mockResolvedValue(undefined) };
   const users = {};
   const redis = {};
-  return { service: new AuthService(db as any, jwt as any, users as any, audit as any, redis as any), client, db, audit };
+  const mailer = {};
+  return { service: new AuthService(db as any, jwt as any, users as any, audit as any, redis as any, mailer as any), client, db, audit };
 };
 
 const session = (overrides: Record<string, unknown> = {}) => ({

@@ -2,10 +2,10 @@ import { FormEvent, useState } from 'react';
 import { Button, Panel } from '../../components/ui';
 import { AuthShell } from './AuthLayout';
 
-type RegisterInput = { name: string; email: string; password: string; companyName: string; companySlug?: string };
+type RegisterInput = { name: string; email: string; password: string; companyName: string; companySlug?: string; legalAccepted: boolean };
 
 export function RegisterPage({ register }: { register: (input: RegisterInput) => Promise<void> }) {
-  const [form, setForm] = useState<RegisterInput>({ name: '', email: '', password: '', companyName: '', companySlug: '' });
+  const [form, setForm] = useState<RegisterInput>({ name: '', email: '', password: '', companyName: '', companySlug: '', legalAccepted: false });
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const update = (field: keyof RegisterInput, value: string) => setForm((current) => ({ ...current, [field]: value }));
@@ -27,6 +27,7 @@ export function RegisterPage({ register }: { register: (input: RegisterInput) =>
       <label><span>Senha <small>Mínimo de 8 caracteres</small></span><input type="password" value={form.password} onChange={(event) => update('password', event.target.value)} placeholder="Crie uma senha segura" minLength={8} autoComplete="new-password" required /></label>
       <label><span>Nome da empresa</span><input value={form.companyName} onChange={(event) => update('companyName', event.target.value)} placeholder="Ex.: Acme Comercial" autoComplete="organization" required /></label>
       <label className="auth-field-wide"><span>Slug da empresa <small>Opcional · usado no endereço da operação</small></span><input value={form.companySlug} onChange={(event) => update('companySlug', event.target.value)} placeholder="minha-empresa" /></label>
+      <label className="auth-field-wide auth-legal-check"><input type="checkbox" checked={form.legalAccepted} onChange={(event) => setForm((current) => ({ ...current, legalAccepted: event.target.checked }))} required /><span>Li e aceito os <a href="/termos" target="_blank">Termos de Uso</a> e a <a href="/privacidade" target="_blank">Política de Privacidade</a>.</span></label>
       <Button type="submit" disabled={busy}>{busy ? 'Criando operação...' : 'Criar minha operação'}</Button>
     </form>
     <div className="auth-links"><span>Já possui uma conta?</span><a href="/login">Entrar</a></div>

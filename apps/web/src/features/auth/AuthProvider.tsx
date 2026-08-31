@@ -7,18 +7,23 @@ export type AuthUser = {
   email: string;
   platformRole: 'user' | 'super_admin';
   status: string;
+  emailVerifiedAt?: string | null;
+  passwordChangedAt?: string | null;
+  forcePasswordChange?: boolean;
 };
 
 export type AuthSession = {
   user: AuthUser;
   tenants: Array<{ id: string; name: string; slug: string; status: string; role?: string; membership_status?: string }>;
+  legalAcceptanceRequired?: boolean;
+  pendingLegalDocuments?: Array<{ id: string; document_type: string; version: string; title: string; url: string }>;
 };
 
 type AuthContextValue = {
   session: AuthSession | null;
   loading: boolean;
   login: (email: string, password: string) => Promise<void>;
-  register: (input: { name: string; email: string; password: string; companyName: string; companySlug?: string }) => Promise<void>;
+  register: (input: { name: string; email: string; password: string; companyName: string; companySlug?: string; legalAccepted: boolean }) => Promise<void>;
   acceptInvite: (token: string, name: string, password: string) => Promise<void>;
   logout: () => Promise<void>;
   activeTenantId: string;
@@ -36,15 +41,17 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const selectTenant = useCallback((tenantId: string) => {
     if (!session?.tenants.some((tenant) => tenant.id === tenantId && tenant.status === 'active')) return;
     setActiveTenantId(tenantId);
+    window.localStorage.setItem('zapliga_active_tenant', tenantId);
     setActiveTenantState(tenantId);
   }, [session]);
 
   const applySession = useCallback((next: AuthSession) => {
     setSession(next);
     setActiveTenantState((current) => {
-      const available = next.tenants.find((tenant) => tenant.id === current && tenant.status === 'active')
+      const preferredId = current || window.localStorage.getItem('zapliga_active_tenant') || '';
+      const available = next.tenants.find((tenant) => tenant.id === preferredId && tenant.status === 'active' && tenant.membership_status !== 'blocked')
         ?? next.tenants.find((tenant) => tenant.status === 'active');
-      if (available) { setActiveTenantId(available.id); return available.id; }
+      if (available) { setActiveTenantId(available.id); window.localStorage.setItem('zapliga_active_tenant', available.id); return available.id; }
       clearActiveTenantId();
       return '';
     });
@@ -80,13 +87,19 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     };
   }, [reload, session]);
 
+  useEffect(() => {
+    const accessChanged = () => void reload();
+    window.addEventListener('zapliga:access-changed', accessChanged);
+    return () => window.removeEventListener('zapliga:access-changed', accessChanged);
+  }, [reload]);
+
   const login = useCallback(async (email: string, password: string) => {
     const result = await json('/api/auth/login', { method: 'POST', body: JSON.stringify({ email, password }) });
     setAccessToken(result.accessToken);
     applySession(await json('/api/auth/me', undefined, false));
   }, [applySession]);
 
-  const register = useCallback(async (input: { name: string; email: string; password: string; companyName: string; companySlug?: string }) => {
+  const register = useCallback(async (input: { name: string; email: string; password: string; companyName: string; companySlug?: string; legalAccepted: boolean }) => {
     const result = await json('/api/auth/register', { method: 'POST', body: JSON.stringify(input) });
     setAccessToken(result.accessToken);
     applySession(await json('/api/auth/me', undefined, false));

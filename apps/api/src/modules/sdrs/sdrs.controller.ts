@@ -24,7 +24,11 @@ export class SdrsController {
   }
 
   private async assertSdrQuota(tenantId: string) {
-    const quota = await this.db.query(`SELECT t.max_sdrs, count(s.id)::int AS current FROM tenants t LEFT JOIN sdrs s ON s.tenant_id = t.id WHERE t.id = $1 GROUP BY t.id, t.max_sdrs`, [tenantId]);
+    const quota = await this.db.query(`SELECT t.max_sdrs, count(tm.user_id)::int AS current
+      FROM tenants t
+      LEFT JOIN sdrs s ON s.tenant_id = t.id
+      LEFT JOIN tenant_memberships tm ON tm.tenant_id = s.tenant_id AND tm.user_id = s.user_id AND tm.role = 'sdr' AND tm.status = 'active'
+      WHERE t.id = $1 GROUP BY t.id, t.max_sdrs`, [tenantId]);
     if (Number(quota.rows[0]?.current ?? 0) >= Number(quota.rows[0]?.max_sdrs ?? 500)) throw new ConflictException('O limite de SDRs desta empresa foi atingido');
   }
 
@@ -67,7 +71,11 @@ export class SdrsController {
       const own = await this.db.query('SELECT 1 FROM sdrs WHERE tenant_id = $1 AND id = $2 AND user_id = $3 LIMIT 1', [tenantId, id, user.id]);
       if (!own.rows[0]) throw new ForbiddenException('Um SDR só pode finalizar o próprio pós-atendimento');
     }
-    try { return await this.dialer.finishPause(id, pauseId, body, tenantId); }
+    try {
+      const result = await this.dialer.finishPause(id, pauseId, { ...body, actorUserId: user.id }, tenantId);
+      if (body.callResult === 'nao_ligar_novamente') await this.audit.record({ actorUserId: user.id, tenantId, action: 'contact.suppressed', entityType: 'lead', metadata: { source: 'post_call', reason: 'requested_opt_out' } });
+      return result;
+    }
     catch (error) { throw new BadRequestException(String((error as Error).message ?? error)); }
   }
 }

@@ -16,16 +16,18 @@ async function main() {
     const rounds = Math.max(10, Number(process.env.BCRYPT_ROUNDS ?? 12));
     const passwordHash = await bcrypt.hash(password, rounds);
     if (current.rows[0]) {
-      await db.query("UPDATE users SET password_hash = $1, platform_role = 'super_admin', status = 'active', updated_at = now() WHERE id = $2", [passwordHash, current.rows[0].id]);
-      console.log(`Admin supremo atualizado: ${email}`);
+      await db.query("UPDATE users SET password_hash = $1, platform_role = 'super_admin', status = 'active', email_verified_at = COALESCE(email_verified_at, now()), updated_at = now() WHERE id = $2", [passwordHash, current.rows[0].id]);
+      await db.query(`INSERT INTO user_legal_acceptances (user_id, legal_document_version_id) SELECT $1, id FROM legal_document_versions WHERE retired_at IS NULL AND effective_at <= now() ON CONFLICT DO NOTHING`, [current.rows[0].id]);
+      console.log('Admin supremo atualizado.');
       return;
     }
     const userId = randomUUID();
     await db.transaction(async (client) => {
-      await client.query(`INSERT INTO users (id, name, email, password_hash, platform_role) VALUES ($1, $2, $3, $4, 'super_admin')`, [userId, name, email, passwordHash]);
+      await client.query(`INSERT INTO users (id, name, email, password_hash, platform_role, email_verified_at) VALUES ($1, $2, $3, $4, 'super_admin', now())`, [userId, name, email, passwordHash]);
+      await client.query(`INSERT INTO user_legal_acceptances (user_id, legal_document_version_id) SELECT $1, id FROM legal_document_versions WHERE retired_at IS NULL AND effective_at <= now() ON CONFLICT DO NOTHING`, [userId]);
       await client.query(`INSERT INTO audit_logs (id, actor_user_id, action, entity_type, entity_id, metadata) VALUES ($1, $2, 'user.bootstrap_admin', 'user', $3, '{}'::jsonb)`, [randomUUID(), userId, userId]);
     });
-    console.log(`Admin supremo criado: ${email}`);
+    console.log('Admin supremo criado.');
   } finally {
     await db.onModuleDestroy();
   }

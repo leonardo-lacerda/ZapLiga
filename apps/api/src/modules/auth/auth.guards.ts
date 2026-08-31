@@ -1,4 +1,4 @@
-import { CanActivate, ExecutionContext, ForbiddenException, Injectable, SetMetadata, UnauthorizedException, createParamDecorator } from '@nestjs/common';
+import { CanActivate, ExecutionContext, ForbiddenException, Injectable, Optional, SetMetadata, UnauthorizedException, createParamDecorator } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
 import { AuthenticatedUser, TenantRole } from './auth.types';
 import { AuthService } from './auth.service';
@@ -21,7 +21,7 @@ export const CurrentTenant = createParamDecorator((_data: unknown, context: Exec
 
 @Injectable()
 export class AuthGuard implements CanActivate {
-  constructor(private readonly auth: AuthService, private readonly db: DatabaseService) {}
+  constructor(private readonly auth: AuthService, private readonly db: DatabaseService, @Optional() private readonly redis?: RedisService) {}
 
   async canActivate(context: ExecutionContext) {
     const request = context.switchToHttp().getRequest<any>();
@@ -29,10 +29,21 @@ export class AuthGuard implements CanActivate {
     if (!header.startsWith('Bearer ')) throw new UnauthorizedException('Autenticação necessária');
     let payload: any;
     try { payload = await this.auth.verifyAccessToken(header.slice(7)); }
-    catch { throw new UnauthorizedException('Sessão inválida ou expirada'); }
-    const result = await this.db.query('SELECT id, platform_role, status FROM users WHERE id = $1 LIMIT 1', [String(payload.sub)]);
+    catch { await this.redis?.incrementMetric('access_token_failures_total'); throw new UnauthorizedException('Sessão inválida ou expirada'); }
+    const result = await this.db.query(`SELECT u.id, u.platform_role, u.status, u.email_verified_at, u.force_password_change,
+        (SELECT count(*)::int FROM legal_document_versions d WHERE d.retired_at IS NULL AND d.effective_at <= now() AND NOT EXISTS (SELECT 1 FROM user_legal_acceptances a WHERE a.user_id = u.id AND a.legal_document_version_id = d.id)) AS pending_legal_count
+      FROM users u JOIN user_sessions s ON s.user_id = u.id AND s.id = $2
+      WHERE u.id = $1 AND s.revoked_at IS NULL AND s.expires_at > now() LIMIT 1`, [String(payload.sub), String(payload.sid ?? '')]);
     const user = result.rows[0];
-    if (!user || user.status !== 'active') throw new UnauthorizedException('Usuário bloqueado ou inexistente');
+    if (!user || user.status !== 'active') { await this.redis?.incrementMetric('revoked_session_access_total'); throw new UnauthorizedException('Usuário bloqueado ou inexistente'); }
+    const gatePaths = new Set(['/api/auth/me', '/api/auth/logout', '/api/auth/logout-all', '/api/me/profile', '/api/me/password', '/api/me/sessions', '/api/me/legal-acceptance']);
+    const requestPath = String(request.path ?? '');
+    const accountGateAllowed = gatePaths.has(requestPath) || requestPath.startsWith('/api/me/sessions/');
+    if (!accountGateAllowed) {
+      if (!user.email_verified_at) throw new ForbiddenException({ code: 'email_verification_required', message: 'Verifique seu e-mail antes de continuar' });
+      if (Number(user.pending_legal_count ?? 0) > 0) throw new ForbiddenException({ code: 'legal_acceptance_required', message: 'Aceite os documentos legais vigentes antes de continuar' });
+      if (user.force_password_change) throw new ForbiddenException({ code: 'password_change_required', message: 'Altere sua senha temporária antes de continuar' });
+    }
     request.user = { id: user.id, platformRole: user.platform_role, sessionId: String(payload.sid ?? ''), tenantMembership: undefined } satisfies AuthenticatedUser;
     return true;
   }

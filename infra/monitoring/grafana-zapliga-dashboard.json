@@ -1,0 +1,14 @@
+{
+  "title": "ZapLiga - Prontidão de lançamento",
+  "uid": "zapliga-launch",
+  "schemaVersion": 39,
+  "refresh": "30s",
+  "time": { "from": "now-6h", "to": "now" },
+  "panels": [
+    { "type": "stat", "title": "Callbacks vencidos", "targets": [{ "expr": "zapliga_callbacks_overdue" }], "gridPos": { "h": 6, "w": 6, "x": 0, "y": 0 } },
+    { "type": "timeseries", "title": "E-mails enviados e falhos", "targets": [{ "expr": "rate(zapliga_emails_sent_total[5m])", "legendFormat": "enviados" }, { "expr": "rate(zapliga_emails_failed_total[5m])", "legendFormat": "falhos" }], "gridPos": { "h": 8, "w": 9, "x": 6, "y": 0 } },
+    { "type": "timeseries", "title": "Chamadas bloqueadas", "targets": [{ "expr": "increase(zapliga_calls_blocked_suppression_total[5m])", "legendFormat": "supressão" }, { "expr": "increase(zapliga_calls_blocked_schedule_total[5m])", "legendFormat": "agenda" }], "gridPos": { "h": 8, "w": 9, "x": 15, "y": 0 } },
+    { "type": "timeseries", "title": "Falhas de segurança e LGPD", "targets": [{ "expr": "increase(zapliga_action_token_failures_total[5m])", "legendFormat": "tokens" }, { "expr": "increase(zapliga_revoked_session_access_total[5m])", "legendFormat": "sessão revogada" }, { "expr": "increase(zapliga_privacy_jobs_failed_total[5m])", "legendFormat": "LGPD" }], "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 } },
+    { "type": "timeseries", "title": "Latência das jornadas", "targets": [{ "expr": "rate({__name__=~\"zapliga_journey_.*_milliseconds_sum\"}[5m]) / clamp_min(rate({__name__=~\"zapliga_journey_.*_milliseconds_count\"}[5m]), 0.001)" }], "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 } }
+  ]
+}

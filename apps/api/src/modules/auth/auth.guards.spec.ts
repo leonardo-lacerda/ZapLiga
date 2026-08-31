@@ -18,9 +18,17 @@ describe('auth and tenant guards', () => {
   it('loads the current user from a valid access token', async () => {
     const request: any = { headers: { authorization: 'Bearer valid' } };
     const auth = { verifyAccessToken: jest.fn().mockResolvedValue({ sub: 'user-1', sid: 'session-1' }) };
-    const db = { query: jest.fn().mockResolvedValue({ rows: [{ id: 'user-1', platform_role: 'user', status: 'active' }] }) };
+    const db = { query: jest.fn().mockResolvedValue({ rows: [{ id: 'user-1', platform_role: 'user', status: 'active', email_verified_at: new Date().toISOString(), pending_legal_count: 0, force_password_change: false }] }) };
     await expect(new AuthGuard(auth as any, db as any).canActivate(contextFor(request))).resolves.toBe(true);
     expect(request.user).toMatchObject({ id: 'user-1', platformRole: 'user', sessionId: 'session-1' });
+  });
+
+  it('rejects a revoked session immediately and increments the operational counter', async () => {
+    const auth = { verifyAccessToken: jest.fn().mockResolvedValue({ sub: 'user-1', sid: 'revoked-1' }) };
+    const db = { query: jest.fn().mockResolvedValue({ rows: [] }) };
+    const redis = { incrementMetric: jest.fn().mockResolvedValue(undefined) };
+    await expect(new AuthGuard(auth as any, db as any, redis as any).canActivate(contextFor({ headers: { authorization: 'Bearer valid' } }))).rejects.toMatchObject({ status: 401 });
+    expect(redis.incrementMetric).toHaveBeenCalledWith('revoked_session_access_total');
   });
 
   it('accepts only an active membership for the selected tenant', async () => {

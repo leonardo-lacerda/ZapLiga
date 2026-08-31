@@ -183,6 +183,28 @@ describe('DialerService', () => {
     });
   });
 
+  describe('contact suppression safety barrier', () => {
+    it('rechecks canonical suppression inside the call transaction and releases the reservation', async () => {
+      const client = { query: jest.fn().mockResolvedValue({ rows: [{ folder_id: 'folder-1', is_active: true, contact_allowed: false }] }) };
+      const db = { query: jest.fn(), transaction: jest.fn(async (callback: any) => callback(client)) };
+      const redis = makeRedis();
+      const service = new DialerService(db as any, redis as any, makeWaxum() as any, makeGateway() as any);
+
+      await expect((service as any).startReservedCall(
+        { id: 'sdr-1', available: true, state: 'available' },
+        { id: 'number-1', label: 'Linha 1' },
+        { id: 'lead-1', phone: '5511999990000', attempts: 0 },
+        settings,
+        'reservation-1',
+        'manual',
+        'tenant-1',
+      )).rejects.toThrow('lista de não contato');
+
+      expect(redis.release).toHaveBeenCalledWith({ tenantId: 'tenant-1', token: 'reservation-1', numberId: 'number-1', leadId: 'lead-1', sdrId: 'sdr-1' });
+      expect(client.query.mock.calls.some((call: any[]) => call[0].includes('INSERT INTO calls'))).toBe(false);
+    });
+  });
+
   describe('line quarantine trigger (registerLineInstantFailure)', () => {
     const makeDb = () => {
       const query: jest.Mock = jest.fn();
@@ -316,6 +338,8 @@ describe('DialerService', () => {
 
       const leadUpdate = (client.query.mock.calls as any[][]).find((call) => call[0].includes("status = CASE"));
       expect(leadUpdate?.[1]).toEqual(['contatado', 'tenant-1', 'lead-1', callbackAt]);
+      const callbackInsert = (client.query.mock.calls as any[][]).find((call) => call[0].includes('INSERT INTO lead_callbacks'));
+      expect(callbackInsert?.[1]).toEqual(['tenant-1', 'lead-1', 'call-1', 'sdr-1', callbackAt, 'Ligar amanhã', null]);
     });
 
     it('rejects a pipeline stage that conflicts with the selected result', async () => {
@@ -323,6 +347,23 @@ describe('DialerService', () => {
       const service = new DialerService(db as any, makeRedis() as any, makeWaxum() as any, makeGateway() as any);
       await expect(service.finishPause('sdr-1', 'pause-1', { callResult: 'numero_invalido', pipelineStage: 'qualificado' }, 'tenant-1')).rejects.toThrow('não corresponde');
       expect(db.transaction).not.toHaveBeenCalled();
+    });
+
+    it('turns an explicit opt-out result into a canonical suppression in the same transaction', async () => {
+      const client = { query: jest.fn(async (sql: string) => {
+        if (sql.includes('SELECT p.*')) return { rows: [{ id: 'pause-1', call_id: 'call-1', lead_id: 'lead-1', started_at: new Date(Date.now() - 10_000) }] };
+        if (sql.includes('SELECT pipeline_stage')) return { rows: [{ pipeline_stage: 'contatado', phone: '5511999990000' }] };
+        return { rows: [] };
+      }) };
+      const db = { query: jest.fn(), transaction: jest.fn(async (callback: any) => callback(client)) };
+      const compliance = { suppressWithExecutor: jest.fn().mockResolvedValue({ id: 'suppression-1' }) };
+      const service = new DialerService(db as any, makeRedis() as any, makeWaxum() as any, makeGateway() as any, compliance as any);
+
+      await service.finishPause('sdr-1', 'pause-1', { callResult: 'nao_ligar_novamente', pipelineStage: 'perdido', actorUserId: 'user-1' }, 'tenant-1');
+
+      expect(compliance.suppressWithExecutor).toHaveBeenCalledWith(client, {
+        tenantId: 'tenant-1', phone: '5511999990000', reason: 'requested_opt_out', source: 'post_call', notes: '', actorUserId: 'user-1',
+      });
     });
 
     it('never marks a disconnected SDR as available after wrap-up', async () => {

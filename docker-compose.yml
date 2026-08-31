@@ -16,6 +16,13 @@ x-api-environment: &api-environment
   INVITATION_TTL_SECONDS: ${INVITATION_TTL_SECONDS:-172800}
   RESEND_API_KEY: ${RESEND_API_KEY:-}
   RESEND_FROM: ${RESEND_FROM:-}
+  DATA_PROTECTION_SECRET: ${DATA_PROTECTION_SECRET:-change-this-data-protection-secret}
+  METRICS_TOKEN: ${METRICS_TOKEN:-change-this-metrics-token}
+  PUBLIC_REGISTRATION_ENABLED: ${PUBLIC_REGISTRATION_ENABLED:-false}
+  E2E_TEST_MODE: ${E2E_TEST_MODE:-false}
+  SUPERADMIN_EMAIL: ${SUPERADMIN_EMAIL:-}
+  SUPERADMIN_PASSWORD: ${SUPERADMIN_PASSWORD:-}
+  SUPERADMIN_NAME: ${SUPERADMIN_NAME:-Admin supremo}
   SENTRY_DSN: ${SENTRY_DSN:-}
   SENTRY_ENVIRONMENT: ${SENTRY_ENVIRONMENT:-}
   BCRYPT_ROUNDS: ${BCRYPT_ROUNDS:-12}
@@ -61,7 +68,7 @@ services:
       POSTGRES_USER: ${POSTGRES_USER:-zapcall}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-zapcall}
     ports:
-      - "127.0.0.1:5432:5432"
+      - "127.0.0.1:${POSTGRES_HOST_PORT:-5432}:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
@@ -95,7 +102,7 @@ services:
     image: redis:7-alpine
     restart: unless-stopped
     ports:
-      - "127.0.0.1:6379:6379"
+      - "127.0.0.1:${REDIS_HOST_PORT:-6379}:6379"
     volumes:
       - redis_data:/data
     healthcheck:
@@ -109,8 +116,8 @@ services:
     command: ["--jetstream", "--store_dir=/data"]
     restart: unless-stopped
     ports:
-      - "127.0.0.1:4222:4222"
-      - "127.0.0.1:8222:8222"
+      - "127.0.0.1:${NATS_HOST_PORT:-4222}:4222"
+      - "127.0.0.1:${NATS_MONITOR_HOST_PORT:-8222}:8222"
     volumes:
       - nats_data:/data
 
@@ -118,7 +125,7 @@ services:
     image: fdciabdul/waxum:0.12.4@sha256:056342ba0f4d269563057573d796de848df8e3b52043463f344bd68065227e18
     restart: unless-stopped
     ports:
-      - "127.0.0.1:3451:3451"
+      - "127.0.0.1:${WAXUM_HOST_PORT:-3451}:3451"
     environment:
       PORT: 3451
       RUST_LOG: info
@@ -147,7 +154,7 @@ services:
       <<: *api-environment
       API_INSTANCE_ID: api-a
     ports:
-      - "127.0.0.1:3000:3000"
+      - "127.0.0.1:${API_A_HOST_PORT:-3000}:3000"
 
   api-b:
     <<: *api-common
@@ -155,7 +162,7 @@ services:
       <<: *api-environment
       API_INSTANCE_ID: api-b
     ports:
-      - "127.0.0.1:3001:3000"
+      - "127.0.0.1:${API_B_HOST_PORT:-3001}:3000"
 
   web:
     build:
@@ -164,11 +171,12 @@ services:
       args:
         VITE_API_URL: ${VITE_API_URL:-http://localhost:3000}
         VITE_SENTRY_DSN: ${VITE_SENTRY_DSN:-}
+        VITE_PUBLIC_REGISTRATION_ENABLED: ${PUBLIC_REGISTRATION_ENABLED:-false}
     depends_on:
       - api-a
     restart: unless-stopped
     ports:
-      - "127.0.0.1:5173:80"
+      - "127.0.0.1:${WEB_HOST_PORT:-5173}:80"
 
 volumes:
   postgres_data:

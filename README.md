@@ -22,7 +22,7 @@ Plataforma de operação SDR para chamadas de voz pelo WhatsApp. O ZapLiga centr
 - **Persistência:** PostgreSQL 16, com migrations versionadas em `apps/api/src/database/migrations`.
 - **Coordenação e cache:** Redis 7.
 - **Eventos:** NATS 2.10 com JetStream.
-- **Telefonia:** Waxum 0.12.2, com imagem fixada por digest no Compose.
+- **Telefonia:** Waxum 0.12.4, com imagem fixada por digest no Compose.
 - **Execução:** Docker Compose para desenvolvimento e produção; Nginx faz o roteamento externo no deploy.
 
 No ambiente de produção, o Compose mantém duas instâncias da API (`api-a` e `api-b`), além dos serviços compartilhados, backups diários do PostgreSQL e o painel web.
@@ -94,9 +94,7 @@ npm --workspace apps/api run bootstrap:admin
 
 ### Convites
 
-O link de convite é gerado na página de SDR e deve ser copiado e enviado manualmente. O convite expira conforme `INVITATION_TTL_SECONDS` — 48 horas por padrão — e gerar um novo link revoga o anterior.
-
-Para que o link funcione fora do ambiente local, `WEB_ORIGIN` deve apontar para o endereço público do painel. `RESEND_API_KEY` e `RESEND_FROM` são usados somente pelos convites genéricos de líder da área de acesso; o convite de SDR por link não dispara e-mail automaticamente.
+Convites de líder e SDR usam o mesmo fluxo transacional, tentam entrega pelo Resend três vezes e mantêm um link copiável como contingência. O painel mostra envio, falha, abertura, aceite, expiração e revogação, e permite reenvio sem criar convites concorrentes. A validade usa `INVITATION_TTL_SECONDS` (48 horas por padrão).
 
 ## Configuração
 
@@ -112,7 +110,10 @@ Comece sempre por `.env.example`. As variáveis mais importantes são:
 | `WEB_ORIGIN` | Origem pública usada nos links e cookies do painel |
 | `AUTH_COOKIE_SECURE` | Use `true` quando o painel estiver atrás de HTTPS |
 | `INVITATION_TTL_SECONDS` | Validade dos convites |
-| `RESEND_API_KEY` / `RESEND_FROM` | E-mail dos convites genéricos de líder |
+| `RESEND_API_KEY` / `RESEND_FROM` | E-mails de convite, verificação e recuperação |
+| `DATA_PROTECTION_SECRET` | Criptografia/HMAC das solicitações LGPD |
+| `METRICS_TOKEN` | Bearer token de coleta em `/internal/metrics` |
+| `PUBLIC_REGISTRATION_ENABLED` | Libera cadastro público somente após Gate B |
 | `SENTRY_DSN` / `SENTRY_ENVIRONMENT` | Monitoramento opcional de erros |
 
 Antes de compartilhar ou publicar um ambiente, substitua todos os segredos padrão do `.env.example`, especialmente `WAXUM_API_KEY`, `WAXUM_JWT_SECRET`, `JWT_ACCESS_SECRET` e `SUPERADMIN_PASSWORD`.
@@ -149,6 +150,8 @@ O canal operacional do SDR usa WebSocket em `/ws/tenants/:tenantId/sdr`; o ticke
 | `npm run dev` | Inicia API e frontend em modo de desenvolvimento |
 | `npm run typecheck` | Verifica os tipos de API e frontend |
 | `npm test` | Executa os testes do backend |
+| `npm run test:web` | Executa Vitest/RTL/MSW no frontend |
+| `npm run test:e2e` | Executa as 12 jornadas Playwright contra o stack |
 | `npm run build` | Limpa artefatos, valida a estrutura e gera os builds |
 | `npm run check:structure` | Valida a organização esperada do workspace |
 | `npm run verify:multitenant` | Verifica regras de isolamento multiempresa |
@@ -160,6 +163,7 @@ Antes de abrir um pull request, rode pelo menos:
 ```powershell
 npm run typecheck
 npm test
+npm run test:web
 npm run build
 ```
 
@@ -178,7 +182,7 @@ As migrations são de ida e rodam no boot da API. Se uma migration causar proble
 
 - Gravação de chamadas e CRM completo não fazem parte do escopo atual.
 - A detecção de atendimento usa o primeiro áudio recebido pelo WebSocket do Waxum.
-- Sessão, QR Code e reconexão dependem do contrato do Waxum 0.12.2 instalado.
+- Sessão, QR Code e reconexão dependem do contrato do Waxum 0.12.4 instalado.
 - O navegador precisa permitir o microfone e permanecer conectado durante a chamada.
 - A operação com gateway não oficial pode resultar em instabilidade ou bloqueio de contas; mantenha consentimento, opt-out e conformidade com a legislação aplicável.
 
@@ -188,3 +192,6 @@ As migrations são de ida e rodam no boot da API. Se uma migration causar proble
 - [Runbook de deploy, rollback e recuperação](docs/deploy-runbook.md)
 - [Troubleshooting](docs/troubleshooting.md)
 - [Versão validada do Waxum](docs/waxum-version.md)
+- [Plano de prontidão das features de usuário para lançamento](docs/plano-lancamento-features-usuarios.md)
+- [Runbook de lançamento, rollout, incidente e LGPD](docs/launch-runbook.md)
+- [Catálogo de eventos de auditoria](docs/audit-events.md)

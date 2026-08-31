@@ -6,9 +6,10 @@
 
 export type CallResultClassification = 'positive' | 'neutral' | 'negative' | 'conversion';
 
-export type CallResultCode = 'interessado' | 'reuniao_agendada' | 'retornar' | 'sem_interesse' | 'numero_invalido';
+export type CallResultCode = 'interessado' | 'reuniao_agendada' | 'retornar' | 'sem_interesse' | 'numero_invalido' | 'nao_ligar_novamente';
 
 export const CALL_RESULT_CATALOG: Record<CallResultCode, { label: string; classification: CallResultClassification }> = {
+  nao_ligar_novamente: { label: 'Não ligar novamente', classification: 'negative' },
   reuniao_agendada: { label: 'Reunião agendada', classification: 'conversion' },
   interessado: { label: 'Interessado', classification: 'positive' },
   retornar: { label: 'Solicitou retorno', classification: 'neutral' },

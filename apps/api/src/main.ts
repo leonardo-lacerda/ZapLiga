@@ -14,12 +14,12 @@ initSentry();
 // behavior with no handler at all, just with visibility first.
 process.on('uncaughtException', (error) => {
   Sentry.captureException(error);
-  console.error(error);
+  console.error('Uncaught exception; detalhes enviados ao monitoramento sanitizado.');
   void Sentry.close(2000).finally(() => process.exit(1));
 });
 process.on('unhandledRejection', (reason) => {
   Sentry.captureException(reason);
-  console.error(reason);
+  console.error('Unhandled rejection; detalhes enviados ao monitoramento sanitizado.');
   void Sentry.close(2000).finally(() => process.exit(1));
 });
 
@@ -39,8 +39,9 @@ async function bootstrap() {
   // declares itself production. An incomplete production .env that never
   // sets NODE_ENV must still be rejected, not silently boot with defaults.
   if (process.env.NODE_ENV !== 'development' && process.env.NODE_ENV !== 'test') {
-    const unsafeDefaults = new Set(['dev-only-change-this-secret', 'change-this-access-secret', 'zapcall-local-access-secret-change-me', 'zapcall-local-waxum-token', 'change-this-local-secret', 'zapcall-local-jwt-secret-change-me']);
-    if (!process.env.JWT_ACCESS_SECRET || !process.env.WAXUM_API_KEY || !process.env.WAXUM_JWT_SECRET || !process.env.WEB_ORIGIN || unsafeDefaults.has(process.env.JWT_ACCESS_SECRET) || unsafeDefaults.has(process.env.WAXUM_API_KEY) || unsafeDefaults.has(process.env.WAXUM_JWT_SECRET)) throw new Error('Defina segredos reais e WEB_ORIGIN em produção');
+    const unsafeDefaults = new Set(['dev-only-change-this-secret', 'change-this-access-secret', 'zapcall-local-access-secret-change-me', 'zapcall-local-waxum-token', 'change-this-local-secret', 'change-this-data-protection-secret', 'change-this-metrics-token', 'zapcall-local-jwt-secret-change-me']);
+    if (process.env.E2E_TEST_MODE === 'true') throw new Error('E2E_TEST_MODE nunca pode ser habilitado em producao');
+    if (!process.env.JWT_ACCESS_SECRET || !process.env.WAXUM_API_KEY || !process.env.WAXUM_JWT_SECRET || !process.env.WEB_ORIGIN || !process.env.DATA_PROTECTION_SECRET || !process.env.METRICS_TOKEN || unsafeDefaults.has(process.env.JWT_ACCESS_SECRET) || unsafeDefaults.has(process.env.WAXUM_API_KEY) || unsafeDefaults.has(process.env.WAXUM_JWT_SECRET) || unsafeDefaults.has(process.env.DATA_PROTECTION_SECRET) || unsafeDefaults.has(process.env.METRICS_TOKEN)) throw new Error('Defina segredos reais, DATA_PROTECTION_SECRET, METRICS_TOKEN e WEB_ORIGIN em produção');
     app.getHttpAdapter().getInstance().set('trust proxy', 1);
     app.use((request: any, response: any, next: () => void) => {
       if (request.path === '/health' || request.secure || request.headers['x-forwarded-proto'] === 'https') return next();

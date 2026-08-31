@@ -1,0 +1,37 @@
+services:
+  waxum:
+    image: zapliga-fake-waxum:e2e
+    build:
+      context: .
+      dockerfile: apps/fake-waxum/Dockerfile
+    environment:
+      PORT: 3451
+      NATS_URL: nats://nats:4222
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3451/livez"]
+      interval: 2s
+      timeout: 2s
+      retries: 20
+  api-a:
+    environment:
+      NODE_ENV: test
+      E2E_TEST_MODE: "true"
+      PUBLIC_REGISTRATION_ENABLED: "true"
+      WAXUM_REQUEST_INTERVAL_MS: "0"
+      SUPERADMIN_EMAIL: admin@zapcall.local
+      SUPERADMIN_PASSWORD: ZapCall-Smoke-2026!
+      WEB_ORIGIN: ${E2E_WEB_ORIGIN:-http://localhost:5173}
+  api-b:
+    environment:
+      NODE_ENV: test
+      E2E_TEST_MODE: "true"
+      PUBLIC_REGISTRATION_ENABLED: "true"
+      WAXUM_REQUEST_INTERVAL_MS: "0"
+      SUPERADMIN_EMAIL: admin@zapcall.local
+      SUPERADMIN_PASSWORD: ZapCall-Smoke-2026!
+      WEB_ORIGIN: ${E2E_WEB_ORIGIN:-http://localhost:5173}
+  web:
+    build:
+      args:
+        VITE_API_URL: ${E2E_BROWSER_API_URL:-http://localhost:3000}
+        VITE_PUBLIC_REGISTRATION_ENABLED: "true"

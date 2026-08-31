@@ -10,6 +10,7 @@ const stageByResult: Record<string, string> = {
   retornar: 'contatado',
   reuniao_agendada: 'reuniao',
   numero_invalido: 'perdido',
+  nao_ligar_novamente: 'perdido',
 };
 
 const localDateTime = (date: Date) => {
@@ -23,7 +24,7 @@ export function PostCallPanel({ pause, onFinish, submitting, canContinue = true 
   const [notes, setNotes] = useState('');
   const [callbackAt, setCallbackAt] = useState('');
   const callDuration = Number(pause.call_duration_seconds) || 0;
-  const notesRequired = Boolean(callResult && !['sem_interesse', 'numero_invalido'].includes(callResult));
+  const notesRequired = Boolean(callResult && !['sem_interesse', 'numero_invalido', 'nao_ligar_novamente'].includes(callResult));
   const callbackRequired = callResult === 'retornar';
   const stageLabel = useMemo(() => stages.find(([value]) => value === pipelineStage)?.[1] ?? pipelineStage, [pipelineStage]);
   const canSubmit = Boolean(callResult && pipelineStage && (!notesRequired || notes.trim()) && (!callbackRequired || callbackAt));
@@ -55,7 +56,8 @@ export function PostCallPanel({ pause, onFinish, submitting, canContinue = true 
   return <Panel className="post-call-panel">
     <div className="post-call-heading"><div><span className="eyebrow">PÓS-ATENDIMENTO</span><h2>Como terminou a conversa?</h2><p>{pause.lead_name} · {pause.lead_phone}</p></div><div className="post-call-timers"><span><small>Ligação</small><strong>{formatDuration(callDuration)}</strong></span><span><small>Registro</small><strong><LiveTimer startedAt={pause.started_at} initialSeconds={pause.pause_elapsed_seconds} /></strong></span></div></div>
     <div className="post-call-form">
-      <fieldset className="post-call-results"><legend>Resultado da ligação <small>atalhos 1–5</small></legend><div>{results.map(([value, label], index) => <button type="button" key={value} className={callResult === value ? 'selected' : ''} aria-pressed={callResult === value} onClick={() => chooseResult(value)}><kbd>{index + 1}</kbd>{label}</button>)}</div></fieldset>
+      <fieldset className="post-call-results"><legend>Resultado da ligação <small>atalhos 1–{results.length}</small></legend><div>{results.map(([value, label], index) => <button type="button" key={value} className={callResult === value ? 'selected' : ''} aria-pressed={callResult === value} onClick={() => chooseResult(value)}><kbd>{index + 1}</kbd>{label}</button>)}</div></fieldset>
+      {callResult === 'nao_ligar_novamente' && <div className="alert" role="alert">Este telefone será incluído na lista de não contato e não poderá receber novas chamadas.</div>}
       <div className="post-call-stage"><span>Etapa atualizada automaticamente</span><Badge tone={pipelineStage === 'perdido' ? 'error' : pipelineStage === 'reuniao' ? 'success' : 'info'}>{stageLabel}</Badge></div>
       {callbackRequired && <label className="post-call-callback">Data e horário do retorno<input type="datetime-local" min={localDateTime(new Date(Date.now() + 5 * 60_000))} value={callbackAt} onChange={(event) => setCallbackAt(event.target.value)} required /></label>}
       <label className="post-call-notes">Anotação {notesRequired ? <small>obrigatória</small> : <small>opcional</small>}<textarea value={notes} onChange={(event) => setNotes(event.target.value)} placeholder={callbackRequired ? 'Registre o contexto para a próxima conversa...' : 'Resumo da conversa e próximo passo...'} rows={3} /></label>

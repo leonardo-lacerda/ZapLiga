@@ -1,4 +1,4 @@
-import { ConflictException, HttpException, HttpStatus, Injectable, UnauthorizedException } from '@nestjs/common';
+import { BadRequestException, ConflictException, HttpException, HttpStatus, Injectable, NotFoundException, UnauthorizedException } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { randomBytes, randomUUID, createHash } from 'node:crypto';
 import { Request, Response } from 'express';
@@ -8,18 +8,27 @@ import { UsersService } from '../users/users.service';
 import { publicUser, normalizeEmail } from '../users/users.utils';
 import { RedisService } from '../../infrastructure/redis/redis.service';
 import { slugifyTenant } from '../tenants/tenants.service';
+import { AccountMailer } from './account-mailer';
 
 export const REFRESH_COOKIE = 'zapcall_refresh';
 
 const sha256 = (value: string) => createHash('sha256').update(value).digest('hex');
 const requestMeta = (request?: Request) => ({ ipAddress: request?.ip ?? null, userAgent: String(request?.headers['user-agent'] ?? '').slice(0, 500) || null });
+const e2eMode = () => process.env.NODE_ENV === 'test' || process.env.E2E_TEST_MODE === 'true';
 
 @Injectable()
 export class AuthService {
   private readonly accessTtlSeconds = Math.max(60, Number(process.env.JWT_ACCESS_TTL_SECONDS ?? 900));
   private readonly refreshTtlSeconds = Math.max(300, Number(process.env.REFRESH_TOKEN_TTL_SECONDS ?? 2592000));
   private readonly refreshRotationGraceSeconds = Math.min(120, Math.max(5, Number(process.env.AUTH_REFRESH_ROTATION_GRACE_SECONDS ?? 60)));
-  constructor(private readonly db: DatabaseService, private readonly jwt: JwtService, private readonly users: UsersService, private readonly audit: AuditService, private readonly redis: RedisService) {}
+  constructor(private readonly db: DatabaseService, private readonly jwt: JwtService, private readonly users: UsersService, private readonly audit: AuditService, private readonly redis: RedisService, private readonly mailer: AccountMailer) {}
+
+  private async enforceRateLimit(scope: string, identity: string, limit: number, ttlSeconds: number) {
+    const key = `zapcall:security:${scope}:${sha256(identity)}`;
+    const attempts = await this.redis.client.incr(key);
+    if (attempts === 1) await this.redis.client.expire(key, ttlSeconds);
+    if (attempts > limit) throw new HttpException('Muitas tentativas. Aguarde alguns minutos.', HttpStatus.TOO_MANY_REQUESTS);
+  }
 
   async login(email: string, password: string, request?: Request) {
     const normalizedEmail = normalizeEmail(email);
@@ -32,17 +41,19 @@ export class AuthService {
     if (!user || user.status !== 'active' || !(await this.users.comparePassword(password, user.password_hash))) {
       const nextAttempt = await this.redis.client.incr(attemptKey);
       if (nextAttempt === 1) await this.redis.client.expire(attemptKey, 15 * 60);
-      await this.audit.record({ action: 'auth.login_failed', metadata: { email: normalizedEmail }, ...requestMeta(request) });
+      await this.redis.incrementMetric('login_failed_total');
+      await this.audit.record({ action: 'auth.login_failed', metadata: { identityHash: sha256(normalizedEmail) }, ...requestMeta(request) });
       throw new UnauthorizedException('E-mail ou senha inválidos');
     }
     await this.redis.client.del(attemptKey);
+    await this.redis.incrementMetric('login_success_total');
     await this.users.markLogin(user.id);
     const session = await this.createSession(user.id, request);
     await this.audit.record({ actorUserId: user.id, action: 'auth.login_success', entityType: 'user', entityId: user.id, ...requestMeta(request) });
     return this.authResponse(user, session.refreshToken, session.id, session.expiresAt, request);
   }
 
-  async registerOrganizer(input: { name: string; email: string; password: string; companyName: string; companySlug?: string }, request?: Request) {
+  async registerOrganizer(input: { name: string; email: string; password: string; companyName: string; companySlug?: string; legalAccepted: boolean }, request?: Request) {
     const attemptKey = `zapcall:security:register:${sha256(request?.ip ?? 'unknown')}`;
     const attempts = await this.redis.client.incr(attemptKey);
     if (attempts === 1) await this.redis.client.expire(attemptKey, 15 * 60);
@@ -63,6 +74,9 @@ export class AuthService {
         const tenant = (await client.query('INSERT INTO tenants (id, name, slug) VALUES ($1, $2, $3) RETURNING *', [tenantId, companyName, companySlug])).rows[0];
         const user = (await client.query("INSERT INTO users (id, name, email, password_hash, platform_role) VALUES ($1, $2, $3, $4, 'user') RETURNING *", [userId, name, email, passwordHash])).rows[0];
         await client.query("INSERT INTO tenant_memberships (id, tenant_id, user_id, role) VALUES ($1, $2, $3, 'leader')", [randomUUID(), tenantId, userId]);
+        await client.query(`INSERT INTO user_legal_acceptances (user_id, legal_document_version_id, ip_address, user_agent)
+          SELECT $1, id, $2, $3 FROM legal_document_versions WHERE retired_at IS NULL AND effective_at <= now()
+          ON CONFLICT DO NOTHING`, [userId, requestMeta(request).ipAddress, requestMeta(request).userAgent]);
         return { user, tenant };
       });
     } catch (error) {
@@ -70,9 +84,11 @@ export class AuthService {
       throw error;
     }
     const session = await this.createSession(created.user.id, request);
+    const verificationToken = await this.createActionToken(created.user.id, 'verify_email', 24 * 60 * 60, request);
+    await this.mailer.verification(created.user.email, created.user.name, verificationToken).catch(() => undefined);
     await this.audit.record({ actorUserId: created.user.id, tenantId: created.tenant.id, action: 'organizer.registered', entityType: 'tenant', entityId: created.tenant.id, ...requestMeta(request) });
     const auth = await this.authResponse(created.user, session.refreshToken, session.id, session.expiresAt, request);
-    return { ...auth, tenant: { id: created.tenant.id, name: created.tenant.name, slug: created.tenant.slug, role: 'leader' } };
+    return { ...auth, tenant: { id: created.tenant.id, name: created.tenant.name, slug: created.tenant.slug, role: 'leader' }, ...(e2eMode() ? { verificationToken } : {}) };
   }
 
   async createSessionForUser(userId: string, request?: Request) {
@@ -156,6 +172,107 @@ export class AuthService {
     await this.audit.record({ actorUserId: userId, action: 'auth.logout_all', entityType: 'user', entityId: userId, ...requestMeta(request) });
   }
 
+  async forgotPassword(email: string, request?: Request) {
+    const normalized = normalizeEmail(email);
+    await this.enforceRateLimit('password-forgot-ip', request?.ip ?? 'unknown', 8, 15 * 60);
+    await this.enforceRateLimit('password-forgot-email', normalized, 4, 15 * 60);
+    const user = await this.users.findByEmail(normalized);
+    let testToken: string | undefined;
+    if (user?.status === 'active') {
+      const token = await this.createActionToken(user.id, 'reset_password', 30 * 60, request);
+      testToken = token;
+      await this.mailer.passwordReset(user.email, user.name, token).catch(() => undefined);
+      await this.audit.record({ actorUserId: user.id, action: 'auth.password_reset_requested', entityType: 'user', entityId: user.id, ...requestMeta(request) });
+    }
+    return { message: 'Se existir uma conta com este e-mail, enviaremos as instruções.', ...(e2eMode() && testToken ? { resetToken: testToken } : {}) };
+  }
+
+  async resetPassword(token: string, password: string, request?: Request) {
+    await this.enforceRateLimit('password-reset-ip', request?.ip ?? 'unknown', 12, 15 * 60);
+    const passwordHash = await this.users.hashPassword(password);
+    const user = await this.db.transaction(async (client) => {
+      const result = await client.query(`SELECT t.*, u.email, u.name FROM user_action_tokens t JOIN users u ON u.id = t.user_id WHERE t.token_hash = $1 AND t.purpose = 'reset_password' FOR UPDATE OF t`, [sha256(token)]);
+      const action = result.rows[0];
+      if (!action || action.consumed_at || new Date(action.expires_at).getTime() <= Date.now()) { await this.redis.incrementMetric('action_token_failures_total'); throw new BadRequestException('Link inválido, expirado ou já utilizado'); }
+      await client.query('UPDATE user_action_tokens SET consumed_at = now(), attempts = attempts + 1 WHERE id = $1', [action.id]);
+      await client.query('UPDATE users SET password_hash = $1, password_changed_at = now(), force_password_change = false, updated_at = now() WHERE id = $2', [passwordHash, action.user_id]);
+      await client.query('UPDATE user_sessions SET revoked_at = COALESCE(revoked_at, now()) WHERE user_id = $1 AND revoked_at IS NULL', [action.user_id]);
+      return action;
+    });
+    await this.mailer.passwordChanged(user.email, user.name).catch(() => undefined);
+    await this.audit.record({ actorUserId: user.user_id, action: 'auth.password_reset_completed', entityType: 'user', entityId: user.user_id, ...requestMeta(request) });
+    return { ok: true };
+  }
+
+  async verifyEmail(token: string, request?: Request) {
+    await this.enforceRateLimit('email-verify-ip', request?.ip ?? 'unknown', 20, 15 * 60);
+    const userId = await this.db.transaction(async (client) => {
+      const result = await client.query(`SELECT * FROM user_action_tokens WHERE token_hash = $1 AND purpose = 'verify_email' FOR UPDATE`, [sha256(token)]);
+      const action = result.rows[0];
+      if (!action || action.consumed_at || new Date(action.expires_at).getTime() <= Date.now()) { await this.redis.incrementMetric('action_token_failures_total'); throw new BadRequestException('Link inválido, expirado ou já utilizado'); }
+      await client.query('UPDATE user_action_tokens SET consumed_at = now(), attempts = attempts + 1 WHERE id = $1', [action.id]);
+      await client.query('UPDATE users SET email_verified_at = COALESCE(email_verified_at, now()), updated_at = now() WHERE id = $1', [action.user_id]);
+      return action.user_id as string;
+    });
+    await this.audit.record({ actorUserId: userId, action: 'auth.email_verified', entityType: 'user', entityId: userId, ...requestMeta(request) });
+    return { ok: true };
+  }
+
+  async resendVerification(email: string, request?: Request) {
+    const normalized = normalizeEmail(email);
+    await this.enforceRateLimit('email-resend-ip', request?.ip ?? 'unknown', 8, 15 * 60);
+    await this.enforceRateLimit('email-resend-email', normalized, 4, 15 * 60);
+    const user = await this.users.findByEmail(normalized);
+    if (user?.status === 'active' && !user.email_verified_at) {
+      const token = await this.createActionToken(user.id, 'verify_email', 24 * 60 * 60, request);
+      await this.mailer.verification(user.email, user.name, token).catch(() => undefined);
+    }
+    return { message: 'Se a conta estiver pendente, enviaremos um novo link.' };
+  }
+
+  async updateProfile(userId: string, name: string, request?: Request) {
+    const result = await this.db.query('UPDATE users SET name = $1, updated_at = now() WHERE id = $2 RETURNING *', [name.trim(), userId]);
+    if (!result.rows[0]) throw new NotFoundException('Usuário não encontrado');
+    await this.audit.record({ actorUserId: userId, action: 'user.profile_changed', entityType: 'user', entityId: userId, ...requestMeta(request) });
+    return publicUser(result.rows[0]);
+  }
+
+  async changePassword(userId: string, sessionId: string, currentPassword: string, newPassword: string, request?: Request) {
+    const user = await this.users.requireById(userId);
+    if (!await this.users.comparePassword(currentPassword, user.password_hash)) throw new UnauthorizedException('Senha atual incorreta');
+    const passwordHash = await this.users.hashPassword(newPassword);
+    await this.db.transaction(async (client) => {
+      await client.query('UPDATE users SET password_hash = $1, password_changed_at = now(), force_password_change = false, updated_at = now() WHERE id = $2', [passwordHash, userId]);
+      await client.query('UPDATE user_sessions SET revoked_at = COALESCE(revoked_at, now()) WHERE user_id = $1 AND id <> $2 AND revoked_at IS NULL', [userId, sessionId]);
+    });
+    await this.mailer.passwordChanged(user.email, user.name).catch(() => undefined);
+    await this.audit.record({ actorUserId: userId, action: 'user.password_changed', entityType: 'user', entityId: userId, ...requestMeta(request) });
+    return { ok: true };
+  }
+
+  async listSessions(userId: string, currentSessionId: string) {
+    const result = await this.db.query(`SELECT id, family_id, created_at, last_used_at, expires_at, ip_address, user_agent FROM user_sessions WHERE user_id = $1 AND revoked_at IS NULL AND expires_at > now() ORDER BY created_at DESC`, [userId]);
+    return result.rows.map((session) => ({ ...session, current: session.id === currentSessionId }));
+  }
+
+  async revokeSession(userId: string, sessionId: string, request?: Request) {
+    const result = await this.db.query('UPDATE user_sessions SET revoked_at = COALESCE(revoked_at, now()) WHERE id = $1 AND user_id = $2 RETURNING id', [sessionId, userId]);
+    if (!result.rows[0]) throw new NotFoundException('Sessão não encontrada');
+    await this.audit.record({ actorUserId: userId, action: 'auth.session_revoked', entityType: 'session', entityId: sessionId, ...requestMeta(request) });
+    return { ok: true, current: sessionId === String((request as any)?.user?.sessionId ?? '') };
+  }
+
+  async legalDocuments() {
+    return (await this.db.query(`SELECT id, document_type, version, title, url, effective_at FROM legal_document_versions WHERE retired_at IS NULL AND effective_at <= now() ORDER BY document_type`)).rows;
+  }
+
+  async acceptCurrentLegalDocuments(userId: string, request?: Request) {
+    await this.db.query(`INSERT INTO user_legal_acceptances (user_id, legal_document_version_id, ip_address, user_agent)
+      SELECT $1, id, $2, $3 FROM legal_document_versions WHERE retired_at IS NULL AND effective_at <= now() ON CONFLICT DO NOTHING`, [userId, requestMeta(request).ipAddress, requestMeta(request).userAgent]);
+    await this.audit.record({ actorUserId: userId, action: 'legal.documents_accepted', entityType: 'user', entityId: userId, ...requestMeta(request) });
+    return { ok: true };
+  }
+
   async createWebsocketTicket(userId: string, tenantId: string) {
     const token = randomBytes(32).toString('base64url');
     const expiresAt = new Date(Date.now() + 60_000);
@@ -172,7 +289,12 @@ export class AuthService {
         SELECT wt.*, u.name, u.email, u.platform_role, u.status AS user_status
         FROM websocket_tickets wt
         JOIN users u ON u.id = wt.user_id
+        JOIN tenants tenant ON tenant.id = wt.tenant_id AND tenant.status = 'active'
         WHERE wt.token_hash = $1
+          AND (u.platform_role = 'super_admin' OR EXISTS (
+            SELECT 1 FROM tenant_memberships tm
+            WHERE tm.tenant_id = wt.tenant_id AND tm.user_id = wt.user_id AND tm.status = 'active'
+          ))
         FOR UPDATE
       `, [sha256(token)]);
       const ticket = result.rows[0];
@@ -192,7 +314,8 @@ export class AuthService {
       WHERE t.status = 'active' AND ($2 = 'super_admin' OR tm.user_id IS NOT NULL)
       ORDER BY t.name
     `, [userId, user.platform_role]);
-    return { user: publicUser(user), tenants: memberships.rows };
+    const missingLegal = await this.db.query(`SELECT d.id, d.document_type, d.version, d.title, d.url FROM legal_document_versions d WHERE d.retired_at IS NULL AND d.effective_at <= now() AND NOT EXISTS (SELECT 1 FROM user_legal_acceptances a WHERE a.user_id = $1 AND a.legal_document_version_id = d.id) ORDER BY d.document_type`, [userId]);
+    return { user: publicUser(user), tenants: memberships.rows, legalAcceptanceRequired: missingLegal.rows.length > 0, pendingLegalDocuments: missingLegal.rows };
   }
 
   verifyAccessToken(token: string) { return this.jwt.verifyAsync(token); }
@@ -222,6 +345,15 @@ export class AuthService {
       VALUES ($1, $2, $3, $4, $5, $6, $7)
     `, [id, userId, id, sha256(refreshToken), expiresAt, requestMeta(request).ipAddress, requestMeta(request).userAgent]);
     return { id, refreshToken, expiresAt };
+  }
+
+  private async createActionToken(userId: string, purpose: 'verify_email' | 'reset_password', ttlSeconds: number, request?: Request) {
+    const token = randomBytes(48).toString('base64url');
+    await this.db.transaction(async (client) => {
+      await client.query('UPDATE user_action_tokens SET consumed_at = COALESCE(consumed_at, now()) WHERE user_id = $1 AND purpose = $2 AND consumed_at IS NULL', [userId, purpose]);
+      await client.query('INSERT INTO user_action_tokens (user_id, purpose, token_hash, expires_at, requested_ip) VALUES ($1, $2, $3, $4, $5)', [userId, purpose, sha256(token), new Date(Date.now() + ttlSeconds * 1000), requestMeta(request).ipAddress]);
+    });
+    return token;
   }
 
   private async authResponse(user: any, refreshToken: string, sessionId: string, expiresAt: Date, request?: Request) {

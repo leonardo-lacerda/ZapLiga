@@ -93,7 +93,7 @@ export class UsersService {
     const temporaryPassword = randomBytes(9).toString('base64url');
     const passwordHash = await this.hashPassword(temporaryPassword);
     const result = await this.db.transaction(async (client) => {
-      const updated = await client.query('UPDATE users SET password_hash = $1, updated_at = now() WHERE id = $2 RETURNING *', [passwordHash, id]);
+      const updated = await client.query('UPDATE users SET password_hash = $1, password_changed_at = now(), force_password_change = true, updated_at = now() WHERE id = $2 RETURNING *', [passwordHash, id]);
       if (updated.rows[0]) await client.query('UPDATE user_sessions SET revoked_at = COALESCE(revoked_at, now()) WHERE user_id = $1 AND revoked_at IS NULL', [id]);
       return updated;
     });

@@ -1,4 +1,4 @@
-import { Controller, Get, ServiceUnavailableException } from '@nestjs/common';
+import { Controller, Get, Header, Headers, ServiceUnavailableException, UnauthorizedException } from '@nestjs/common';
 import { DatabaseService } from '../../database/database.service';
 import { RedisService } from '../../infrastructure/redis/redis.service';
 
@@ -30,5 +30,21 @@ export class HealthController {
     };
     if (!checks.database || !checks.redis) throw new ServiceUnavailableException({ ok: false, service: 'zapliga-api', checks });
     return { ok: true, service: 'zapliga-api', checks };
+  }
+
+  @Get('/internal/metrics')
+  @Header('Content-Type', 'text/plain; version=0.0.4; charset=utf-8')
+  async metrics(@Headers('authorization') authorization?: string) {
+    const token = process.env.METRICS_TOKEN;
+    if (!token || authorization !== `Bearer ${token}`) throw new UnauthorizedException('Token de metricas invalido');
+    const [snapshot, overdue] = await Promise.all([
+      this.redis.metricsSnapshot(),
+      this.db.query(`SELECT count(*)::int AS total FROM lead_callbacks WHERE status IN ('pending','due') AND due_at < now()`),
+    ]);
+    const lines: string[] = ['# ZapLiga operational metrics'];
+    for (const [name, value] of Object.entries(snapshot.counters)) lines.push(`# TYPE zapliga_${name} counter`, `zapliga_${name} ${value}`);
+    for (const [name, value] of Object.entries(snapshot.timings)) lines.push(`# TYPE zapliga_${name}_milliseconds summary`, `zapliga_${name}_milliseconds_count ${value.count}`, `zapliga_${name}_milliseconds_sum ${value.sumMs}`);
+    lines.push('# TYPE zapliga_callbacks_overdue gauge', `zapliga_callbacks_overdue ${Number(overdue.rows[0]?.total ?? 0)}`);
+    return `${lines.join('\n')}\n`;
   }
 }

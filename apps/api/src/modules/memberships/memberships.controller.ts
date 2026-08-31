@@ -20,7 +20,6 @@ export class MembershipsController {
   @UseGuards(AuthGuard, TenantMembershipGuard, RolesGuard)
   @Roles('leader', 'super_admin')
   async create(@Param('tenantId') tenantId: string, @Body() body: CreateMembershipDto, @CurrentUser() actor: any) {
-    if (actor.platformRole !== 'super_admin' && body.role === 'leader') throw new ForbiddenException('Líderes só podem ser adicionados pelo Admin supremo');
     const user = await this.users.findByEmail(body.email);
     if (!user) throw new NotFoundException('Nenhuma conta encontrada com este e-mail. Use um convite para criar uma conta nova.');
     const membership = await this.memberships.create(tenantId, user.id, body.role);
@@ -34,7 +33,7 @@ export class MembershipsController {
   async status(@Param('tenantId') tenantId: string, @Param('userId') userId: string, @Body() body: UpdateMembershipStatusDto, @CurrentUser() actor: any) {
     const target = await this.memberships.findByTenantAndUser(tenantId, userId);
     const actorMembership = actor.tenantMembership;
-    if (actor.platformRole !== 'super_admin' && target.role === 'leader') throw new ForbiddenException('Líderes só podem ser administrados pelo Admin supremo');
+    if (actor.id === userId && body.status !== 'active') await this.requireSelfConfirmation(actor.id, body.confirmationEmail);
     const membership = await this.memberships.setStatus(tenantId, userId, body.status);
     const action = target.role === 'sdr' ? body.status === 'active' ? 'sdr.activated' : body.status === 'blocked' ? 'sdr.blocked' : 'sdr.removed' : `membership.${body.status}`;
     await this.audit.record({ actorUserId: actor.id, tenantId, action, entityType: 'membership', entityId: target.id, metadata: { userId, role: target.role, actorRole: actorMembership?.role ?? actor.platformRole } });
@@ -46,7 +45,7 @@ export class MembershipsController {
   @Roles('leader', 'super_admin')
   async remove(@Param('tenantId') tenantId: string, @Param('userId') userId: string, @CurrentUser() actor: any) {
     const target = await this.memberships.findByTenantAndUser(tenantId, userId);
-    if (actor.platformRole !== 'super_admin' && target.role === 'leader') throw new ForbiddenException('Líderes só podem ser administrados pelo Admin supremo');
+    if (actor.id === userId) throw new ForbiddenException('Para remover o próprio acesso, use a alteração de status com confirmação do e-mail');
     const membership = await this.memberships.remove(tenantId, userId);
     await this.audit.record({ actorUserId: actor.id, tenantId, action: 'membership.removed', entityType: 'membership', entityId: target.id, metadata: { userId, role: target.role } });
     return membership;
@@ -54,11 +53,17 @@ export class MembershipsController {
 
   @Patch('/api/tenants/:tenantId/members/:userId/role')
   @UseGuards(AuthGuard, TenantMembershipGuard, RolesGuard)
-  @Roles('super_admin')
+  @Roles('leader', 'super_admin')
   async role(@Param('tenantId') tenantId: string, @Param('userId') userId: string, @Body() body: UpdateMembershipRoleDto, @CurrentUser() actor: any) {
     const target = await this.memberships.findByTenantAndUser(tenantId, userId);
+    if (actor.id === userId && target.role === 'leader' && body.role !== 'leader') await this.requireSelfConfirmation(actor.id, body.confirmationEmail);
     const membership = await this.memberships.setRole(tenantId, userId, body.role);
     await this.audit.record({ actorUserId: actor.id, tenantId, action: 'membership.role_changed', entityType: 'membership', entityId: target.id, metadata: { userId, from: target.role, to: body.role } });
     return membership;
+  }
+
+  private async requireSelfConfirmation(userId: string, confirmationEmail?: string) {
+    const user = await this.users.requireById(userId);
+    if (!confirmationEmail || confirmationEmail.trim().toLowerCase() !== String(user.email).toLowerCase()) throw new ForbiddenException('Confirme seu e-mail completo para remover ou rebaixar o próprio acesso');
   }
 }

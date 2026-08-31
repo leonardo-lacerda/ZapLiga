@@ -73,6 +73,13 @@ export class SdrGateway implements OnModuleDestroy {
     let message: any;
     try { message = JSON.parse(raw); } catch { try { socket.send(JSON.stringify({ type: 'error', message: 'JSON inválido' })); } catch {} return; }
     try {
+      // Memberships can be revoked while a WebSocket remains open. Re-check
+      // before every control action so revocation takes effect immediately,
+      // not only after the browser reconnects.
+      if (identity.platformRole !== 'super_admin') {
+        const membership = await this.db.query(`SELECT 1 FROM tenant_memberships WHERE tenant_id = $1 AND user_id = $2 AND status = 'active' LIMIT 1`, [identity.tenantId, identity.userId]);
+        if (!membership.rows[0]) throw new Error('Acesso da empresa revogado');
+      }
       if (message.type === 'identify') {
         if (identity.platformRole !== 'super_admin') {
           const membership = await this.db.query(`SELECT role FROM tenant_memberships WHERE tenant_id = $1 AND user_id = $2 AND status = 'active' LIMIT 1`, [identity.tenantId, identity.userId]);
@@ -115,7 +122,7 @@ export class SdrGateway implements OnModuleDestroy {
         await this.dialer.recordOutcome(String(message.callId), String(message.outcome ?? 'completed'), this.tenantBySdr.get(sdrId) ?? legacyTenantId(), sdrId);
       }
     } catch (error) {
-      this.logger.warn(`SDR socket message failed: ${String(error)}`);
+      this.logger.warn('Falha ao processar mensagem do canal SDR');
       Sentry.captureException(error);
       try { socket.send(JSON.stringify({ type: 'error', message: 'Não foi possível processar a mensagem' })); } catch { /* socket closed */ }
     }
@@ -135,7 +142,9 @@ export class SdrGateway implements OnModuleDestroy {
   }
 
   private async handleMedia(socket: WebSocket, sdrId: string, callId: string, identity: { tenantId: string; userId: string }) {
-    const owner = await this.db.query('SELECT 1 FROM sdrs WHERE tenant_id = $1 AND id = $2 AND user_id = $3 LIMIT 1', [identity.tenantId, sdrId, identity.userId]);
+    const owner = await this.db.query(`SELECT 1 FROM sdrs s
+      JOIN tenant_memberships tm ON tm.tenant_id = s.tenant_id AND tm.user_id = s.user_id AND tm.role = 'sdr' AND tm.status = 'active'
+      WHERE s.tenant_id = $1 AND s.id = $2 AND s.user_id = $3 LIMIT 1`, [identity.tenantId, sdrId, identity.userId]);
     if (!owner.rows[0]) return socket.close(1008, 'sdr not owned by ticket');
     socket.on('error', () => socket.close());
     void this.dialer.attachMedia(callId, sdrId, socket, identity.tenantId);

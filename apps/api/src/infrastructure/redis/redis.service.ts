@@ -61,4 +61,37 @@ export class RedisService implements OnModuleInit, OnModuleDestroy {
     const keys = [`${tenantPrefix}:active:global`, `${globalPrefix}:active:number:${resources.numberId}`, `${tenantPrefix}:lock:lead:${resources.leadId}`, `${tenantPrefix}:lock:sdr:${resources.sdrId}`, `${globalPrefix}:lock:number:${resources.numberId}`];
     await this.client.eval(releaseScript, keys.length, ...keys, resources.token);
   }
+
+  private metricKey(name: string) {
+    const safe = name.toLowerCase().replace(/[^a-z0-9_:]/g, '_');
+    return `zapcall:metrics:${safe}`;
+  }
+
+  async incrementMetric(name: string, amount = 1) {
+    await this.client.incrby(this.metricKey(`counter:${name}`), amount).catch(() => undefined);
+  }
+
+  async observeMetric(name: string, durationMs: number) {
+    const key = this.metricKey(`timing:${name}`);
+    await this.client.multi().hincrby(key, 'count', 1).hincrbyfloat(key, 'sum_ms', Math.max(0, durationMs)).exec().catch(() => undefined);
+  }
+
+  async metricsSnapshot() {
+    const counters: Record<string, number> = {};
+    const timings: Record<string, { count: number; sumMs: number }> = {};
+    let cursor = '0';
+    do {
+      const [next, keys] = await this.client.scan(cursor, 'MATCH', 'zapcall:metrics:*', 'COUNT', 100);
+      cursor = next;
+      for (const key of keys) {
+        const name = key.replace('zapcall:metrics:', '');
+        if (name.startsWith('counter:')) counters[name.slice(8)] = Number(await this.client.get(key) ?? 0);
+        if (name.startsWith('timing:')) {
+          const values = await this.client.hmget(key, 'count', 'sum_ms');
+          timings[name.slice(7)] = { count: Number(values[0] ?? 0), sumMs: Number(values[1] ?? 0) };
+        }
+      }
+    } while (cursor !== '0');
+    return { counters, timings };
+  }
 }

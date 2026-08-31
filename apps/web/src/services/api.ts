@@ -1,6 +1,7 @@
 const API = import.meta.env.VITE_API_URL ?? 'http://localhost:3000';
 let accessToken = '';
 let activeTenantId = '';
+let tenantRequestController = new AbortController();
 let refreshInFlight: Promise<boolean> | null = null;
 let accessTokenRevision = 0;
 const refreshChannel = typeof BroadcastChannel !== 'undefined' ? new BroadcastChannel('zapliga-auth') : null;
@@ -29,8 +30,8 @@ export const shouldRefreshAccessToken = (leewaySeconds = 120) => {
   const expiresAt = accessTokenExpiresAt(accessToken);
   return !expiresAt || expiresAt <= Date.now() + leewaySeconds * 1000;
 };
-export const setActiveTenantId = (tenantId: string) => { activeTenantId = tenantId; };
-export const clearActiveTenantId = () => { activeTenantId = ''; };
+export const setActiveTenantId = (tenantId: string) => { if (tenantId !== activeTenantId) { tenantRequestController.abort(); tenantRequestController = new AbortController(); } activeTenantId = tenantId; };
+export const clearActiveTenantId = () => { tenantRequestController.abort(); tenantRequestController = new AbortController(); activeTenantId = ''; };
 
 refreshChannel?.addEventListener('message', (event) => {
   if (event.data?.type === 'access-token-updated' && typeof event.data.token === 'string') {
@@ -40,7 +41,7 @@ refreshChannel?.addEventListener('message', (event) => {
 
 const tenantRoute = (path: string) => {
   if (!activeTenantId || path.startsWith('/api/tenants/')) return path;
-  const resources = ['/api/leads', '/api/lead-folders', '/api/numbers', '/api/sdrs', '/api/calls', '/api/dialer', '/api/me/sdr'];
+  const resources = ['/api/leads', '/api/lead-folders', '/api/numbers', '/api/sdrs', '/api/calls', '/api/dialer', '/api/callbacks', '/api/privacy', '/api/onboarding', '/api/me/sdr'];
   const resource = resources.find((candidate) => path === candidate || path.startsWith(`${candidate}/`));
   if (!resource) return path;
   const suffix = path.slice(resource.length);
@@ -54,7 +55,8 @@ const fetchJson = async (path: string, init?: RequestInit) => {
   if (!headers.has('content-type') && !(init?.body instanceof FormData)) headers.set('content-type', 'application/json');
   if (accessToken) headers.set('authorization', `Bearer ${accessToken}`);
   if (activeTenantId && !headers.has('x-tenant-id')) headers.set('x-tenant-id', activeTenantId);
-  return fetch(`${API}${resolvedPath}`, { ...init, headers, credentials: 'include' });
+  const isTenantRequest = Boolean(activeTenantId) && resolvedPath.startsWith('/api/tenants/');
+  return fetch(`${API}${resolvedPath}`, { ...init, headers, credentials: 'include', signal: init?.signal ?? (isTenantRequest ? tenantRequestController.signal : undefined) });
 };
 
 export const apiFetch = fetchJson;
@@ -98,6 +100,7 @@ export const json = async (path: string, init?: RequestInit, retry = true): Prom
     if (await refreshAccessToken()) return json(path, init, false);
   }
   const body = await response.json().catch(() => ({}));
+  if (response.status === 401 && typeof window !== 'undefined') window.dispatchEvent(new CustomEvent('zapliga:access-changed'));
   if (!response.ok) throw new Error(body.message ?? 'Erro na API');
   return body;
 };

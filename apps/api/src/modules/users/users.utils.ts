@@ -8,4 +8,7 @@ export const publicUser = (user: any) => ({
   status: user.status,
   createdAt: user.created_at,
   lastLoginAt: user.last_login_at,
+  emailVerifiedAt: user.email_verified_at ?? null,
+  passwordChangedAt: user.password_changed_at ?? null,
+  forcePasswordChange: Boolean(user.force_password_change),
 });

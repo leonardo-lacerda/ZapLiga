@@ -72,3 +72,25 @@ describe('MembershipsService.create', () => {
     await expect(service.create('tenant-1', 'user-1', 'sdr')).rejects.toBeInstanceOf(ConflictException);
   });
 });
+
+describe('MembershipsService access removal', () => {
+  it('keeps the global session when another tenant is still active', async () => {
+    const client = { query: jest.fn(async (sql: string) => sql.startsWith('UPDATE tenant_memberships') ? { rows: [{ status: 'blocked' }] } : { rows: [{ count: 1 }] }) };
+    const db = { query: jest.fn().mockResolvedValue({ rows: [{ role: 'sdr', status: 'active' }] }), transaction: jest.fn(async (callback: any) => callback(client)) };
+    const service = new MembershipsService(db as any);
+    await service.setStatus('tenant-a', 'user-1', 'blocked');
+    expect(client.query.mock.calls.some(([sql]: [string]) => sql.includes('UPDATE user_sessions'))).toBe(false);
+  });
+
+  it('revokes sessions immediately when the user has no tenant left', async () => {
+    const client = { query: jest.fn(async (sql: string) => {
+      if (sql.startsWith('UPDATE tenant_memberships')) return { rows: [{ status: 'removed' }] };
+      if (sql.includes('SELECT count(*)')) return { rows: [{ count: 0 }] };
+      return { rows: [] };
+    }) };
+    const db = { query: jest.fn().mockResolvedValue({ rows: [{ role: 'sdr', status: 'active' }] }), transaction: jest.fn(async (callback: any) => callback(client)) };
+    const service = new MembershipsService(db as any);
+    await service.setStatus('tenant-a', 'user-1', 'removed');
+    expect(client.query.mock.calls.some(([sql]: [string]) => sql.includes('UPDATE user_sessions'))).toBe(true);
+  });
+});

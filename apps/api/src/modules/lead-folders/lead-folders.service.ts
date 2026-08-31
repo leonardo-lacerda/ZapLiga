@@ -121,6 +121,7 @@ export class LeadFoldersService {
     `, baseParams);
     const items = await this.db.query(`
       SELECT l.*, f.name AS folder_name, f.is_active AS folder_is_active,
+        suppression.reason AS suppression_reason,
         latest.status AS last_call_status, latest.outcome AS last_outcome,
         COALESCE(latest.failure_reason, latest.outcome) AS last_failure_reason,
         latest.created_at AS last_call_at, latest.number_label AS last_number_label
@@ -132,6 +133,12 @@ export class LeadFoldersService {
         WHERE c.tenant_id = l.tenant_id AND c.lead_id = l.id
         ORDER BY c.created_at DESC LIMIT 1
       ) latest ON true
+      LEFT JOIN LATERAL (
+        SELECT cs.reason
+        FROM contact_suppressions cs
+        WHERE cs.tenant_id = l.tenant_id AND cs.phone = l.phone AND cs.lifted_at IS NULL
+        ORDER BY cs.created_at DESC LIMIT 1
+      ) suppression ON true
       WHERE l.tenant_id = $1 AND l.folder_id = $2 ${statusClause}
       ORDER BY l.created_at DESC LIMIT ${limitParam} OFFSET ${offsetParam}
     `, [...baseParams, safeLimit, safeOffset]);
@@ -141,7 +148,7 @@ export class LeadFoldersService {
   async createLead(folderId: string, input: { name: string; phone: string }, tenantId: string, userId: string) {
     const name = String(input.name ?? '').trim();
     const phone = digits(input.phone);
-    if (!name || !phone) throw new BadRequestException('name e phone são obrigatórios');
+    if (!name || phone.length < 10 || phone.length > 15) throw new BadRequestException('Informe nome e um telefone válido com DDD');
     await this.get(folderId, tenantId);
     const lead = await this.db.transaction(async (client) => {
       await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [`lead-quota:${tenantId}`]);
@@ -152,12 +159,13 @@ export class LeadFoldersService {
         const count = await client.query('SELECT count(*)::int AS count FROM leads WHERE tenant_id = $1', [tenantId]);
         if (Number(count.rows[0]?.count ?? 0) >= Number(tenant.rows[0]?.max_leads ?? 100000)) throw new ConflictException('O limite de leads desta empresa foi atingido');
       }
-      return (await client.query(`
+      const saved = (await client.query(`
         INSERT INTO leads (id, tenant_id, folder_id, name, phone)
         VALUES ($1, $2, $3, $4, $5)
         ON CONFLICT (tenant_id, phone) DO UPDATE SET name = EXCLUDED.name, folder_id = EXCLUDED.folder_id
         RETURNING *
       `, [randomUUID(), tenantId, folderId, name, phone])).rows[0];
+      return (await client.query(`UPDATE leads SET do_not_call = EXISTS (SELECT 1 FROM contact_suppressions s WHERE s.tenant_id = $1 AND s.phone = leads.phone AND s.lifted_at IS NULL) WHERE tenant_id = $1 AND id = $2 RETURNING *`, [tenantId, saved.id])).rows[0];
     });
     await this.audit.record({ actorUserId: userId, tenantId, action: 'lead.created_or_updated', entityType: 'lead', entityId: lead.id, metadata: { folderId } });
     return lead;
@@ -232,6 +240,7 @@ export class LeadFoldersService {
         `, values);
         imported += result.rowCount ?? 0;
       }
+      if (validLeads.length) await client.query(`UPDATE leads SET do_not_call = EXISTS (SELECT 1 FROM contact_suppressions s WHERE s.tenant_id = $1 AND s.phone = leads.phone AND s.lifted_at IS NULL) WHERE tenant_id = $1 AND phone = ANY($2::text[])`, [tenantId, validLeads.map((lead) => lead.phone)]);
       return { imported, updated, duplicated, skipped, total: records.length };
     });
     await this.audit.record({ actorUserId: userId, tenantId, action: 'lead_folder.imported', entityType: 'lead_import', entityId: folderId, metadata: result });
@@ -242,6 +251,8 @@ export class LeadFoldersService {
     await this.get(folderId, tenantId);
     const active = await this.db.query(`SELECT count(*)::int AS count FROM calls WHERE tenant_id = $1 AND folder_id = $2 AND status IN ${activeCallStatuses}`, [tenantId, folderId]);
     if (Number(active.rows[0]?.count ?? 0) > 0) throw new BadRequestException('Pause o discador e aguarde as chamadas em andamento terminarem');
+    const callbacks = await this.db.query(`SELECT count(*)::int AS count FROM lead_callbacks cb JOIN leads l ON l.tenant_id = cb.tenant_id AND l.id = cb.lead_id WHERE cb.tenant_id = $1 AND l.folder_id = $2 AND cb.status IN ('pending','due','reassigned')`, [tenantId, folderId]);
+    if (Number(callbacks.rows[0]?.count ?? 0) > 0) throw new BadRequestException('Resolva ou cancele os retornos agendados desta pasta antes de limpá-la');
     const result = await this.db.transaction(async (client) => {
       const calls = await client.query('DELETE FROM calls WHERE tenant_id = $1 AND folder_id = $2', [tenantId, folderId]);
       const leads = await client.query('DELETE FROM leads WHERE tenant_id = $1 AND folder_id = $2', [tenantId, folderId]);

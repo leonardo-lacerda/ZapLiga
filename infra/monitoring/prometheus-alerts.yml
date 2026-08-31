@@ -1,0 +1,38 @@
+groups:
+  - name: zapliga-launch
+    rules:
+      - alert: ZapLigaEmailDeliveryFailures
+        expr: increase(zapliga_emails_failed_total[10m]) > 0
+        for: 5m
+        labels: { severity: warning }
+        annotations: { summary: "Falhas na entrega de e-mail transacional" }
+      - alert: ZapLigaEmailDeliverySlow
+        expr: rate(zapliga_email_delivery_milliseconds_sum[10m]) / clamp_min(rate(zapliga_email_delivery_milliseconds_count[10m]), 0.001) > 5000
+        for: 10m
+        labels: { severity: warning }
+        annotations: { summary: "Latência média de e-mail acima de 5 segundos" }
+      - alert: ZapLigaOverdueCallbacks
+        expr: zapliga_callbacks_overdue > 20
+        for: 10m
+        labels: { severity: warning }
+        annotations: { summary: "Mais de 20 callbacks vencidos" }
+      - alert: ZapLigaRevokedSessionReuse
+        expr: increase(zapliga_revoked_session_access_total[10m]) > 5
+        for: 2m
+        labels: { severity: critical }
+        annotations: { summary: "Tentativas repetidas de usar sessão revogada" }
+      - alert: ZapLigaActionTokenFailures
+        expr: increase(zapliga_action_token_failures_total[10m]) > 20
+        for: 5m
+        labels: { severity: warning }
+        annotations: { summary: "Pico de links de ação inválidos ou expirados" }
+      - alert: ZapLigaPrivacyJobFailure
+        expr: increase(zapliga_privacy_jobs_failed_total[15m]) > 0
+        for: 1m
+        labels: { severity: critical }
+        annotations: { summary: "Falha em job de solicitação LGPD" }
+      - alert: ZapLigaCriticalJourneyFailures
+        expr: sum(increase({__name__=~"zapliga_journey_.*_failures_total"}[10m])) > 10
+        for: 5m
+        labels: { severity: critical }
+        annotations: { summary: "Falhas elevadas em jornadas críticas" }

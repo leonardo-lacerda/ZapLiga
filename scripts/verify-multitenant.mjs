@@ -34,7 +34,24 @@ const cleanup = async () => {
   const pool = new pg.Pool({ connectionString: process.env.DATABASE_URL ?? 'postgres://zapcall:zapcall@localhost:5432/zapcall' });
   try {
     for (const tenantId of new Set(temporaryTenantIds)) {
-      for (const table of ['calls', 'sdr_pauses', 'audit_logs', 'invitations', 'tenant_memberships', 'websocket_tickets', 'dialer_settings', 'sdrs', 'whatsapp_numbers', 'leads']) {
+      // Retire primeiro para impedir que o tick recrie settings durante o cleanup.
+      await pool.query("UPDATE tenants SET status = 'archived' WHERE id = $1", [tenantId]);
+      // Remove dependências explicitamente porque algumas tabelas legadas
+      // (como lead_folders) mantêm RESTRICT no FK de tenant. As tabelas novas
+      // também ficam limpas antes de excluir o tenant, mantendo o smoke
+      // repetível sem deixar lixo entre execuções.
+      for (const table of [
+        'data_subject_exports', 'data_subject_request_events', 'data_subject_requests',
+        'tenant_onboarding_steps', 'tenant_feature_flags',
+        'dialer_schedule_exceptions', 'dialer_schedule_windows',
+        'contact_compliance_events', 'contact_suppressions',
+        'metric_exports', 'metric_saved_views', 'metric_goals', 'metrics_daily_rollup',
+        'lead_stage_history', 'number_status_history', 'sdr_availability_history',
+        'tenant_notes', 'call_result_catalog', 'pipeline_stage_catalog',
+        'lead_callbacks', 'calls', 'sdr_pauses', 'leads', 'audit_logs', 'invitations',
+        'tenant_memberships', 'websocket_tickets', 'dialer_settings',
+        'lead_folders', 'sdrs', 'whatsapp_numbers',
+      ]) {
         await pool.query(`DELETE FROM ${table} WHERE tenant_id = $1`, [tenantId]);
       }
       await pool.query('DELETE FROM tenants WHERE id = $1', [tenantId]);
@@ -58,11 +75,14 @@ try {
   assert(me.response.ok && me.body?.user?.platformRole === 'super_admin', 'me não identificou o Admin supremo');
 
   const registrationEmail = `organizer-${Date.now()}@zapliga-smoke.local`;
-  const registration = await request('/api/auth/register', { method: 'POST', body: JSON.stringify({ name: 'Organizador Smoke', email: registrationEmail, password: 'OrganizerSmoke2026', companyName: 'Empresa Smoke Organizer', companySlug: `empresa-smoke-${Date.now()}` }) });
+  const registration = await request('/api/auth/register', { method: 'POST', body: JSON.stringify({ name: 'Organizador Smoke', email: registrationEmail, password: 'OrganizerSmoke2026', companyName: 'Empresa Smoke Organizer', companySlug: `empresa-smoke-${Date.now()}`, legalAccepted: true }) });
   assert(registration.response.status === 201 && registration.body?.accessToken && registration.body?.user?.platformRole === 'user' && registration.body?.tenant?.role === 'leader', `cadastro de organizador falhou: ${registration.response.status}`);
   temporaryTenantIds.push(registration.body.tenant.id);
   temporaryUserIds.push(registration.body.user.id);
   const organizerAuth = { authorization: `Bearer ${registration.body.accessToken}` };
+  assert(registration.body.verificationToken, 'ambiente smoke não expôs token de verificação controlado');
+  const verification = await request('/api/auth/email/verify', { method: 'POST', body: JSON.stringify({ token: registration.body.verificationToken }) });
+  assert(verification.response.ok, `verificação de e-mail falhou: ${verification.response.status}`);
   const organizerMe = await request('/api/auth/me', { headers: organizerAuth });
   assert(organizerMe.response.ok && organizerMe.body?.tenants?.some((tenant) => tenant.id === registration.body.tenant.id && tenant.role === 'leader'), 'organizador não recebeu membership leader');
   const sdrInvite = await request(`/api/tenants/${registration.body.tenant.id}/sdrs/invitations`, { method: 'POST', headers: organizerAuth, body: JSON.stringify({ name: 'SDR Smoke', email: `sdr-${Date.now()}@zapliga-smoke.local` }) });
@@ -74,7 +94,7 @@ try {
   assert(acceptedSdr.response.status === 201 && acceptedSdr.body?.tenant?.role === 'sdr', `aceite do convite de SDR falhou: ${acceptedSdr.response.status}`);
   temporaryUserIds.push(acceptedSdr.body.user.id);
   const sdrList = await request(`/api/tenants/${registration.body.tenant.id}/sdrs`, { headers: organizerAuth });
-  assert(sdrList.response.ok && sdrList.body?.some((sdr) => sdr.user_id === acceptedSdr.body.user.id && sdr.user_email), 'perfil operacional do SDR não foi vinculado ao usuário');
+  assert(sdrList.response.ok && sdrList.body?.items?.some((sdr) => sdr.user_id === acceptedSdr.body.user.id && sdr.user_email), 'perfil operacional do SDR não foi vinculado ao usuário');
   const blockedSdr = await request(`/api/tenants/${registration.body.tenant.id}/members/${acceptedSdr.body.user.id}/status`, { method: 'PATCH', headers: organizerAuth, body: JSON.stringify({ status: 'blocked' }) });
   assert(blockedSdr.response.ok, `organizador não conseguiu bloquear SDR: ${blockedSdr.response.status}`);
   const activatedSdr = await request(`/api/tenants/${registration.body.tenant.id}/members/${acceptedSdr.body.user.id}/status`, { method: 'PATCH', headers: organizerAuth, body: JSON.stringify({ status: 'active' }) });
@@ -83,7 +103,7 @@ try {
   assert(pendingSdr.response.status === 201 && pendingSdr.body?.invitationUrl, `não foi possível criar convite para teste de novo link: ${pendingSdr.response.status}`);
   const previousInvitationToken = String(pendingSdr.body.invitationUrl).split('/').pop();
   const resentSdr = await request(`/api/tenants/${registration.body.tenant.id}/sdrs/invitations/${pendingSdr.body.id}/resend`, { method: 'POST', headers: organizerAuth });
-  assert(resentSdr.response.status === 201 && resentSdr.body?.role === 'sdr' && resentSdr.body?.invitationUrl && resentSdr.body.id !== pendingSdr.body.id, `geração de novo link SDR falhou: ${resentSdr.response.status}`);
+  assert(resentSdr.response.status === 201 && resentSdr.body?.role === 'sdr' && resentSdr.body?.invitationUrl && resentSdr.body.id === pendingSdr.body.id, `reenvio sem convite concorrente falhou: ${resentSdr.response.status}`);
   const previousInvitation = await request(`/api/invitations/${encodeURIComponent(previousInvitationToken)}`);
   assert(previousInvitation.response.status === 404, 'o link anterior continuou válido após gerar um novo');
   const revokedSdr = await request(`/api/tenants/${registration.body.tenant.id}/invitations/${resentSdr.body.id}`, { method: 'DELETE', headers: organizerAuth });
@@ -103,6 +123,11 @@ try {
   const createdTenant = await request('/api/tenants', { method: 'POST', headers: auth, body: JSON.stringify({ name: 'Smoke Tenant', slug }) });
   assert(createdTenant.response.status === 201 && createdTenant.body?.id, `criação de tenant falhou: ${createdTenant.response.status}`);
   temporaryTenantId = createdTenant.body.id;
+
+  for (const route of ['leads', 'callbacks', 'privacy/requests', 'dialer/schedule', 'feature-flags', 'onboarding', 'contact-suppressions']) {
+    const isolated = await request(`/api/tenants/${temporaryTenantId}/${route}`, { headers: { ...organizerAuth, 'x-tenant-id': temporaryTenantId } });
+    assert(isolated.response.status === 401, `${route} atravessou tenant sem membership: ${isolated.response.status}`);
+  }
 
   const limits = await request(`/api/tenants/${temporaryTenantId}/limits`, { method: 'PATCH', headers: auth, body: JSON.stringify({ maxLeads: 10, maxNumbers: 2, maxSdrs: 2 }) });
   assert(limits.response.ok, `limites do tenant falharam: ${limits.response.status}`);
@@ -125,11 +150,11 @@ try {
   const rotatedCookie = cookieFrom(refreshed.response);
   assert(rotatedCookie, 'refresh não rotacionou cookie');
   const reused = await request('/api/auth/refresh', { method: 'POST', headers: { cookie: refreshCookie } });
-  assert(reused.response.status === 401, `refresh antigo deveria ser rejeitado: ${reused.response.status}`);
+  assert(reused.response.status === 201 && reused.body?.accessToken, `refresh concorrente dentro da janela de graça falhou: ${reused.response.status}`);
   const logout = await request('/api/auth/logout', { method: 'POST', headers: { cookie: rotatedCookie } });
   assert(logout.response.ok, `logout falhou: ${logout.response.status}`);
 
-  console.log('Smoke multi-tenant OK: autenticação, tenant explícito, alias compatível, mismatch, quotas, IDOR, DTO, ticket e refresh rotativo.');
+  console.log('Smoke multi-tenant OK: autenticação, novas rotas, tenant explícito, mismatch, quotas, IDOR, DTO, ticket e refresh rotativo.');
 } finally {
   await cleanup();
 }

@@ -1,4 +1,4 @@
-import { ConflictException, Inject, Injectable, Logger, NotFoundException, OnModuleDestroy, OnModuleInit, forwardRef } from '@nestjs/common';
+import { ConflictException, Inject, Injectable, Logger, NotFoundException, OnModuleDestroy, OnModuleInit, Optional, forwardRef } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
 import WebSocket, { RawData } from 'ws';
 import { DatabaseService } from '../../database/database.service';
@@ -9,6 +9,10 @@ import { normalizeWaxumStatus } from '../../infrastructure/waxum/waxum-status';
 import { SdrGateway } from '../sdrs/sdr.gateway';
 import { runtimeHeartbeatKey, runtimeInstanceId } from '../../infrastructure/runtime-instance';
 import { Sentry } from '../../infrastructure/sentry/sentry';
+import { ContactComplianceService } from '../contact-compliance/contact-compliance.service';
+import { DialerScheduleService } from '../dialer-schedule/dialer-schedule.service';
+import { FeatureFlagsService } from '../feature-flags/feature-flags.service';
+import { AuditService } from '../audit/audit.service';
 import {
   computeCallOutcome,
   computeRateLimitBackoffSeconds,
@@ -56,6 +60,13 @@ type CallResource = {
   previousSdrState: string;
 };
 
+const safeOperationalError = (error: unknown) => String(error instanceof Error ? error.message : error)
+  .replace(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi, '[email]')
+  .replace(/\b\d{10,15}\b/g, '[phone]')
+  .replace(/\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b/g, '[token]')
+  .replace(/([?&](?:token|ticket)=)[^&\s]+/gi, '$1[redacted]')
+  .slice(0, 300);
+
 @Injectable()
 export class DialerService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(DialerService.name);
@@ -63,6 +74,7 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
   private heartbeatTimer?: NodeJS.Timeout;
   private readonly ticking = new Set<string>();
   private readonly lastStatusSyncAt = new Map<string, number>();
+  private readonly lastCallbackNotificationAt = new Map<string, number>();
   private readonly active = new Map<string, CallResource>();
   private readonly finishingCalls = new Set<string>();
   private readonly logs: any[] = [];
@@ -78,6 +90,10 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
     private readonly redis: RedisService,
     private readonly waxum: WaxumClient,
     @Inject(forwardRef(() => SdrGateway)) private readonly gateway: SdrGateway,
+    @Optional() private readonly compliance?: ContactComplianceService,
+    @Optional() private readonly schedule?: DialerScheduleService,
+    @Optional() private readonly featureFlags?: FeatureFlagsService,
+    @Optional() private readonly audit?: AuditService,
   ) {}
 
   onModuleInit() {
@@ -183,17 +199,19 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
       // A disponibilidade do SDR habilita a operação automática da empresa.
       // O tick ainda valida SDRs, números e pastas ativas antes de discar.
       const settings = await this.getSettings(tenantId);
-      if (!settings.running) {
+      const withinSchedule = !this.schedule || (await this.schedule.evaluate(tenantId)).allowed;
+      if (!settings.running && withinSchedule) {
         await this.db.query('UPDATE dialer_settings SET running = true WHERE tenant_id = $1', [tenantId]);
         this.log('Discador iniciado automaticamente por disponibilidade do SDR', 'info', undefined, tenantId);
       }
-      await this.tick(tenantId);
+      if (withinSchedule) await this.tick(tenantId);
     }
     this.gateway.broadcast({ type: 'sdr_state_changed', sdrId, state, available }, tenantId);
     return this.getSdrState(sdrId, tenantId);
   }
 
-  async finishPause(sdrId: string, pauseId: string, input: { callResult?: string; pipelineStage?: string; notes?: string; continueAvailable?: boolean; callbackAt?: string }, tenantId = legacyTenantId()) {
+  async finishPause(sdrId: string, pauseId: string, input: { callResult?: string; pipelineStage?: string; notes?: string; continueAvailable?: boolean; callbackAt?: string; actorUserId?: string }, tenantId = legacyTenantId()) {
+    if (input.callResult === 'retornar') await this.featureFlags?.assertEnabled(tenantId, 'callbacks');
     const callResult = String(input.callResult ?? '').trim();
     const pipelineStage = String(input.pipelineStage ?? '').trim();
     const notes = String(input.notes ?? '').trim();
@@ -204,10 +222,11 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
       retornar: 'contatado',
       reuniao_agendada: 'reuniao',
       numero_invalido: 'perdido',
+      nao_ligar_novamente: 'perdido',
     };
     if (!callResult || !pipelineStage) throw new Error('Resultado e etapa da tubulação são obrigatórios');
     if (continueAvailable && !this.gateway.isConnected(sdrId)) throw new Error('Conecte o canal do SDR antes de continuar disponível');
-    if (!['sem_interesse', 'numero_invalido'].includes(callResult) && !notes) throw new Error('Inclua uma anotação com o contexto e o próximo passo');
+    if (!['sem_interesse', 'numero_invalido', 'nao_ligar_novamente'].includes(callResult) && !notes) throw new Error('Inclua uma anotação com o contexto e o próximo passo');
     if (stageByResult[callResult] && stageByResult[callResult] !== pipelineStage) throw new Error('A etapa selecionada não corresponde ao resultado da ligação');
     let callbackAt: Date | null = null;
     if (callResult === 'retornar') {
@@ -220,10 +239,12 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
       if (!pause) throw new Error('Pausa não encontrada');
       if (pause.ended_at) throw new Error('Esta pausa já foi encerrada');
       const endedAt = new Date();
+      let createdCallbackId: string | undefined;
+      let completedCallbackIds: string[] = [];
       await client.query(`UPDATE sdr_pauses SET ended_at = $1, duration_seconds = GREATEST(0, EXTRACT(EPOCH FROM ($1 - started_at))::int) WHERE tenant_id = $2 AND id = $3`, [endedAt, tenantId, pauseId]);
       if (pause.call_id) {
         await client.query(`UPDATE calls SET call_result = $1, pipeline_stage = $2, notes = $3, wrap_up_completed_at = $4 WHERE tenant_id = $5 AND id = $6`, [callResult, pipelineStage, notes, endedAt, tenantId, pause.call_id]);
-        const previousStage = await client.query(`SELECT pipeline_stage FROM leads WHERE tenant_id = $1 AND id = $2`, [tenantId, pause.lead_id]);
+        const previousStage = await client.query(`SELECT pipeline_stage, phone FROM leads WHERE tenant_id = $1 AND id = $2`, [tenantId, pause.lead_id]);
         await client.query(`UPDATE leads SET pipeline_stage = $1,
           status = CASE WHEN $4::timestamptz IS NULL THEN status ELSE 'retry_wait' END,
           next_eligible_at = COALESCE($4::timestamptz, next_eligible_at)
@@ -232,11 +253,39 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
         if (fromStage !== pipelineStage) {
           await client.query(`INSERT INTO lead_stage_history (id, tenant_id, lead_id, from_stage, to_stage, source, call_id) VALUES ($1, $2, $3, $4, $5, 'wrap_up', $6)`, [randomUUID(), tenantId, pause.lead_id, fromStage, pipelineStage, pause.call_id]);
         }
+        // Uma nova conversa encerra de forma idempotente qualquer retorno
+        // anterior do lead. O retorno desta própria conversa é criado abaixo.
+        const completedCallbacks = await client.query(`UPDATE lead_callbacks SET status = 'completed', completed_call_id = $1, completed_at = now(), updated_by_user_id = $2, updated_at = now()
+          WHERE tenant_id = $3 AND lead_id = $4 AND origin_call_id IS DISTINCT FROM $1 AND status IN ('pending','due','reassigned') RETURNING id`, [pause.call_id, input.actorUserId ?? null, tenantId, pause.lead_id]);
+        completedCallbackIds = completedCallbacks.rows.map((row: any) => row.id);
+        if (callResult === 'retornar' && callbackAt) {
+          const callback = await client.query(`INSERT INTO lead_callbacks (tenant_id, lead_id, origin_call_id, requested_by_sdr_id, assigned_sdr_id, due_at, notes, created_by_user_id, updated_by_user_id)
+            VALUES ($1,$2,$3,$4,$4,$5,$6,$7,$7)
+            ON CONFLICT (tenant_id, lead_id) WHERE status IN ('pending','due','reassigned')
+            DO UPDATE SET origin_call_id = EXCLUDED.origin_call_id, requested_by_sdr_id = EXCLUDED.requested_by_sdr_id,
+              assigned_sdr_id = EXCLUDED.assigned_sdr_id, due_at = EXCLUDED.due_at, notes = EXCLUDED.notes,
+              status = 'pending', updated_by_user_id = EXCLUDED.updated_by_user_id, updated_at = now() RETURNING id`, [tenantId, pause.lead_id, pause.call_id, sdrId, callbackAt.toISOString(), notes, input.actorUserId ?? null]);
+          createdCallbackId = callback.rows[0]?.id;
+          await this.redis.incrementMetric?.('callbacks_created_total');
+        }
+        if (callResult === 'nao_ligar_novamente') {
+          if (!this.compliance) throw new Error('Serviço de compliance indisponível');
+          await this.compliance.suppressWithExecutor(client, {
+            tenantId,
+            phone: previousStage.rows[0]?.phone,
+            reason: 'requested_opt_out',
+            source: 'post_call',
+            notes,
+            actorUserId: input.actorUserId,
+          });
+        }
       }
       const nextState = continueAvailable ? 'available' : 'offline';
       await client.query(`UPDATE sdrs SET available = $4, state = $5, current_pause_id = NULL WHERE tenant_id = $1 AND id = $2 AND current_pause_id = $3`, [tenantId, sdrId, pauseId, continueAvailable, nextState]);
-      return { id: pauseId, ended_at: endedAt.toISOString(), duration_seconds: Math.max(0, Math.floor((endedAt.getTime() - new Date(pause.started_at).getTime()) / 1000)), call_result: callResult, pipeline_stage: pipelineStage, notes, callback_at: callbackAt?.toISOString() ?? null, available: continueAvailable, state: nextState };
-    }).then((result) => {
+      return { id: pauseId, ended_at: endedAt.toISOString(), duration_seconds: Math.max(0, Math.floor((endedAt.getTime() - new Date(pause.started_at).getTime()) / 1000)), call_result: callResult, pipeline_stage: pipelineStage, notes, callback_at: callbackAt?.toISOString() ?? null, callback_created_id: createdCallbackId, callbacks_completed: completedCallbackIds, available: continueAvailable, state: nextState };
+    }).then(async (result) => {
+      if (this.audit && result.callback_created_id) await this.audit.record({ actorUserId: input.actorUserId, tenantId, action: 'callback.created', entityType: 'callback', entityId: result.callback_created_id }).catch(() => undefined);
+      if (this.audit) for (const callbackId of result.callbacks_completed) await this.audit.record({ actorUserId: input.actorUserId, tenantId, action: 'callback.completed', entityType: 'callback', entityId: callbackId }).catch(() => undefined);
       this.gateway.sendToSdr(sdrId, { type: 'pause_finished', pauseId, state: result.state, available: result.available });
       this.gateway.broadcast({ type: 'sdr_state_changed', sdrId, state: result.state, available: result.available }, tenantId);
       return result;
@@ -273,6 +322,7 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
   }
 
   async start(tenantId = legacyTenantId()) {
+    if (this.schedule) await this.schedule.assertAllowed(tenantId);
     await this.db.query('UPDATE dialer_settings SET running = true WHERE tenant_id = $1', [tenantId]);
     this.log('Discador iniciado', 'info', undefined, tenantId);
     await this.tick(tenantId);
@@ -292,11 +342,13 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
   }
 
   async manualCall(leadId: string, tenantId = legacyTenantId()) {
+    if (this.schedule) await this.schedule.assertAllowed(tenantId);
     const settings = await this.getSettings(tenantId);
     const [sdrs, numbers, leads] = await Promise.all([
       this.db.query(`
         SELECT s.* FROM sdrs s
         WHERE s.tenant_id = $1 AND s.state NOT IN ('in_call', 'post_call')
+          AND EXISTS (SELECT 1 FROM tenant_memberships tm WHERE tm.tenant_id = s.tenant_id AND tm.user_id = s.user_id AND tm.role = 'sdr' AND tm.status = 'active')
           AND NOT EXISTS (
             SELECT 1 FROM calls c
             WHERE c.tenant_id = s.tenant_id AND c.sdr_id = s.id AND c.status IN ('reserved', 'dialing', 'media_active')
@@ -330,11 +382,12 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
   }
 
   async manualCallWithInput(input: { leadId?: string; phone?: string; name?: string }, tenantId = legacyTenantId(), sdrUserId?: string) {
+    if (this.schedule) await this.schedule.assertAllowed(tenantId);
     const settings = await this.getSettings(tenantId);
     let lead: any;
     const leadId = String(input.leadId ?? '').trim();
     if (leadId) {
-      const result = await this.db.query(`SELECT l.* FROM leads l JOIN lead_folders f ON f.tenant_id = l.tenant_id AND f.id = l.folder_id WHERE l.tenant_id = $1 AND l.id = $2 AND l.do_not_call = false`, [tenantId, leadId]);
+      const result = await this.db.query(`SELECT l.* FROM leads l JOIN lead_folders f ON f.tenant_id = l.tenant_id AND f.id = l.folder_id WHERE l.tenant_id = $1 AND l.id = $2 AND l.do_not_call = false AND NOT EXISTS (SELECT 1 FROM contact_suppressions cs WHERE cs.tenant_id = l.tenant_id AND cs.phone = l.phone AND cs.lifted_at IS NULL)`, [tenantId, leadId]);
       lead = result.rows[0];
       if (lead) {
         const activeCall = await this.db.query(`SELECT 1 FROM calls WHERE tenant_id = $1 AND lead_id = $2 AND status IN ('reserved', 'dialing', 'media_active') LIMIT 1`, [tenantId, lead.id]);
@@ -342,7 +395,9 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
       }
     } else {
       const phone = String(input.phone ?? '').replace(/\D/g, '');
-      if (!phone) throw new Error('Informe um telefone valido');
+      if (phone.length < 10 || phone.length > 15) throw new Error('Informe um telefone valido com DDD');
+      const suppressed = await this.db.query(`SELECT 1 FROM contact_suppressions WHERE tenant_id = $1 AND phone = $2 AND lifted_at IS NULL LIMIT 1`, [tenantId, phone]);
+      if (suppressed.rows[0]) { await this.redis.incrementMetric?.('calls_blocked_suppression_total'); await this.audit?.record({ tenantId, action: 'call.blocked_suppression', entityType: 'contact' }).catch(() => undefined); throw new Error('Este telefone está na lista de não contato'); }
       const existing = await this.db.query(`SELECT l.* FROM leads l JOIN lead_folders f ON f.tenant_id = l.tenant_id AND f.id = l.folder_id WHERE l.tenant_id = $1 AND l.phone = $2 LIMIT 1`, [tenantId, phone]);
       if (existing.rows[0]) {
         lead = existing.rows[0];
@@ -370,6 +425,7 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
       this.db.query(`
         SELECT s.* FROM sdrs s
         WHERE s.tenant_id = $1 AND s.state NOT IN ('in_call', 'post_call')
+          AND EXISTS (SELECT 1 FROM tenant_memberships tm WHERE tm.tenant_id = s.tenant_id AND tm.user_id = s.user_id AND tm.role = 'sdr' AND tm.status = 'active')
           AND ($2::text IS NULL OR s.user_id = $2)
           AND NOT EXISTS (
             SELECT 1 FROM calls c
@@ -411,6 +467,7 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
 
   private async getStatusFresh(tenantId = legacyTenantId(), from?: string, to?: string) {
     const settings = await this.getSettings(tenantId);
+    const scheduleState = this.schedule ? await this.schedule.evaluate(tenantId, new Date(), true) : { allowed: true, reason: 'schedule_service_unavailable' };
     const end = to && /^\d{4}-\d{2}-\d{2}$/.test(to) ? `${to}T23:59:59.999Z` : new Date().toISOString();
     const startDate = from && /^\d{4}-\d{2}-\d{2}$/.test(from) ? new Date(`${from}T00:00:00.000Z`) : new Date(Date.now() - 24 * 60 * 60 * 1000);
     const start = startDate.toISOString();
@@ -456,12 +513,14 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
           COUNT(*) FILTER (WHERE next_eligible_at > now())::int AS waiting
         FROM leads l JOIN lead_folders f ON f.tenant_id = l.tenant_id AND f.id = l.folder_id
         WHERE l.tenant_id = $1 AND f.is_active = true AND l.do_not_call = false AND l.status IN ('queued', 'retry_wait') AND l.attempts < $2
+          AND NOT EXISTS (SELECT 1 FROM lead_callbacks cb WHERE cb.tenant_id = l.tenant_id AND cb.lead_id = l.id AND cb.status IN ('pending','due','reassigned'))
       `, [tenantId, settings.max_attempts_per_lead]),
       this.db.query(`
         SELECT l.id, l.name, l.phone, l.status, l.attempts, l.next_eligible_at, f.name AS folder_name,
           ROW_NUMBER() OVER (ORDER BY l.next_eligible_at ASC, l.created_at ASC)::int AS queue_position
         FROM leads l JOIN lead_folders f ON f.tenant_id = l.tenant_id AND f.id = l.folder_id
         WHERE l.tenant_id = $1 AND f.is_active = true AND l.do_not_call = false AND l.status IN ('queued', 'retry_wait') AND l.attempts < $2
+          AND NOT EXISTS (SELECT 1 FROM lead_callbacks cb WHERE cb.tenant_id = l.tenant_id AND cb.lead_id = l.id AND cb.status IN ('pending','due','reassigned'))
         ORDER BY l.next_eligible_at ASC, l.created_at ASC
         LIMIT 12
       `, [tenantId, settings.max_attempts_per_lead]),
@@ -492,8 +551,8 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
       this.db.query(`
         SELECT f.id AS folder_id, f.name, f.is_active,
           COUNT(l.id)::int AS lead_count,
-          COUNT(l.id) FILTER (WHERE l.do_not_call = false AND l.status IN ('queued', 'retry_wait') AND l.attempts < ds.max_attempts_per_lead AND l.next_eligible_at <= now())::int AS ready_count,
-          COUNT(l.id) FILTER (WHERE l.do_not_call = false AND l.status IN ('queued', 'retry_wait') AND l.attempts < ds.max_attempts_per_lead)::int AS queue_count
+          COUNT(l.id) FILTER (WHERE l.do_not_call = false AND l.status IN ('queued', 'retry_wait') AND l.attempts < ds.max_attempts_per_lead AND l.next_eligible_at <= now() AND NOT EXISTS (SELECT 1 FROM lead_callbacks cb WHERE cb.tenant_id = l.tenant_id AND cb.lead_id = l.id AND cb.status IN ('pending','due','reassigned')))::int AS ready_count,
+          COUNT(l.id) FILTER (WHERE l.do_not_call = false AND l.status IN ('queued', 'retry_wait') AND l.attempts < ds.max_attempts_per_lead AND NOT EXISTS (SELECT 1 FROM lead_callbacks cb WHERE cb.tenant_id = l.tenant_id AND cb.lead_id = l.id AND cb.status IN ('pending','due','reassigned')))::int AS queue_count
         FROM lead_folders f
         LEFT JOIN dialer_settings ds ON ds.tenant_id = f.tenant_id
         LEFT JOIN leads l ON l.tenant_id = f.tenant_id AND l.folder_id = f.id
@@ -510,6 +569,7 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
     const activeFolders = folderSummary.rows.filter((row: any) => row.is_active);
     let nextAction = 'Pronto para discar';
     if (!settings.running) nextAction = 'Discador pausado';
+    else if (!scheduleState.allowed) nextAction = 'Fora do horário de operação';
     else if (!activeFolders.length) nextAction = 'Nenhuma pasta ativa';
     else if (!Number(queue.total)) nextAction = 'Fila vazia';
     else if (!Number(available.rows[0].count)) nextAction = 'Aguardando SDR disponível';
@@ -520,6 +580,7 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
     return {
       running: settings.running,
       settings,
+      schedule: scheduleState,
       // Read this from Postgres so the dashboard remains correct if work is
       // ever handled by more than one API process.
       active_calls: activeCalls.rows.length,
@@ -543,14 +604,15 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
   }
 
   async getSdrStatus(tenantId: string, userId: string) {
-    const [settings, ownSdr, pool] = await Promise.all([
+    const [settings, ownSdr, pool, scheduleState] = await Promise.all([
       this.getSettings(tenantId),
       this.db.query(`SELECT id FROM sdrs WHERE tenant_id = $1 AND user_id = $2 LIMIT 1`, [tenantId, userId]),
       // Per-tenant lines: expose only whether a line is available, never how many.
       this.db.query(`SELECT EXISTS (SELECT 1 FROM whatsapp_numbers WHERE tenant_id = $1 AND status IN ('connected', 'online', 'ready', 'authenticated') AND (flagged_until IS NULL OR flagged_until <= now())) AS ready`, [tenantId]),
+      this.schedule ? this.schedule.evaluate(tenantId, new Date(), true) : Promise.resolve({ allowed: true, reason: 'schedule_service_unavailable' }),
     ]);
     const sdr = ownSdr.rows[0] ? await this.getSdrState(ownSdr.rows[0].id, tenantId) : null;
-    const [queueResult, personalResult] = await Promise.all([
+    const [queueResult, personalResult, callbackResult] = await Promise.all([
       this.db.query(`
         SELECT COUNT(*)::int AS total,
           COUNT(*) FILTER (WHERE l.next_eligible_at <= now())::int AS ready,
@@ -559,6 +621,7 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
         JOIN lead_folders f ON f.tenant_id = l.tenant_id AND f.id = l.folder_id
         WHERE l.tenant_id = $1 AND f.is_active = true AND l.do_not_call = false
           AND l.status IN ('queued', 'retry_wait') AND l.attempts < $2
+          AND NOT EXISTS (SELECT 1 FROM lead_callbacks cb WHERE cb.tenant_id = l.tenant_id AND cb.lead_id = l.id AND cb.status IN ('pending','due','reassigned'))
       `, [tenantId, settings.max_attempts_per_lead]),
       sdr ? this.db.query(`
         SELECT COUNT(*)::int AS calls,
@@ -569,12 +632,16 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
         LEFT JOIN sdr_pauses sp ON sp.tenant_id = c.tenant_id AND sp.call_id = c.id
         WHERE c.tenant_id = $1 AND c.sdr_id = $2 AND c.created_at >= now() - interval '24 hours'
       `, [tenantId, sdr.id]) : Promise.resolve({ rows: [{ calls: 0, answered: 0, conversation_seconds: 0, wrap_up_seconds: 0 }] }),
+      sdr ? this.db.query(`SELECT cb.id, cb.lead_id, cb.due_at, cb.status, cb.notes, l.name AS lead_name, l.phone AS lead_phone,
+        (cb.due_at <= now()) AS overdue FROM lead_callbacks cb JOIN leads l ON l.tenant_id = cb.tenant_id AND l.id = cb.lead_id
+        WHERE cb.tenant_id = $1 AND cb.assigned_sdr_id = $2 AND cb.status IN ('pending','due','reassigned') ORDER BY cb.due_at ASC LIMIT 8`, [tenantId, sdr.id]) : Promise.resolve({ rows: [] }),
     ]);
     const queue = queueResult.rows[0] ?? { total: 0, ready: 0, waiting: 0 };
     const personal = personalResult.rows[0] ?? { calls: 0, answered: 0, conversation_seconds: 0, wrap_up_seconds: 0 };
     const lineReady = Boolean(pool.rows[0]?.ready);
     let nextAction = 'Conecte seu painel para iniciar';
     if (sdr?.current_pause_id) nextAction = 'Finalize o pós-atendimento';
+    else if (!scheduleState.allowed) nextAction = 'Fora do horário de operação';
     else if (!lineReady) nextAction = 'Aguardando uma linha do WhatsApp';
     else if (!settings.running) nextAction = 'Operação pausada pelo gestor';
     else if (!Number(queue.total)) nextAction = 'Fila sem contatos no momento';
@@ -583,6 +650,7 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
     else nextAction = 'Aguardando uma conversa da fila';
     return {
       running: Boolean(settings.running),
+      schedule: scheduleState,
       sdr,
       line_ready: lineReady,
       queue: { total: Number(queue.total), ready: Number(queue.ready), waiting: Number(queue.waiting) },
@@ -590,6 +658,8 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
         calls: Number(personal.calls), answered: Number(personal.answered),
         conversation_seconds: Number(personal.conversation_seconds), wrap_up_seconds: Number(personal.wrap_up_seconds),
       },
+      callbacks: callbackResult.rows,
+      overdue_callbacks: callbackResult.rows.filter((item: any) => item.overdue).length,
       next_action: nextAction,
     };
   }
@@ -686,6 +756,15 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
     this.ticking.add(tenantId);
     try {
       await this.expireReservations(tenantId);
+      if (Date.now() - (this.lastCallbackNotificationAt.get(tenantId) ?? 0) >= 30_000) {
+        this.lastCallbackNotificationAt.set(tenantId, Date.now());
+        const dueTransition = await this.db.query(`UPDATE lead_callbacks SET status = 'due', updated_at = now() WHERE tenant_id = $1 AND status IN ('pending','reassigned') AND due_at <= now() RETURNING id`, [tenantId]);
+        for (const callback of dueTransition?.rows ?? []) await this.audit?.record({ tenantId, action: 'callback.due', entityType: 'callback', entityId: callback.id }).catch(() => undefined);
+        const dueCallbacks = await this.db.query(`SELECT cb.id, cb.assigned_sdr_id, cb.due_at, l.name AS lead_name, l.phone AS lead_phone
+          FROM lead_callbacks cb JOIN leads l ON l.tenant_id = cb.tenant_id AND l.id = cb.lead_id
+          WHERE cb.tenant_id = $1 AND cb.assigned_sdr_id IS NOT NULL AND cb.status = 'due' AND cb.due_at <= now()`, [tenantId]);
+        for (const callback of dueCallbacks.rows) if (this.gateway.isConnected(callback.assigned_sdr_id)) this.gateway.sendToSdr(callback.assigned_sdr_id, { type: 'callback_due', callback });
+      }
       const lastStatusSyncAt = this.lastStatusSyncAt.get(tenantId) ?? 0;
       if (Date.now() - lastStatusSyncAt >= 15000) {
         const syncToken = randomUUID();
@@ -698,10 +777,12 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
       }
       const settings = await this.getSettings(tenantId);
       if (!settings?.running) return;
+      if (this.schedule && !(await this.schedule.evaluate(tenantId)).allowed) return;
       const [sdrs, numbers, leads, activeFolderCount] = await Promise.all([
         this.db.query(`
             SELECT s.* FROM sdrs s
             WHERE s.tenant_id = $1 AND s.available = true AND s.state = 'available'
+              AND EXISTS (SELECT 1 FROM tenant_memberships tm WHERE tm.tenant_id = s.tenant_id AND tm.user_id = s.user_id AND tm.role = 'sdr' AND tm.status = 'active')
             AND NOT EXISTS (
               SELECT 1 FROM calls c
                 WHERE c.tenant_id = s.tenant_id AND c.sdr_id = s.id AND c.status IN ('reserved', 'dialing', 'media_active')
@@ -724,6 +805,7 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
             JOIN lead_folders f ON f.tenant_id = l.tenant_id AND f.id = l.folder_id
             WHERE l.tenant_id = $1 AND l.do_not_call = false
               AND l.status IN ('queued', 'retry_wait') AND l.attempts < $2
+              AND NOT EXISTS (SELECT 1 FROM lead_callbacks cb WHERE cb.tenant_id = l.tenant_id AND cb.lead_id = l.id AND cb.status IN ('pending','due','reassigned'))
               AND l.last_auto_round < $3 AND l.next_eligible_at <= now()
               AND NOT EXISTS (
                 SELECT 1 FROM calls active_call
@@ -759,7 +841,7 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
         try {
           await this.startReservedCall(sdr, number, lead, settings, token, 'automatico', tenantId);
         } catch (error) {
-          this.logger.error(`Could not reserve call: ${String(error)}`);
+          this.logger.error(`Could not reserve call: ${safeOperationalError(error)}`);
           Sentry.captureException(error);
         }
       }
@@ -772,6 +854,7 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
             JOIN lead_folders f ON f.tenant_id = l.tenant_id AND f.id = l.folder_id
             WHERE l.tenant_id = $1 AND f.is_active = true AND l.do_not_call = false
               AND l.status IN ('queued', 'retry_wait') AND l.attempts < $2
+              AND NOT EXISTS (SELECT 1 FROM lead_callbacks cb WHERE cb.tenant_id = l.tenant_id AND cb.lead_id = l.id AND cb.status IN ('pending','due','reassigned'))
               AND l.last_auto_round < $3 AND l.next_eligible_at <= now()
               AND NOT EXISTS (
                 SELECT 1 FROM calls active_call
@@ -785,6 +868,7 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
             JOIN lead_folders f ON f.tenant_id = l.tenant_id AND f.id = l.folder_id
             WHERE l.tenant_id = $1 AND f.is_active = true AND l.do_not_call = false
               AND l.status IN ('queued', 'retry_wait', 'reserved', 'dialing', 'media_active')
+              AND NOT EXISTS (SELECT 1 FROM lead_callbacks cb WHERE cb.tenant_id = l.tenant_id AND cb.lead_id = l.id AND cb.status IN ('pending','due','reassigned'))
               AND l.attempts < $2
               AND NOT EXISTS (
                 SELECT 1 FROM calls active_call
@@ -806,7 +890,7 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
       const folderCount = Number(activeFolderCount.rows[0]?.count ?? 0);
       if (folderCount > 0) await this.db.query('UPDATE dialer_settings SET folder_rotation_cursor = ($1 + 1) % $2 WHERE tenant_id = $3', [Number(settings.folder_rotation_cursor ?? 0), folderCount, tenantId]);
     } catch (error) {
-      this.logger.warn(`Dialer tick failed: ${String(error)}`);
+      this.logger.warn(`Dialer tick failed: ${safeOperationalError(error)}`);
       Sentry.captureException(error);
     } finally {
       this.ticking.delete(tenantId);
@@ -843,8 +927,21 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
     const expires = new Date(Date.now() + Number(settings.ring_timeout_seconds) * 1000);
     const isAutomatic = source === 'automatico';
     try {
+      // Última barreira antes de persistir a chamada. Protege chamadas já
+      // reservadas quando a janela encerra entre a seleção e a transação.
+      if (this.schedule) await this.schedule.assertAllowed(tenantId);
       await this.db.transaction(async (client) => {
-        const folder = await client.query('SELECT folder_id, is_active FROM leads l JOIN lead_folders f ON f.tenant_id = l.tenant_id AND f.id = l.folder_id WHERE l.tenant_id = $1 AND l.id = $2 FOR UPDATE', [tenantId, lead.id]);
+        const folder = await client.query(`
+          SELECT l.folder_id, f.is_active,
+            (l.do_not_call = false AND NOT EXISTS (
+              SELECT 1 FROM contact_suppressions cs
+              WHERE cs.tenant_id = l.tenant_id AND cs.phone = l.phone AND cs.lifted_at IS NULL
+            )) AS contact_allowed
+          FROM leads l JOIN lead_folders f ON f.tenant_id = l.tenant_id AND f.id = l.folder_id
+          WHERE l.tenant_id = $1 AND l.id = $2 FOR UPDATE OF l
+        `, [tenantId, lead.id]);
+        if (!folder.rows[0]) throw new Error('Lead não encontrado');
+        if (folder.rows[0].contact_allowed === false) { await this.redis.incrementMetric?.('calls_blocked_suppression_total'); await this.audit?.record({ tenantId, action: 'call.blocked_suppression', entityType: 'contact' }).catch(() => undefined); throw new Error('Este telefone está na lista de não contato'); }
         if (isAutomatic && !folder.rows[0]?.is_active) throw new Error('A pasta deste lead está inativa');
         await client.query(`INSERT INTO calls (id, tenant_id, folder_id, lead_id, number_id, sdr_id, status, attempt_number, source, offer_expires_at, owner_instance_id) VALUES ($1,$2,$3,$4,$5,$6,'reserved',$7,$8,$9,$10)`, [callId, tenantId, folder.rows[0].folder_id, lead.id, number.id, sdr.id, isAutomatic ? Number(lead.attempts) + 1 : 0, source, expires, runtimeInstanceId]);
         if (isAutomatic) {
@@ -862,10 +959,19 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
         previousSdrAvailable: Boolean(sdr.available),
         previousSdrState: String(sdr.state ?? (sdr.available ? 'available' : 'offline')),
       });
+      await this.redis.incrementMetric?.('calls_started_total');
+      try {
+        const firstCallKey = `zapcall:metrics:first-call-recorded:${tenantId}`;
+        if (await this.redis.client.set(firstCallKey, '1', 'NX').catch(() => null)) {
+          const tenant = await this.db.query('SELECT created_at FROM tenants WHERE id = $1', [tenantId]);
+          const createdAt = new Date(tenant.rows[0]?.created_at ?? Date.now()).getTime();
+          await this.redis.observeMetric?.('tenant_time_to_first_call', Date.now() - createdAt);
+        }
+      } catch { /* observability must not interrupt a reserved call */ }
       // Blind dialing: on automatic calls the SDR must not learn who is being
       // called until the lead actually answers (notifyAnswered reveals it).
       // Manual calls skip this — the SDR already chose the lead themselves.
-      this.log(isAutomatic ? `Discagem automática iniciada via ${number.label}` : `Discando manual para ${lead.name} via ${number.label}`, 'info', callId, tenantId);
+      this.log(isAutomatic ? 'Discagem automática iniciada' : 'Discagem manual iniciada', 'info', callId, tenantId);
       const browser = this.gateway.getSocket(sdr.id);
       this.gateway.sendToSdr(sdr.id, { type: 'call_reserved', callId, lead: isAutomatic ? { id: lead.id } : { id: lead.id, name: lead.name, phone: lead.phone }, number: { id: number.id, label: number.label } });
       if (browser) void this.attachMedia(callId, sdr.id, browser, tenantId);
@@ -886,7 +992,7 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
       try {
         await this.finishCall(row.id, 'failed', 'api_restarted', false, row.tenant_id);
       } catch (error) {
-        this.logger.error(`Could not recover call ${row.id}: ${String(error)}`);
+        this.logger.error(`Could not recover call ${row.id}: ${safeOperationalError(error)}`);
         Sentry.captureException(error);
       }
     }
@@ -930,7 +1036,7 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
       let recipient: string;
       try {
         recipient = await this.resolveRecipient(call.rows[0].waxum_session_id, call.rows[0].phone);
-        this.log(`Destinatario VoIP resolvido para ${recipient}`, 'info', callId);
+        this.log('Destinatário VoIP resolvido', 'info', callId);
       } catch (error) {
         const err = error as Error & { statusCode?: number };
         const message = String(err.message ?? error);
@@ -946,7 +1052,7 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
         // the queue and the organizer sees why.
         const uncallable = message === 'not_on_whatsapp' || message === 'lid_unavailable';
         if (!uncallable) Sentry.captureException(error);
-        this.log(uncallable ? `Lead sem WhatsApp disponível para chamada (${message})` : `Waxum nao conseguiu preparar o destinatario: ${message}`, uncallable ? 'warning' : 'error', callId);
+        this.log(uncallable ? 'Lead sem WhatsApp disponível para chamada' : 'Waxum não conseguiu preparar o destinatário', uncallable ? 'warning' : 'error', callId);
         await this.finishCall(callId, 'failed', uncallable ? `sem_whatsapp:${message}` : `waxum_recipient_error:${message}`, uncallable);
         return;
       }
@@ -957,7 +1063,7 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
       resource.waxumSessionId = call.rows[0].waxum_session_id;
       resource.callPlacedAt = Date.now();
       resource.ringTimeout = setTimeout(() => {
-        if (!resource.mediaActive && !resource.answerSignalReceived) void this.finishCall(callId, 'no_answer', 'ring_timeout').catch((error) => this.logger.error(`Could not finish timed out call ${callId}: ${String(error)}`));
+        if (!resource.mediaActive && !resource.answerSignalReceived) void this.finishCall(callId, 'no_answer', 'ring_timeout').catch((error) => this.logger.error(`Could not finish timed out call ${callId}: ${safeOperationalError(error)}`));
       }, Number(settings.ring_timeout_seconds) * 1000);
 
       media.on('open', () => {
@@ -985,11 +1091,11 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
                 })
                 .catch((error) => {
                   if ((error as Error & { name?: string }).name === 'AbortError' || resource.finishing) return;
-                  this.log(`Não foi possível confirmar o atendimento: ${String(error)}`, 'warning', callId);
+                  this.log('Não foi possível confirmar o atendimento', 'warning', callId);
                 });
             }
           } catch (error) {
-            this.log(`Metadados de mídia inválidos: ${String(error)}`, 'warning', callId);
+            this.log('Metadados de mídia inválidos', 'warning', callId);
             Sentry.captureException(error);
           }
           return;
@@ -1026,8 +1132,8 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
           this.applyRateLimitBackoff(callId, resource);
           return;
         }
-        this.log(`Erro no Waxum: ${error.message}`, 'error', callId);
-        void this.finishCall(callId, 'failed', `waxum_error:${error.message}`).catch((finishError) => this.logger.error(`Could not finish Waxum error for ${callId}: ${String(finishError)}`));
+        this.log('Erro no Waxum', 'error', callId);
+        void this.finishCall(callId, 'failed', `waxum_error:${safeOperationalError(error)}`).catch((finishError) => this.logger.error(`Could not finish Waxum error for ${callId}: ${safeOperationalError(finishError)}`));
       });
       media.on('unexpected-response', (_request, response) => {
         const statusCode = response.statusCode;
@@ -1042,7 +1148,7 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
           }
           this.log(`Waxum recusou a conexão de mídia (HTTP ${statusCode})`, 'error', callId);
           void this.finishCall(callId, 'failed', `waxum_http_error:${statusCode}`)
-            .catch((finishError) => this.logger.error(`Could not finish Waxum HTTP error for ${callId}: ${String(finishError)}`));
+            .catch((finishError) => this.logger.error(`Could not finish Waxum HTTP error for ${callId}: ${safeOperationalError(finishError)}`));
         });
         response.resume();
       });
@@ -1058,10 +1164,10 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
         } else if (isInstantFailure(elapsed, this.FLAG_FAST_FAIL_MS)) {
           // Opened then died instantly with no audio: reachout-block signature.
           void this.registerLineInstantFailure(resource.numberId, resource.tenantId, callId)
-            .catch((error) => this.logger.error(`Could not register line failure for ${callId}: ${String(error)}`));
+            .catch((error) => this.logger.error(`Could not register line failure for ${callId}: ${safeOperationalError(error)}`));
         }
         void this.finishCall(callId, resource.mediaActive ? 'completed' : 'no_answer', resource.mediaActive ? 'remote_hangup' : closeReason)
-          .catch((error) => this.logger.error(`Could not finish closed call ${callId}: ${String(error)}`));
+          .catch((error) => this.logger.error(`Could not finish closed call ${callId}: ${safeOperationalError(error)}`));
       });
       resource.browserMessageHandler = (data, isBinary) => {
         // Start forwarding microphone PCM as soon as Waxum accepts the media
@@ -1077,11 +1183,11 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
       };
       resource.browserCloseHandler = () => {
         void this.finishCall(callId, resource.mediaActive ? 'failed' : 'cancelled', 'browser_disconnected')
-          .catch((error) => this.logger.error(`Could not finish browser-disconnected call ${callId}: ${String(error)}`));
+          .catch((error) => this.logger.error(`Could not finish browser-disconnected call ${callId}: ${safeOperationalError(error)}`));
       };
       resource.browserErrorHandler = () => {
         void this.finishCall(callId, 'failed', 'browser_error')
-          .catch((error) => this.logger.error(`Could not finish browser-error call ${callId}: ${String(error)}`));
+          .catch((error) => this.logger.error(`Could not finish browser-error call ${callId}: ${safeOperationalError(error)}`));
       };
       browser.on('message', resource.browserMessageHandler);
       browser.on('close', resource.browserCloseHandler);
@@ -1122,7 +1228,7 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
     if (resource) resource.rateLimitBackoffSeconds = backoff;
     this.log(`Waxum limitou a linha (429); aguardando ${backoff}s antes de discar novamente nela`, 'warning', callId, resource?.tenantId);
     void this.finishCall(callId, 'cancelled', 'waxum_rate_limited')
-      .catch((finishError) => this.logger.error(`Could not finish Waxum rate limit for ${callId}: ${String(finishError)}`));
+      .catch((finishError) => this.logger.error(`Could not finish Waxum rate limit for ${callId}: ${safeOperationalError(finishError)}`));
   }
 
   // A call that opens the media socket but closes almost immediately with no
@@ -1139,8 +1245,7 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
     await this.redis.client.del(failureKey);
     const hours = this.flagQuarantineHours;
     await this.db.query(`UPDATE whatsapp_numbers SET flagged_until = now() + ($1 * interval '1 hour') WHERE id = $2 AND tenant_id = $3`, [hours, numberId, tenantId]);
-    const label = await this.db.query(`SELECT label FROM whatsapp_numbers WHERE id = $1 AND tenant_id = $2`, [numberId, tenantId]);
-    this.log(`Linha "${label.rows[0]?.label ?? numberId}" parece bloqueada pelo WhatsApp (chamadas caindo na hora, sem tocar); pausada por ${hours}h para proteger a conta. O discador usará as outras linhas.`, 'error', callId, tenantId);
+    this.log(`Uma linha parece bloqueada pelo WhatsApp e foi pausada por ${hours}h para proteger a conta. O discador usará as outras linhas.`, 'error', callId, tenantId);
     this.gateway.broadcast({ type: 'number_flagged', numberId, flaggedHours: hours }, tenantId);
   }
 
@@ -1164,7 +1269,7 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
         if (resource.waxumSessionId && resource.recipient && resource.waxumCallId) {
           await this.waxum.terminateCall(resource.waxumSessionId, resource.recipient, resource.waxumCallId)
             .then(() => this.log('Chamada encerrada no WhatsApp (terminate enviado)', 'info', callId, tenantId))
-            .catch((error) => this.logger.warn(`Waxum terminate falhou para ${callId}: ${String(error)}`));
+            .catch((error) => this.logger.warn(`Waxum terminate falhou para ${callId}: ${safeOperationalError(error)}`));
         }
         if (resource.media && resource.media.readyState === WebSocket.OPEN) resource.media.close();
       }

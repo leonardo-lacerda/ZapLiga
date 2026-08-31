@@ -10,7 +10,7 @@ const metric = (value: unknown) => Number(value ?? 0).toLocaleString('pt-BR');
 export function LeadsPage({
   leads, leadsTotal, leadsOffset, onLeadsPageChange, folders, selectedFolderId, selectedFolder, metrics,
   setSelectedFolderId, createFolder, updateFolder, removeFolder, leadForm, setLeadForm,
-  createLead, importCsv, importResult, clearFolder, manualCall, resetLead, removeLead,
+  createLead, importCsv, importResult, clearFolder, manualCall, resetLead, removeLead, suppressLead,
 }: AnyRow) {
   const [newFolderName, setNewFolderName] = useState('');
   const totalLeads = folders.reduce((sum: number, folder: AnyRow) => sum + Number(folder.lead_count ?? 0), 0);
@@ -58,7 +58,7 @@ export function LeadsPage({
         {selectedFolder && <>
           <Panel className="folder-overview-panel">
             <div className="folder-overview-heading"><div><span className="eyebrow">PASTA SELECIONADA</span><h2>{selectedFolder.name}</h2><p>{selectedFolder.is_active ? 'Esta pasta participa da fila automática.' : 'Esta pasta está pausada e não receberá novas chamadas.'}</p></div><div className="panel-actions"><Badge tone={selectedFolder.is_active ? 'success' : 'neutral'}>{selectedFolder.is_active ? 'Ativa' : 'Pausada'}</Badge><Button variant={selectedFolder.is_active ? 'danger' : 'success'} icon={selectedFolder.is_active ? 'pause' : 'play'} onClick={() => void updateFolder(selectedFolder.id, { isActive: !selectedFolder.is_active })}>{selectedFolder.is_active ? 'Desativar pasta' : 'Ativar pasta'}</Button></div></div>
-            <div className="folder-metric-grid"><div><span>Leads</span><strong>{metric(leadCounts.total ?? selectedFolder.lead_count)}</strong><small>{metric(leadCounts.queued)} na fila</small></div><div><span>Tentativas</span><strong>{metric(calls.attempts)}</strong><small>{metric(calls.active)} em andamento</small></div><div><span>Atendidas</span><strong>{metric(calls.answered)}</strong><small>{metric(calls.answer_rate)}% de aproveitamento</small></div><div><span>Concluídas</span><strong>{metric(calls.completed)}</strong><small>{metric(calls.no_answer)} sem resposta</small></div></div>
+            <div className="folder-metric-grid"><div><span>Leads</span><strong>{metric(leadCounts.total ?? selectedFolder.lead_count)}</strong><small>{metric(leadCounts.queued)} na fila</small></div><div><span>Tentativas</span><strong>{metric(calls.attempts)}</strong><small>{metric(calls.active)} em andamento</small></div><div><span>Atendidas</span><strong>{metric(calls.answered)}</strong><small>{metric(calls.answer_rate)}% de aproveitamento</small></div><div><span>Concluídas</span><strong>{metric(calls.completed)}</strong><small>{metric(calls.no_answer)} sem resposta</small></div><div><span>Não contato</span><strong>{metric(leadCounts.do_not_call)}</strong><small>bloqueados nesta pasta</small></div></div>
           </Panel>
 
           <Panel>
@@ -68,9 +68,9 @@ export function LeadsPage({
             {importResult && <div className="import-success"><Icon name="check" size={14} />{importResult}</div>}
           </Panel>
 
-          <DataTable rows={leads} columns={['name', 'phone', 'status', 'attempts', 'last_failure_reason']} actions={(row) => {
+          <DataTable rows={leads} columns={['name', 'phone', 'status', 'attempts', 'do_not_call', 'suppression_reason', 'last_failure_reason']} actions={(row) => {
             const callInProgress = ['reserved', 'dialing', 'media_active'].includes(String(row.status));
-            return <><Button variant="success" onClick={() => void manualCall(row.id, row.name)} disabled={!selectedFolder.is_active || row.do_not_call || !['queued', 'retry_wait'].includes(row.status)} title={!selectedFolder.is_active ? 'Ative a pasta para ligar' : undefined}>Ligar agora</Button><Button variant="ghost" onClick={() => void resetLead(row.id)} disabled={callInProgress} title={callInProgress ? 'Aguarde a chamada terminar para resetar' : 'Zerar tentativas e recolocar na fila'}>Resetar</Button><Button variant="danger" icon="close" onClick={() => void removeLead(row.id, row.name, row.phone)} disabled={callInProgress} title={callInProgress ? 'Aguarde a chamada terminar para remover' : 'Remover somente este lead'}>Remover</Button></>;
+            return <><Button variant="success" onClick={() => void manualCall(row.id, row.name)} disabled={!selectedFolder.is_active || row.do_not_call || !['queued', 'retry_wait'].includes(row.status)} title={!selectedFolder.is_active ? 'Ative a pasta para ligar' : undefined}>Ligar agora</Button>{!row.do_not_call && <Button variant="ghost" onClick={() => void suppressLead(row.phone, row.name)} disabled={callInProgress}>Não ligar</Button>}<Button variant="ghost" onClick={() => void resetLead(row.id)} disabled={callInProgress} title={callInProgress ? 'Aguarde a chamada terminar para resetar' : 'Zerar tentativas e recolocar na fila'}>Resetar</Button><Button variant="danger" icon="close" onClick={() => void removeLead(row.id, row.name, row.phone)} disabled={callInProgress} title={callInProgress ? 'Aguarde a chamada terminar para remover' : 'Remover somente este lead'}>Remover</Button></>;
           }} />
           <Pagination offset={leadsOffset} limit={PAGE_SIZE} total={leadsTotal} onChange={onLeadsPageChange} />
         </>}

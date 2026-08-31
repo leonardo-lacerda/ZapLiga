@@ -6,6 +6,11 @@ export const tabPaths: Record<TabKey, string> = {
   metrics: '/app/metricas',
   numbers: '/app/numeros',
   leads: '/app/leads',
+  callbacks: '/app/retornos',
+  compliance: '/app/nao-contato',
+  privacy: '/app/privacidade',
+  settings: '/app/configuracoes',
+  profile: '/app/meu-perfil',
   sdrs: '/app/sdrs',
   calls: '/app/historico',
   access: '/app/acesso',
@@ -24,6 +29,9 @@ export function authRouteFromPath(pathname: string) {
   const inviteMatch = normalized.match(/^\/(?:app\/)?(?:convite|invite)\/([^/]+)$/);
   if (inviteMatch) return { type: 'invite' as const, token: decodeURIComponent(inviteMatch[1]) };
   if (['/registro', '/cadastro', '/app/registro', '/app/cadastro'].includes(normalized)) return { type: 'register' as const };
+  if (normalized === '/esqueci-senha') return { type: 'forgot' as const };
+  if (normalized === '/redefinir-senha') return { type: 'reset' as const, token: new URLSearchParams(window.location.search).get('token') ?? '' };
+  if (normalized === '/verificar-email') return { type: 'verify' as const, token: new URLSearchParams(window.location.search).get('token') ?? '' };
   return { type: 'login' as const };
 }
 
@@ -36,6 +44,9 @@ export function isPublicAuthPath(pathname: string) {
     || normalized === '/app/login'
     || normalized === '/app/registro'
     || normalized === '/app/cadastro'
+    || normalized === '/esqueci-senha'
+    || normalized === '/redefinir-senha'
+    || normalized === '/verificar-email'
     || /^\/(?:app\/)?(?:convite|invite)\/[^/]+$/.test(normalized);
 }
 

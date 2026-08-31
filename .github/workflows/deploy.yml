@@ -35,12 +35,62 @@ jobs:
       - name: Testes
         run: npm test -- --runInBand
 
+      - name: Testes frontend
+        run: npm run test:web
+
       - name: Build
         run: npm run build
 
+  e2e:
+    name: Jornadas E2E no stack completo
+    needs: validate
+    runs-on: ubuntu-latest
+    steps:
+      - name: Baixar código
+        uses: actions/checkout@v4
+      - name: Configurar Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - name: Instalar dependências e Chromium
+        run: |
+          npm ci
+          npx playwright install --with-deps chromium
+      - name: Subir stack com Waxum determinístico
+        run: docker compose -f docker-compose.yml -f docker-compose.e2e.yml up -d --build postgres redis nats waxum api-a web
+      - name: Aguardar API e interface
+        run: |
+          for attempt in $(seq 1 60); do
+            curl -fsS http://127.0.0.1:3000/health >/dev/null && curl -fsS http://127.0.0.1:5173/login >/dev/null && exit 0
+            sleep 2
+          done
+          docker compose -f docker-compose.yml -f docker-compose.e2e.yml logs --tail=150
+          exit 1
+      - name: Criar admin de smoke e verificar isolamento
+        env:
+          DATABASE_URL: postgres://zapcall:zapcall@127.0.0.1:5432/zapcall
+          SMOKE_API_URL: http://127.0.0.1:3000
+          SMOKE_ADMIN_EMAIL: admin@zapcall.local
+          SMOKE_ADMIN_PASSWORD: ZapCall-Smoke-2026!
+        run: |
+          docker compose -f docker-compose.yml -f docker-compose.e2e.yml exec -T api-a node apps/api/dist/scripts/bootstrap-admin.js
+          npm run verify:multitenant
+      - name: Executar 12 jornadas obrigatórias
+        env:
+          E2E_API_URL: http://127.0.0.1:3000
+          E2E_WEB_URL: http://127.0.0.1:5173
+        run: npm run test:e2e
+      - name: Coletar logs em falha
+        if: failure()
+        run: docker compose -f docker-compose.yml -f docker-compose.e2e.yml logs --tail=200
+      - name: Encerrar stack
+        if: always()
+        run: docker compose -f docker-compose.yml -f docker-compose.e2e.yml down -v
+
   deploy:
     name: Deploy produção
-    needs: validate
+    needs: [validate, e2e]
     runs-on: ubuntu-latest
     environment:
       name: production

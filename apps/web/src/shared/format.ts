@@ -34,6 +34,7 @@ export const callResultOptions = [
   ['retornar', 'Solicitou retorno'],
   ['reuniao_agendada', 'Reunião agendada'],
   ['numero_invalido', 'Número inválido'],
+  ['nao_ligar_novamente', 'Não ligar novamente'],
 ] as const;
 
 export const pipelineStageOptions = [
@@ -49,6 +50,14 @@ const callResultNames: Record<string, string> = Object.fromEntries(callResultOpt
 const pipelineStageNames: Record<string, string> = Object.fromEntries(pipelineStageOptions);
 export const formatCallResult = (value: unknown) => value ? (callResultNames[String(value)] ?? String(value)) : '—';
 export const formatPipelineStage = (value: unknown) => value ? (pipelineStageNames[String(value)] ?? String(value)) : '—';
+const suppressionReasonNames: Record<string, string> = {
+  requested_opt_out: 'Solicitou não receber chamadas',
+  invalid_number: 'Número inválido',
+  legal_restriction: 'Restrição legal',
+  internal_policy: 'Política interna',
+  other: 'Outro',
+};
+export const formatSuppressionReason = (value: unknown) => value ? (suppressionReasonNames[String(value)] ?? String(value)) : 'Permitido';
 
 export const callStatusOptions = [
   ['completed', 'Concluída'],

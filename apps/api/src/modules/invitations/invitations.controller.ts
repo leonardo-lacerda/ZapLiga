@@ -1,4 +1,4 @@
-import { Body, Controller, Delete, ForbiddenException, Get, Param, Post, Query, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, Post, Query, UseGuards } from '@nestjs/common';
 import { AuthGuard, CurrentUser, Roles, RolesGuard, TenantMembershipGuard } from '../auth/auth.guards';
 import { CreateInvitationDto } from './dto/create-invitation.dto';
 import { CreateSdrInvitationDto } from './dto/create-sdr-invitation.dto';
@@ -30,9 +30,13 @@ export class InvitationsController {
   @UseGuards(AuthGuard, TenantMembershipGuard, RolesGuard)
   @Roles('leader', 'super_admin')
   create(@Param('tenantId') tenantId: string, @Body() body: CreateInvitationDto, @CurrentUser() user: any) {
-    if (user.platformRole !== 'super_admin' && body.role === 'leader') throw new ForbiddenException('Somente o Admin supremo pode convidar líderes');
     return this.invitations.create(tenantId, user.id, body.email, body.role);
   }
+
+  @Post('/api/tenants/:tenantId/invitations/:invitationId/resend')
+  @UseGuards(AuthGuard, TenantMembershipGuard, RolesGuard)
+  @Roles('leader', 'super_admin')
+  resend(@Param('tenantId') tenantId: string, @Param('invitationId') invitationId: string, @CurrentUser() user: any) { return this.invitations.resend(tenantId, invitationId, user.id); }
 
   @Get('/api/tenants/:tenantId/invitations')
   @UseGuards(AuthGuard, TenantMembershipGuard, RolesGuard)
