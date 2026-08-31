@@ -1,8 +1,8 @@
 import { vi } from 'vitest';
-import { apiFetch, clearActiveTenantId, setActiveTenantId } from './api';
+import { apiFetch, clearAccessToken, clearActiveTenantId, json, setAccessToken, setActiveTenantId } from './api';
 
 describe('tenant request lifecycle', () => {
-  afterEach(() => { clearActiveTenantId(); vi.unstubAllGlobals(); });
+  afterEach(() => { clearAccessToken(); clearActiveTenantId(); vi.unstubAllGlobals(); });
 
   it('rewrites new feature aliases and aborts the old tenant request on switch', async () => {
     let capturedUrl = ''; let capturedSignal: AbortSignal | undefined;
@@ -13,5 +13,24 @@ describe('tenant request lifecycle', () => {
     expect(capturedSignal?.aborted).toBe(false);
     setActiveTenantId('tenant-b');
     expect(capturedSignal?.aborted).toBe(true);
+  });
+
+  it('refreshes an expired access token before sending a protected request', async () => {
+    const futurePayload = btoa(JSON.stringify({ exp: Math.floor(Date.now() / 1000) + 900 }));
+    const urls: string[] = [];
+    vi.stubGlobal('fetch', vi.fn(async (url: string | URL) => {
+      urls.push(String(url));
+      if (String(url).endsWith('/api/auth/refresh')) {
+        return new Response(JSON.stringify({ accessToken: `x.${futurePayload}.y` }), { status: 201, headers: { 'content-type': 'application/json' } });
+      }
+      return new Response(JSON.stringify({ ok: true }), { status: 200, headers: { 'content-type': 'application/json' } });
+    }));
+    setAccessToken('x.eyJleHAiOjF9.y');
+
+    await expect(json('/api/numbers')).resolves.toEqual({ ok: true });
+    expect(urls).toEqual([
+      'http://localhost:3000/api/auth/refresh',
+      'http://localhost:3000/api/numbers',
+    ]);
   });
 });

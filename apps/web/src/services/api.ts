@@ -113,6 +113,13 @@ export const refreshAccessToken = () => {
 };
 
 export const json = async (path: string, init?: RequestInit, retry = true): Promise<any> => {
+  // Do not knowingly send an expired access token. This is especially
+  // important when a suspended/mobile tab becomes visible again: its polling
+  // effects can start several requests before AuthProvider's visibility
+  // handler finishes rotating the token, producing a burst of avoidable 401s.
+  if (retry && !path.startsWith('/api/auth/') && shouldRefreshAccessToken(5)) {
+    await refreshAccessToken();
+  }
   const tokenAtRequest = accessToken;
   const response = await fetchJson(path, init);
   if (response.status === 401 && retry && !path.startsWith('/api/auth/')) {
