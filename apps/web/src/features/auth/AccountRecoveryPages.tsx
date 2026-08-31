@@ -15,9 +15,9 @@ export function ResetPasswordPage({ token }: { token: string }) {
   return <AuthShell mode="login"><Panel className="auth-card"><span className="eyebrow">NOVA SENHA</span><h1>Redefinir senha</h1>{message && <div className="alert" role="status">{message}</div>}{done ? <div className="auth-links"><a href="/login">Entrar com a nova senha</a></div> : <form className="auth-form" onSubmit={submit}><label><span>Nova senha</span><input type="password" minLength={8} maxLength={128} required value={password} onChange={(event) => setPassword(event.target.value)} /></label><label><span>Confirmar senha</span><input type="password" minLength={8} required value={confirmation} onChange={(event) => setConfirmation(event.target.value)} /></label><Button disabled={busy || !token}>{busy ? 'Salvando…' : 'Salvar nova senha'}</Button></form>}</Panel></AuthShell>;
 }
 
-export function VerifyEmailPage({ token }: { token: string }) {
+export function VerifyEmailPage({ token, onVerified }: { token: string; onVerified?: () => Promise<void> }) {
   const [message, setMessage] = useState('Verificando seu link…');
-  useEffect(() => { if (!token) { setMessage('Link de verificação inválido.'); return; } void json('/api/auth/email/verify', { method: 'POST', body: JSON.stringify({ token }) }).then(() => setMessage('E-mail verificado com sucesso.')).catch((error) => setMessage(error instanceof Error ? error.message : String(error))); }, [token]);
+  useEffect(() => { if (!token) { setMessage('Link de verificação inválido.'); return; } void json('/api/auth/email/verify', { method: 'POST', body: JSON.stringify({ token }) }).then(async () => { setMessage('E-mail verificado com sucesso.'); if (onVerified) await onVerified(); }).catch((error) => setMessage(error instanceof Error ? error.message : String(error))); }, [onVerified, token]);
   return <AuthShell mode="login"><Panel className="auth-card"><span className="eyebrow">VERIFICAÇÃO</span><h1>Verificar e-mail</h1><div className="alert" role="status">{message}</div><div className="auth-links"><a href="/login">Ir para o login</a></div></Panel></AuthShell>;
 }
 

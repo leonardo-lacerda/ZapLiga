@@ -338,14 +338,19 @@ function AuthenticatedApp() {
 
 export default function App() {
   const { session, loading, login, register, acceptInvite, reload } = useAuth();
+  const authRoute = authRouteFromPath(window.location.pathname);
   useEffect(() => {
-    if (session && isPublicAuthPath(window.location.pathname)) window.history.replaceState({}, '', tabPaths.dashboard);
-  }, [session]);
+    // A verification link may be opened while the registration session is
+    // still active. Keep that route long enough to consume the token instead
+    // of redirecting it to the verification gate before the POST runs.
+    if (session && isPublicAuthPath(window.location.pathname) && authRoute.type !== 'verify') window.history.replaceState({}, '', tabPaths.dashboard);
+  }, [authRoute.type, session]);
   if (window.location.pathname === '/termos') return <LegalDocumentPage type="terms" />;
   if (window.location.pathname === '/privacidade') return <LegalDocumentPage type="privacy" />;
   if (loading) return <div className="auth-shell"><p>Carregando sessão...</p></div>;
+  if (session && authRoute.type === 'verify') return <VerifyEmailPage token={authRoute.token} onVerified={reload} />;
   if (!session) {
-    const route = authRouteFromPath(window.location.pathname);
+    const route = authRoute;
     if (route.type === 'invite') return <AcceptInvitePage token={route.token} acceptInvite={acceptInvite} />;
     if (route.type === 'register') return <RegisterPage register={register} />;
     if (route.type === 'forgot') return <ForgotPasswordPage />;
