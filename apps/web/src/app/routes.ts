@@ -38,7 +38,6 @@ export function authRouteFromPath(pathname: string) {
 export function isPublicAuthPath(pathname: string) {
   const normalized = pathname.replace(/\/+$/, '') || '/';
   return normalized === '/login'
-    || normalized === '/entrar'
     || normalized === '/registro'
     || normalized === '/cadastro'
     || normalized === '/app'
