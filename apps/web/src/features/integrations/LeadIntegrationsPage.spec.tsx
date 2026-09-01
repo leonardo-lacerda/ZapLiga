@@ -17,7 +17,7 @@ describe('LeadIntegrationsPage', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Gerar credenciais' }));
     expect(await screen.findByText('Credenciais prontas')).toBeInTheDocument();
     expect(screen.getByDisplayValue('zpl_in_test')).toBeInTheDocument();
-    expect(screen.getByDisplayValue(/\/api\/v1\/lead-integrations\/li_test\/webhook$/)).toBeInTheDocument();
+    expect(screen.getByDisplayValue('http://localhost:3000/api/v1/lead-integrations/li_test/webhook')).toBeInTheDocument();
     await waitFor(() => expect(screen.getByText(/Integração criada/)).toBeInTheDocument());
   });
 });
