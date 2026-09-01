@@ -100,7 +100,7 @@ export class InvitationsService implements OnModuleInit, OnModuleDestroy {
       const existingMembership = await client.query('SELECT * FROM tenant_memberships WHERE tenant_id = $1 AND user_id = $2 LIMIT 1 FOR UPDATE', [invitation.tenant_id, user.id]);
       let membership;
       if (existingMembership.rows[0]) {
-        if (existingMembership.rows[0].status !== 'removed') throw new ConflictException('Este usuÃ¡rio jÃ¡ pertence Ã  empresa');
+        if (existingMembership.rows[0].status !== 'removed') throw new ConflictException('Este usuário já pertence à empresa');
         membership = await client.query('UPDATE tenant_memberships SET role = $1, status = \'active\', updated_at = now() WHERE tenant_id = $2 AND user_id = $3 RETURNING *', [invitation.role, invitation.tenant_id, user.id]);
       } else {
         membership = await client.query(`INSERT INTO tenant_memberships (id, tenant_id, user_id, role) VALUES ($1, $2, $3, $4) RETURNING *`, [randomUUID(), invitation.tenant_id, user.id, invitation.role]);

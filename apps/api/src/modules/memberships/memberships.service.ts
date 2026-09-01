@@ -119,7 +119,7 @@ export class MembershipsService {
       if (membership.role === 'leader' && role !== 'leader' && membership.status === 'active') {
         await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [`membership-leader:${tenantId}`]);
         const lockedLeaders = await client.query(`SELECT count(*)::int AS count FROM tenant_memberships WHERE tenant_id = $1 AND role = 'leader' AND status = 'active'`, [tenantId]);
-        if (Number(lockedLeaders.rows[0]?.count ?? 0) <= 1) throw new ConflictException('A empresa precisa manter pelo menos um lÃ­der ativo');
+        if (Number(lockedLeaders.rows[0]?.count ?? 0) <= 1) throw new ConflictException('A empresa precisa manter pelo menos um líder ativo');
       }
       return client.query('UPDATE tenant_memberships SET role = $1, updated_at = now() WHERE tenant_id = $2 AND user_id = $3 RETURNING *', [role, tenantId, userId]);
     });

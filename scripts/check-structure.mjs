@@ -1,4 +1,5 @@
-import { access, readdir } from 'node:fs/promises';
+import { access, readFile, readdir } from 'node:fs/promises';
+import { extname, join } from 'node:path';
 
 const rootFiles = new Set([
   '.dockerignore', '.env.example', '.gitignore',
@@ -27,5 +28,35 @@ for (const [path, expected] of Object.entries(expectedSourceEntries)) {
   const unexpectedSource = actual.filter((entry) => !expected.has(entry));
   if (unexpectedSource.length) throw new Error(`Arquivos inesperados em ${path}: ${unexpectedSource.join(', ')}`);
 }
+
+const textExtensions = new Set(['.css', '.html', '.js', '.jsx', '.json', '.md', '.mjs', '.sql', '.ts', '.tsx']);
+const corruptedText = [
+  { label: 'caractere de substituição Unicode', expression: /\uFFFD/u },
+  { label: 'texto UTF-8 interpretado como Latin-1', expression: /(?:\u00C3|\u00C2|\u00E2)[\u0080-\u00BF]/u },
+];
+
+async function findEncodingIssues(path) {
+  const issues = [];
+  for (const entry of await readdir(path, { withFileTypes: true })) {
+    if (entry.name === 'dist' || entry.name === 'node_modules' || entry.name === 'test-results') continue;
+    const entryPath = join(path, entry.name);
+    if (entry.isDirectory()) {
+      issues.push(...await findEncodingIssues(entryPath));
+      continue;
+    }
+    if (!textExtensions.has(extname(entry.name))) continue;
+    const contents = await readFile(entryPath, 'utf8');
+    for (const pattern of corruptedText) {
+      const match = pattern.expression.exec(contents);
+      if (!match) continue;
+      const line = contents.slice(0, match.index).split(/\r?\n/u).length;
+      issues.push(`${entryPath}:${line} (${pattern.label})`);
+    }
+  }
+  return issues;
+}
+
+const encodingIssues = await findEncodingIssues('apps');
+if (encodingIssues.length) throw new Error(`Textos com codificação corrompida:\n${encodingIssues.join('\n')}`);
 
 console.log('Estrutura do workspace válida.');

@@ -58,7 +58,7 @@ export class TenantMembershipGuard implements CanActivate {
     const user = request.user as AuthenticatedUser | undefined;
     const routeTenantId = String(request.params?.tenantId ?? '');
     const headerTenantId = String(request.headers['x-tenant-id'] ?? '');
-    if (routeTenantId && headerTenantId && routeTenantId !== headerTenantId) throw new UnauthorizedException('Os contextos da empresa nÃ£o coincidem');
+    if (routeTenantId && headerTenantId && routeTenantId !== headerTenantId) throw new UnauthorizedException('Os contextos da empresa não coincidem');
     const tenantId = routeTenantId || headerTenantId;
     if (!user || !tenantId) throw new UnauthorizedException('Contexto da empresa inválido');
     const tenant = await this.db.query('SELECT id, status FROM tenants WHERE id = $1 LIMIT 1', [tenantId]);

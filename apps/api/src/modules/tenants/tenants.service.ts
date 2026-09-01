@@ -54,7 +54,7 @@ export class TenantsService {
       SET max_leads = COALESCE($1, max_leads), max_numbers = COALESCE($2, max_numbers), max_sdrs = COALESCE($3, max_sdrs), updated_at = now()
       WHERE id = $4 RETURNING *
     `, [limits.maxLeads ?? null, limits.maxNumbers ?? null, limits.maxSdrs ?? null, id]);
-    if (!result.rows[0]) throw new NotFoundException('Empresa nÃ£o encontrada');
+    if (!result.rows[0]) throw new NotFoundException('Empresa não encontrada');
     return result.rows[0];
   }
 }
