@@ -12,6 +12,7 @@ describe('LeadIntegrationsPage', () => {
     );
     render(<LeadIntegrationsPage tenantId="tenant-1" folders={[{ id: 'folder-1', name: 'Lista principal', is_active: true }]} />);
     await screen.findByText('Nenhuma integração configurada');
+    expect(screen.getByText(/http:\/\/localhost:3000\/api\/v1\/lead-integrations\/\{public_id\}\/leads/)).toBeInTheDocument();
     fireEvent.change(screen.getByPlaceholderText('Nome da integração'), { target: { value: 'CRM principal' } });
     fireEvent.click(screen.getByRole('button', { name: 'Gerar credenciais' }));
     expect(await screen.findByText('Credenciais prontas')).toBeInTheDocument();

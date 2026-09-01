@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import type React from 'react';
 import { Badge, Button, EmptyState, Icon, Panel, SectionHeader } from '../../components/ui';
-import { json } from '../../services/api';
+import { apiBaseUrl, json } from '../../services/api';
 import type { AnyRow } from '../../types';
 
 type LeadIntegrationsPageProps = { tenantId: string; folders: AnyRow[] };
@@ -16,10 +16,10 @@ const copy = async (value: string) => {
 };
 
 const formatDate = (value?: string) => value ? new Date(value).toLocaleString('pt-BR') : 'Nenhum recebimento';
-const absoluteUrl = (value: string) => /^https?:\/\//i.test(value) ? value : new URL(value, window.location.origin).toString();
+const absoluteUrl = (value: string) => /^https?:\/\//i.test(value) ? value : new URL(value, `${apiBaseUrl.replace(/\/+$/, '')}/`).toString();
 const curlExample = [
   'curl -X POST \\',
-  '  https://app.zapliga.com.br/api/v1/lead-integrations/{public_id}/leads \\',
+  `  ${apiBaseUrl.replace(/\/+$/, '')}/api/v1/lead-integrations/{public_id}/leads \\`,
   '  -H "Authorization: Bearer {api_key}" \\',
   '  -H "Content-Type: application/json" \\',
   "  -d '{\"name\":\"Ana Souza\",\"phone\":\"+5511999999999\",\"email\":\"ana@empresa.com\"}'",
