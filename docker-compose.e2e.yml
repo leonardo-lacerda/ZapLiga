@@ -20,7 +20,7 @@ services:
       WAXUM_REQUEST_INTERVAL_MS: "0"
       SUPERADMIN_EMAIL: admin@zapcall.local
       SUPERADMIN_PASSWORD: ZapCall-Smoke-2026!
-      WEB_ORIGIN: ${E2E_WEB_ORIGIN:-http://localhost:5173}
+      WEB_ORIGIN: ${E2E_WEB_ORIGIN:-http://127.0.0.1:5173}
   api-b:
     environment:
       NODE_ENV: test
@@ -29,9 +29,9 @@ services:
       WAXUM_REQUEST_INTERVAL_MS: "0"
       SUPERADMIN_EMAIL: admin@zapcall.local
       SUPERADMIN_PASSWORD: ZapCall-Smoke-2026!
-      WEB_ORIGIN: ${E2E_WEB_ORIGIN:-http://localhost:5173}
+      WEB_ORIGIN: ${E2E_WEB_ORIGIN:-http://127.0.0.1:5173}
   web:
     build:
       args:
-        VITE_API_URL: ${E2E_BROWSER_API_URL:-http://localhost:3000}
+        VITE_API_URL: ${E2E_BROWSER_API_URL:-http://127.0.0.1:3000}
         VITE_PUBLIC_REGISTRATION_ENABLED: "true"
