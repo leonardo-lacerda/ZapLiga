@@ -46,7 +46,12 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
 
   async migrate() {
     const compiledDir = join(__dirname, 'migrations');
-    const sourceDir = join(process.cwd(), 'apps/api/src/database/migrations');
+    const sourceCandidates = [
+      join(process.cwd(), 'apps/api/src/database/migrations'),
+      join(process.cwd(), 'src/database/migrations'),
+      join(__dirname, '../../src/database/migrations'),
+    ];
+    const sourceDir = sourceCandidates.find((candidate) => existsSync(candidate)) ?? sourceCandidates[0];
     const hasCompiledMigrations = existsSync(compiledDir)
       && readdirSync(compiledDir).some((file) => file.endsWith('.sql'));
     const migrationsDir = hasCompiledMigrations ? compiledDir : sourceDir;

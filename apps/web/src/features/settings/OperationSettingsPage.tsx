@@ -34,6 +34,7 @@ export function OperationSettingsPage({ status, onChanged }: { status: AnyRow; o
     setBusy(true); setMessage('');
     try {
       const numericSettings = Object.fromEntries(settingFields.map(([key]) => [key, Number(settings[key])]));
+      numericSettings.queue_strategy = settings.queue_strategy ?? 'fifo';
       await Promise.all([
         json('/api/dialer/settings', { method: 'PATCH', body: JSON.stringify(numericSettings) }),
         json('/api/dialer/schedule', { method: 'PUT', body: JSON.stringify(schedule) }),
@@ -48,6 +49,7 @@ export function OperationSettingsPage({ status, onChanged }: { status: AnyRow; o
   const updateException = (index: number, field: string, value: string | boolean) => setSchedule((current: AnyRow) => ({ ...current, exceptions: current.exceptions.map((item: AnyRow, itemIndex: number) => itemIndex === index ? { ...item, [field]: value, ...(field === 'is_closed' && value ? { start_time: undefined, end_time: undefined } : {}) } : item) }));
 
   return <form onSubmit={save}>
+    <Panel className="queue-strategy-panel"><SectionHeader title="Ordem da fila" description="Escolha como os leads elegíveis entram na próxima chamada." /><label className="operation-timezone"><span>Estratégia</span><select aria-label="Estratégia da fila" value={settings.queue_strategy ?? 'fifo'} onChange={(event) => setSettings((current) => ({ ...current, queue_strategy: event.target.value }))}><option value="fifo">FIFO · mais antigos primeiro</option><option value="lifo">LIFO · mais recentes primeiro</option><option value="priority_fifo">Prioridade + FIFO</option></select></label></Panel>
     <div className="page-heading"><div><span className="eyebrow">OPERAÇÃO</span><h1>Configurações do discador</h1><p>Defina limites, fuso e os únicos horários em que chamadas podem começar.</p></div><Badge tone={status.schedule?.allowed ? 'success' : 'warning'}>{status.schedule?.allowed ? 'Dentro do horário' : 'Fora do horário'}</Badge></div>
     {message && <div className="alert" role="status"><span>{message}</span><button type="button" onClick={() => setMessage('')}>×</button></div>}
     <Panel><SectionHeader title="Limites de discagem" description="Controles de concorrência, tentativas e proteção das linhas." /><div className="operation-settings-grid">{settingFields.map(([key, label, min, max]) => <label key={key}><span>{label}</span><input type="number" min={min} max={max} required value={settings[key] ?? ''} onChange={(event) => setSettings((current) => ({ ...current, [key]: event.target.value }))} /></label>)}</div></Panel>

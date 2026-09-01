@@ -139,9 +139,21 @@ POST /api/auth/refresh
 POST /api/auth/logout
 GET  /api/auth/me
 POST /api/auth/ws-ticket
+POST /api/auth/operations-ws-ticket
+GET  /api/dialer/operations
 ```
 
-O canal operacional do SDR usa WebSocket em `/ws/tenants/:tenantId/sdr`; o ticket temporário é obtido pela API antes da conexão.
+Entrada automática de leads:
+
+```text
+POST /api/v1/lead-integrations/:publicId/webhook
+POST /api/v1/lead-integrations/:publicId/leads
+POST /api/v1/lead-integrations/:publicId/leads/batch
+```
+
+As credenciais são geradas em Configuração > Integrações. Envie `x-zapliga-api-key` (ou `Authorization: Bearer`) e, opcionalmente, `idempotency-key`. Webhooks também podem usar `x-zapliga-timestamp` e `x-zapliga-signature` com HMAC-SHA256 do conteúdo bruto. O endpoint retorna `202` após registrar o evento; o processamento assíncrono valida, deduplica e coloca o lead na pasta configurada.
+
+O canal operacional do SDR usa WebSocket em `/ws/tenants/:tenantId/sdr`; o ticket temporário é obtido pela API antes da conexão. Líderes e super admins observam a operação em tempo real por `/ws/tenants/:tenantId/operations`, usando o ticket de `operations-ws-ticket`. O canal de observação é somente leitura e envia um snapshot inicial seguido de eventos de invalidação.
 
 ## Comandos úteis
 

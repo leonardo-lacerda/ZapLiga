@@ -2,6 +2,7 @@ import 'dotenv/config';
 import { NestFactory } from '@nestjs/core';
 import { ValidationPipe } from '@nestjs/common';
 import helmet from 'helmet';
+import express from 'express';
 import { AppModule } from './app.module';
 import { SdrGateway } from './modules/sdrs/sdr.gateway';
 import { initSentry, Sentry } from './infrastructure/sentry/sentry';
@@ -24,7 +25,11 @@ process.on('unhandledRejection', (reason) => {
 });
 
 async function bootstrap() {
-  const app = await NestFactory.create(AppModule);
+  const app = await NestFactory.create(AppModule, { bodyParser: false });
+  app.use(express.json({
+    limit: '5mb',
+    verify: (request: any, _response, buffer) => { request.rawBody = Buffer.from(buffer); },
+  }));
   app.useGlobalFilters(new AllExceptionsFilter());
   // Let Nest run OnModuleDestroy hooks on deploys/restarts so the dialer can
   // close media sockets and persist a clean terminal state for active calls.
@@ -56,4 +61,9 @@ async function bootstrap() {
   app.get(SdrGateway).attach(app.getHttpServer());
   console.log(`ZapLiga API listening on http://localhost:${port}`);
 }
-void bootstrap();
+void bootstrap().catch((error) => {
+  Sentry.captureException(error);
+  const message = error instanceof Error ? error.message : String(error);
+  console.error(`Bootstrap failed: ${message.slice(0, 300)}`);
+  process.exitCode = 1;
+});

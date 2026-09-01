@@ -65,4 +65,11 @@ export class AuthController {
     return this.auth.createWebsocketTicket(user.id, user.tenantMembership.tenantId);
   }
 
+  @Post('/operations-ws-ticket')
+  @UseGuards(AuthGuard, TenantMembershipGuard, RolesGuard)
+  @Roles('leader', 'super_admin')
+  operationsWebsocketTicket(@CurrentUser() user: any) {
+    return this.auth.createWebsocketTicket(user.id, user.tenantMembership.tenantId);
+  }
+
 }

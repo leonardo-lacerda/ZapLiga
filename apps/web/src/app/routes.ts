@@ -10,6 +10,7 @@ export const tabPaths: Record<TabKey, string> = {
   compliance: '/app/nao-contato',
   privacy: '/app/privacidade',
   settings: '/app/configuracoes',
+  integrations: '/app/integracoes',
   profile: '/app/meu-perfil',
   sdrs: '/app/sdrs',
   calls: '/app/historico',

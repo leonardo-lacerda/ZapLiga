@@ -100,7 +100,13 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
     void this.heartbeat();
     this.heartbeatTimer = setInterval(() => void this.heartbeat(), 10_000);
     this.timer = setInterval(() => void this.tickAllTenants(), 1000);
-    void this.resetStaleSdrPresence().then(() => this.recoverInterruptedCalls()).then(() => this.tickAllTenants());
+    void this.resetStaleSdrPresence()
+      .then(() => this.recoverInterruptedCalls())
+      .then(() => this.tickAllTenants())
+      .catch((error) => {
+        this.logger.error(`Dialer recovery failed: ${safeOperationalError(error)}`);
+        Sentry.captureException(error);
+      });
   }
 
   async onModuleDestroy() {
@@ -207,6 +213,7 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
       if (withinSchedule) await this.tick(tenantId);
     }
     this.gateway.broadcast({ type: 'sdr_state_changed', sdrId, state, available }, tenantId);
+    this.notifyOperationsChanged(tenantId, 'sdr_state_changed', { kind: 'sdr_state_changed', sdrId, state, available });
     return this.getSdrState(sdrId, tenantId);
   }
 
@@ -234,7 +241,7 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
       if (!Number.isFinite(callbackAt.getTime()) || callbackAt.getTime() <= Date.now()) throw new Error('Informe uma data futura para o retorno');
     }
     return this.db.transaction(async (client) => {
-      const pauseResult = await client.query(`SELECT p.*, c.lead_id FROM sdr_pauses p LEFT JOIN calls c ON c.tenant_id = p.tenant_id AND c.id = p.call_id WHERE p.tenant_id = $1 AND p.id = $2 AND p.sdr_id = $3 FOR UPDATE OF p`, [tenantId, pauseId, sdrId]);
+      const pauseResult = await client.query(`SELECT p.*, c.lead_id, l.name AS lead_name, l.phone AS lead_phone FROM sdr_pauses p LEFT JOIN calls c ON c.tenant_id = p.tenant_id AND c.id = p.call_id LEFT JOIN leads l ON l.tenant_id = c.tenant_id AND l.id = c.lead_id WHERE p.tenant_id = $1 AND p.id = $2 AND p.sdr_id = $3 FOR UPDATE OF p`, [tenantId, pauseId, sdrId]);
       const pause = pauseResult.rows[0];
       if (!pause) throw new Error('Pausa não encontrada');
       if (pause.ended_at) throw new Error('Esta pausa já foi encerrada');
@@ -282,14 +289,26 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
       }
       const nextState = continueAvailable ? 'available' : 'offline';
       await client.query(`UPDATE sdrs SET available = $4, state = $5, current_pause_id = NULL WHERE tenant_id = $1 AND id = $2 AND current_pause_id = $3`, [tenantId, sdrId, pauseId, continueAvailable, nextState]);
-      return { id: pauseId, ended_at: endedAt.toISOString(), duration_seconds: Math.max(0, Math.floor((endedAt.getTime() - new Date(pause.started_at).getTime()) / 1000)), call_result: callResult, pipeline_stage: pipelineStage, notes, callback_at: callbackAt?.toISOString() ?? null, callback_created_id: createdCallbackId, callbacks_completed: completedCallbackIds, available: continueAvailable, state: nextState };
+      return { id: pauseId, ended_at: endedAt.toISOString(), duration_seconds: Math.max(0, Math.floor((endedAt.getTime() - new Date(pause.started_at).getTime()) / 1000)), call_result: callResult, pipeline_stage: pipelineStage, notes, lead_name: pause.lead_name, callback_at: callbackAt?.toISOString() ?? null, callback_created_id: createdCallbackId, callbacks_completed: completedCallbackIds, available: continueAvailable, state: nextState };
     }).then(async (result) => {
       if (this.audit && result.callback_created_id) await this.audit.record({ actorUserId: input.actorUserId, tenantId, action: 'callback.created', entityType: 'callback', entityId: result.callback_created_id }).catch(() => undefined);
       if (this.audit) for (const callbackId of result.callbacks_completed) await this.audit.record({ actorUserId: input.actorUserId, tenantId, action: 'callback.completed', entityType: 'callback', entityId: callbackId }).catch(() => undefined);
       this.gateway.sendToSdr(sdrId, { type: 'pause_finished', pauseId, state: result.state, available: result.available });
       this.gateway.broadcast({ type: 'sdr_state_changed', sdrId, state: result.state, available: result.available }, tenantId);
+      this.notifyOperationsChanged(tenantId, result.callback_created_id ? 'lead_rescheduled' : 'pause_finished', {
+        kind: result.callback_created_id ? 'lead_rescheduled' : 'pause_finished',
+        sdrId,
+        leadName: result.lead_name,
+        callbackAt: result.callback_at,
+        state: result.state,
+        available: result.available,
+      });
       return result;
     });
+  }
+
+  private notifyOperationsChanged(tenantId: string, reason: string, activity?: Record<string, unknown>) {
+    this.gateway.broadcastToOperations?.({ type: 'operations_changed', reason, at: new Date().toISOString(), activity }, tenantId);
   }
 
   private log(message: string, level: 'info' | 'warning' | 'error' = 'info', callId?: string, tenantId = legacyTenantId()) {
@@ -305,7 +324,7 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
   async updateSettings(input: Record<string, unknown>, tenantId = legacyTenantId()) {
     const allowed = [
       'global_max_concurrent_calls', 'max_attempts_per_lead', 'retry_delay_minutes',
-      'ring_timeout_seconds', 'default_number_cooldown_seconds',
+      'ring_timeout_seconds', 'default_number_cooldown_seconds', 'queue_strategy',
     ];
     const values: unknown[] = [];
     const sets: string[] = [];
@@ -325,6 +344,7 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
     if (this.schedule) await this.schedule.assertAllowed(tenantId);
     await this.db.query('UPDATE dialer_settings SET running = true WHERE tenant_id = $1', [tenantId]);
     this.log('Discador iniciado', 'info', undefined, tenantId);
+    this.notifyOperationsChanged(tenantId, 'dialer_status_changed', { kind: 'dialer_status_changed', running: true });
     await this.tick(tenantId);
     return this.getStatus(tenantId);
   }
@@ -332,6 +352,7 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
   async pause(tenantId = legacyTenantId()) {
     await this.db.query('UPDATE dialer_settings SET running = false WHERE tenant_id = $1', [tenantId]);
     this.log('Discador pausado', 'info', undefined, tenantId);
+    this.notifyOperationsChanged(tenantId, 'dialer_status_changed', { kind: 'dialer_status_changed', running: false });
     return this.getStatus(tenantId);
   }
 
@@ -465,6 +486,29 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
     return result;
   }
 
+  async getOperationsSnapshot(tenantId = legacyTenantId()) {
+    const [status, today] = await Promise.all([
+      this.getStatus(tenantId),
+      this.db.query(`
+        SELECT COUNT(*)::int AS attempts_today,
+          COUNT(DISTINCT c.lead_id) FILTER (WHERE c.connected_at IS NOT NULL)::int AS leads_attended_today
+        FROM calls c
+        JOIN tenants t ON t.id = c.tenant_id
+        WHERE c.tenant_id = $1
+          AND c.created_at >= date_trunc('day', now() AT TIME ZONE COALESCE(NULLIF(t.timezone, ''), 'UTC')) AT TIME ZONE COALESCE(NULLIF(t.timezone, ''), 'UTC')
+          AND c.created_at < (date_trunc('day', now() AT TIME ZONE COALESCE(NULLIF(t.timezone, ''), 'UTC')) + interval '1 day') AT TIME ZONE COALESCE(NULLIF(t.timezone, ''), 'UTC')
+      `, [tenantId]),
+    ]);
+    const row = today.rows[0] ?? {};
+    return {
+      ...status,
+      generated_at: new Date().toISOString(),
+      attempts_today: Number(row.attempts_today ?? 0),
+      leads_attended_today: Number(row.leads_attended_today ?? 0),
+      simultaneous_limit: Number(status.settings?.global_max_concurrent_calls ?? 0),
+    };
+  }
+
   private async getStatusFresh(tenantId = legacyTenantId(), from?: string, to?: string) {
     const settings = await this.getSettings(tenantId);
     const scheduleState = this.schedule ? await this.schedule.evaluate(tenantId, new Date(), true) : { allowed: true, reason: 'schedule_service_unavailable' };
@@ -525,7 +569,7 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
         LIMIT 12
       `, [tenantId, settings.max_attempts_per_lead]),
       this.db.query(`
-        SELECT c.id, c.status, c.attempt_number, c.created_at, c.started_at, c.connected_at,
+        SELECT c.id, c.sdr_id, c.lead_id, c.number_id, c.status, c.attempt_number, c.source, c.created_at, c.started_at, c.connected_at,
           GREATEST(0, EXTRACT(EPOCH FROM (now() - COALESCE(c.connected_at, c.started_at, c.created_at)))::int) AS elapsed_seconds,
           l.name AS lead_name, l.phone AS lead_phone, n.label AS number_label, s.name AS sdr_name
         FROM calls c
@@ -540,11 +584,19 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
           p.pause_type, p.started_at AS pause_started_at, p.call_id AS pause_call_id,
           c.lead_id AS pause_lead_id, l.name AS pause_lead_name, l.phone AS pause_lead_phone,
           c.connected_at AS pause_call_started_at,
-          CASE WHEN p.started_at IS NULL THEN 0 ELSE GREATEST(0, EXTRACT(EPOCH FROM (now() - p.started_at))::int) END AS pause_elapsed_seconds
+          CASE WHEN p.started_at IS NULL THEN 0 ELSE GREATEST(0, EXTRACT(EPOCH FROM (now() - p.started_at))::int) END AS pause_elapsed_seconds,
+          active_call.id AS active_call_id, active_call.status AS active_call_status,
+          active_call.started_at AS active_call_started_at, active_call.connected_at AS active_call_connected_at,
+          GREATEST(0, EXTRACT(EPOCH FROM (now() - COALESCE(active_call.connected_at, active_call.started_at, active_call.created_at)))::int) AS active_call_elapsed_seconds,
+          active_lead.id AS active_lead_id, active_lead.name AS active_lead_name, active_lead.phone AS active_lead_phone,
+          active_number.id AS active_number_id, active_number.label AS active_number_label
         FROM sdrs s
         LEFT JOIN sdr_pauses p ON p.tenant_id = s.tenant_id AND p.id = s.current_pause_id AND p.ended_at IS NULL
         LEFT JOIN calls c ON c.tenant_id = s.tenant_id AND c.id = p.call_id
         LEFT JOIN leads l ON l.tenant_id = c.tenant_id AND l.id = c.lead_id
+        LEFT JOIN calls active_call ON active_call.tenant_id = s.tenant_id AND active_call.sdr_id = s.id AND active_call.status IN ('reserved', 'dialing', 'media_active')
+        LEFT JOIN leads active_lead ON active_lead.tenant_id = active_call.tenant_id AND active_lead.id = active_call.lead_id
+        LEFT JOIN whatsapp_numbers active_number ON active_number.id = active_call.number_id
         WHERE s.tenant_id = $1
         ORDER BY s.name
       `, [tenantId]),
@@ -799,7 +851,10 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
           ), eligible AS (
             SELECT l.*, f.name AS folder_name, f.sort_order AS folder_sort_order,
               af.folder_index, af.folder_count,
-              ROW_NUMBER() OVER (PARTITION BY l.folder_id ORDER BY l.next_eligible_at ASC, l.created_at ASC)::int AS folder_rank
+              ROW_NUMBER() OVER (PARTITION BY l.folder_id
+                ORDER BY CASE WHEN $5 = 'priority_fifo' THEN l.queue_priority ELSE 0 END DESC,
+                  l.next_eligible_at ASC,
+                  CASE WHEN $5 = 'lifo' THEN -l.queue_sequence ELSE l.queue_sequence END ASC)::int AS folder_rank
             FROM leads l
             JOIN active_folders af ON af.id = l.folder_id
             JOIN lead_folders f ON f.tenant_id = l.tenant_id AND f.id = l.folder_id
@@ -815,9 +870,12 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
           )
           SELECT * FROM eligible
           ORDER BY ((folder_index - ($4 % folder_count) + folder_count) % folder_count) ASC,
-            folder_rank ASC, next_eligible_at ASC, created_at ASC
+            folder_rank ASC,
+            CASE WHEN $5 = 'priority_fifo' THEN queue_priority ELSE 0 END DESC,
+            next_eligible_at ASC,
+            CASE WHEN $5 = 'lifo' THEN -queue_sequence ELSE queue_sequence END ASC
           LIMIT 25
-        `, [tenantId, settings.max_attempts_per_lead, Number(settings.dialer_round ?? 1), Number(settings.folder_rotation_cursor ?? 0)]),
+        `, [tenantId, settings.max_attempts_per_lead, Number(settings.dialer_round ?? 1), Number(settings.folder_rotation_cursor ?? 0), settings.queue_strategy ?? 'fifo']),
         this.db.query(`SELECT count(*)::int AS count FROM lead_folders WHERE tenant_id = $1 AND is_active = true`, [tenantId]),
       ]);
 
@@ -904,14 +962,20 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
   }
 
   private async syncNumberStatuses(tenantId = legacyTenantId()) {
-    const result = await this.db.query("SELECT id, tenant_id, waxum_session_id FROM whatsapp_numbers WHERE tenant_id = $1 AND status <> 'removed'", [tenantId]);
+    const result = await this.db.query("SELECT id, tenant_id, waxum_session_id, status FROM whatsapp_numbers WHERE tenant_id = $1 AND status <> 'removed'", [tenantId]);
     await Promise.all(result.rows.map(async (number) => {
       try {
         const status = normalizeWaxumStatus(await this.waxum.getStatus(number.waxum_session_id));
-        await this.db.query('UPDATE whatsapp_numbers SET status = $1, phone = COALESCE($2, phone) WHERE id = $3 AND tenant_id = $4', [status.status, status.phone, number.id, tenantId]);
+        const updated = await this.db.query('UPDATE whatsapp_numbers SET status = $1, phone = COALESCE($2, phone) WHERE id = $3 AND tenant_id = $4 RETURNING status', [status.status, status.phone, number.id, tenantId]);
+        if (updated.rows[0] && updated.rows[0].status !== number.status) {
+          this.notifyOperationsChanged(tenantId, 'number_status_changed', { kind: 'number_status_changed', numberId: number.id, status: updated.rows[0].status });
+        }
       } catch (error) {
         if ((error as Error & { statusCode?: number }).statusCode === 404) {
-          await this.db.query(`UPDATE whatsapp_numbers SET status = 'disconnected' WHERE id = $1 AND tenant_id = $2`, [number.id, tenantId]);
+          const updated = await this.db.query(`UPDATE whatsapp_numbers SET status = 'disconnected' WHERE id = $1 AND tenant_id = $2 RETURNING status`, [number.id, tenantId]);
+          if (updated.rows[0] && updated.rows[0].status !== number.status) {
+            this.notifyOperationsChanged(tenantId, 'number_status_changed', { kind: 'number_status_changed', numberId: number.id, status: updated.rows[0].status });
+          }
         } else {
           // Waxum may be temporarily unavailable; keep the last status unless
           // the session is definitively missing. A 404 is expected churn, so
@@ -974,6 +1038,12 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
       this.log(isAutomatic ? 'Discagem automática iniciada' : 'Discagem manual iniciada', 'info', callId, tenantId);
       const browser = this.gateway.getSocket(sdr.id);
       this.gateway.sendToSdr(sdr.id, { type: 'call_reserved', callId, lead: isAutomatic ? { id: lead.id } : { id: lead.id, name: lead.name, phone: lead.phone }, number: { id: number.id, label: number.label } });
+      this.gateway.broadcastToOperations?.({
+        type: 'operations_changed',
+        reason: 'call_reserved',
+        at: new Date().toISOString(),
+        activity: { kind: 'call_reserved', callId, sdrId: sdr.id, sdrName: sdr.name, leadId: lead.id, leadName: lead.name },
+      }, tenantId);
       if (browser) void this.attachMedia(callId, sdr.id, browser, tenantId);
       return { callId, status: 'reserved' };
     } catch (error) {
@@ -1021,6 +1091,12 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
       connectedAt: new Date().toISOString(),
       expiresAt: row.offer_expires_at,
     });
+    this.gateway.broadcastToOperations?.({
+      type: 'operations_changed',
+      reason: 'call_started',
+      at: new Date().toISOString(),
+      activity: { kind: 'call_started', callId, sdrId, leadId: row.lead_id, leadName: row.name },
+    }, resource.tenantId);
     if (resource.media?.readyState === WebSocket.OPEN) this.gateway.sendToSdr(sdrId, { type: 'media_open', callId });
   }
 
@@ -1072,7 +1148,7 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
           try { browser.send(JSON.stringify({ type: 'media_open' })); } catch { /* browser disconnected */ }
         }
       });
-      media.on('message', (data, isBinary) => {
+      media.on('message', async (data, isBinary) => {
         // Waxum generates its own call id. It is different from the ZapLiga
         // database id and is the id carried by WhatsApp Accept events.
         if (!isBinary) {
@@ -1118,7 +1194,13 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
         if (firstActiveFrame) {
           if (resource.ringTimeout) clearTimeout(resource.ringTimeout);
           resource.ringTimeout = undefined;
-          void this.db.query(`UPDATE calls SET status = 'media_active', started_at = COALESCE(started_at, now()), connected_at = now() WHERE tenant_id = $1 AND id = $2`, [resource.tenantId, callId]);
+          try {
+            await this.db.query(`UPDATE calls SET status = 'media_active', started_at = COALESCE(started_at, now()), connected_at = now() WHERE tenant_id = $1 AND id = $2`, [resource.tenantId, callId]);
+          } catch (error) {
+            this.logger.error(`Could not persist answered call ${callId}: ${safeOperationalError(error)}`);
+            return;
+          }
+          this.notifyOperationsChanged(resource.tenantId, 'call_media_active', { kind: 'call_media_active', callId, sdrId });
           this.notifyAnswered(callId, sdrId, call.rows[0], resource);
           this.gateway.sendToSdr(sdrId, { type: 'media_active', callId });
           this.log('Cliente aceitou a chamada; áudio liberado para o SDR', 'info', callId);
@@ -1213,6 +1295,7 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
       if (resource.tenantId === tenantId && resource.sdrId === sdrId) await this.finishCall(callId, 'failed', 'sdr_disconnected', false, tenantId);
     }
     await this.db.query(`UPDATE sdrs SET available = false, state = CASE WHEN current_pause_id IS NULL THEN 'offline' ELSE 'post_call' END WHERE tenant_id = $1 AND id = $2`, [tenantId, sdrId]);
+    this.notifyOperationsChanged(tenantId, 'sdr_disconnected', { kind: 'sdr_disconnected', sdrId });
   }
 
   private applyRateLimitBackoff(callId: string, resource: CallResource | undefined, waitSeconds?: number) {
@@ -1247,6 +1330,7 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
     await this.db.query(`UPDATE whatsapp_numbers SET flagged_until = now() + ($1 * interval '1 hour') WHERE id = $2 AND tenant_id = $3`, [hours, numberId, tenantId]);
     this.log(`Uma linha parece bloqueada pelo WhatsApp e foi pausada por ${hours}h para proteger a conta. O discador usará as outras linhas.`, 'error', callId, tenantId);
     this.gateway.broadcast({ type: 'number_flagged', numberId, flaggedHours: hours }, tenantId);
+    this.notifyOperationsChanged(tenantId, 'number_flagged', { kind: 'number_flagged', numberId, flaggedHours: hours });
   }
 
   async finishCall(callId: string, status: string, reason?: string, forceNoRetry = false, tenantId = legacyTenantId()) {
@@ -1273,7 +1357,7 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
         }
         if (resource.media && resource.media.readyState === WebSocket.OPEN) resource.media.close();
       }
-      const call = await this.db.query(`SELECT c.*, s.id AS sdr_id, n.id AS number_id, n.cooldown_seconds, l.attempts, ds.max_attempts_per_lead, ds.retry_delay_minutes FROM calls c JOIN sdrs s ON s.tenant_id = c.tenant_id AND s.id = c.sdr_id JOIN whatsapp_numbers n ON n.id = c.number_id JOIN leads l ON l.tenant_id = c.tenant_id AND l.id = c.lead_id JOIN dialer_settings ds ON ds.tenant_id = c.tenant_id WHERE c.tenant_id = $1 AND c.id = $2`, [tenantId, callId]);
+      const call = await this.db.query(`SELECT c.*, s.id AS sdr_id, s.name AS sdr_name, n.id AS number_id, n.label AS number_label, n.cooldown_seconds, l.name AS lead_name, l.phone AS lead_phone, l.attempts, ds.max_attempts_per_lead, ds.retry_delay_minutes FROM calls c JOIN sdrs s ON s.tenant_id = c.tenant_id AND s.id = c.sdr_id JOIN whatsapp_numbers n ON n.id = c.number_id JOIN leads l ON l.tenant_id = c.tenant_id AND l.id = c.lead_id JOIN dialer_settings ds ON ds.tenant_id = c.tenant_id WHERE c.tenant_id = $1 AND c.id = $2`, [tenantId, callId]);
       if (!call.rows[0]) return;
       const row = call.rows[0];
       if (['completed', 'no_answer', 'failed', 'cancelled'].includes(row.status)) return;
@@ -1310,8 +1394,8 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
             pause_type: pauseResult.rows[0].pause_type,
             started_at: pauseResult.rows[0].started_at,
             call_id: callId,
-            lead_name: row.name,
-            lead_phone: row.phone,
+            lead_name: row.lead_name,
+            lead_phone: row.lead_phone,
             call_started_at: row.connected_at,
             call_duration_seconds: row.connected_at ? Math.max(0, Math.floor((Date.now() - new Date(row.connected_at).getTime()) / 1000)) : 0,
           };
@@ -1336,6 +1420,18 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
       const nextAvailable = requiresPostCall ? false : restoredAvailable;
       this.gateway.sendToSdr(row.sdr_id, { type: 'call_finished', callId, status: finalCallStatus, outcome, pause, state: nextState, available: nextAvailable });
       this.gateway.broadcast({ type: 'sdr_state_changed', sdrId: row.sdr_id, state: nextState, available: nextAvailable, pause }, tenantId);
+      this.notifyOperationsChanged(tenantId, 'call_finished', {
+        kind: requiresPostCall ? 'post_call_started' : retryable ? 'lead_rescheduled' : 'call_finished',
+        callId,
+        sdrId: row.sdr_id,
+        sdrName: row.sdr_name,
+        leadId: row.lead_id,
+        leadName: row.lead_name,
+        outcome,
+        state: nextState,
+        available: nextAvailable,
+        pause: Boolean(pause),
+      });
     } finally {
       this.active.delete(callId);
       this.finishingCalls.delete(callId);
@@ -1376,6 +1472,7 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
       await client.query(`UPDATE sdrs SET available = true, state = 'available', current_pause_id = NULL WHERE tenant_id = $1 AND id = $2`, [tenantId, sdrId]);
     });
     this.gateway.broadcast({ type: 'sdr_state_changed', sdrId, state: 'available', available: true, pause: null }, tenantId);
+    this.notifyOperationsChanged(tenantId, 'sdr_released', { kind: 'sdr_released', sdrId });
     return { ok: true, hadActiveCall, hadOpenPause };
   }
 }

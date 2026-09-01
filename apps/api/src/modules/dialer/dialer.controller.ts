@@ -12,6 +12,7 @@ export class DialerController {
   constructor(private readonly dialer: DialerService, private readonly audit: AuditService, private readonly schedule: DialerScheduleService) {}
 
   @Get(['/api/dialer/status', '/api/tenants/:tenantId/dialer/status']) @Roles('leader', 'super_admin') status(@Query('from') from: string | undefined, @Query('to') to: string | undefined, @CurrentTenant() tenantId: string) { return this.dialer.getStatus(tenantId, from, to); }
+  @Get(['/api/dialer/operations', '/api/tenants/:tenantId/dialer/operations']) @Roles('leader', 'super_admin') operations(@CurrentTenant() tenantId: string) { return this.dialer.getOperationsSnapshot(tenantId); }
   @Get(['/api/dialer/sdr-status', '/api/tenants/:tenantId/dialer/sdr-status']) @Roles('sdr') sdrStatus(@CurrentTenant() tenantId: string, @CurrentUser() user: any) { return this.dialer.getSdrStatus(tenantId, user.id); }
   @Get(['/api/dialer/sdr-metrics', '/api/tenants/:tenantId/dialer/sdr-metrics']) @Roles('sdr') sdrMetrics(@Query('from') from: string | undefined, @Query('to') to: string | undefined, @CurrentTenant() tenantId: string, @CurrentUser() user: any) { return this.dialer.getSdrMetrics(tenantId, user.id, from, to); }
   @Get(['/api/dialer/logs', '/api/tenants/:tenantId/dialer/logs']) @Roles('leader', 'super_admin') logs(@CurrentTenant() tenantId: string) { return this.dialer.getLogs(tenantId); }

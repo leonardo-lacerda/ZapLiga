@@ -17,6 +17,7 @@ export class SdrGateway implements OnModuleDestroy {
   private readonly controls = new Map<string, WebSocket>();
   private readonly sessions = new Map<WebSocket, string>();
   private readonly tenantBySdr = new Map<string, string>();
+  private readonly operations = new Map<WebSocket, { tenantId: string; userId: string }>();
   private server?: WebSocketServer;
 
   constructor(private readonly db: DatabaseService, private readonly auth: AuthService, @Inject(forwardRef(() => DialerService)) private readonly dialer: DialerService) {}
@@ -32,19 +33,23 @@ export class SdrGateway implements OnModuleDestroy {
       void this.auth.consumeWebsocketTicket(ticket).then((identity) => {
         if (!identity) { socket.destroy(); return; }
         if (route.tenantId && decodeURIComponent(route.tenantId) !== identity.tenantId) { socket.destroy(); return; }
-        this.server?.handleUpgrade(request, socket, head, (ws) => route.kind === 'control'
-          ? this.handleControl(ws, identity)
-          : this.handleMedia(ws, decodeURIComponent(route.sdrId), decodeURIComponent(route.callId), identity));
+        this.server?.handleUpgrade(request, socket, head, (ws) => {
+          if (route.kind === 'control') return this.handleControl(ws, identity);
+          if (route.kind === 'operations') return void this.handleOperations(ws, identity);
+          return this.handleMedia(ws, decodeURIComponent(route.sdrId), decodeURIComponent(route.callId), identity);
+        });
       }).catch(() => socket.destroy());
     });
   }
 
-  onModuleDestroy() { this.server?.close(); }
+  onModuleDestroy() { this.closeAll(); this.server?.close(); }
   closeAll() {
     for (const socket of this.controls.values()) socket.close(1001, 'servidor reiniciando');
+    for (const socket of this.operations.keys()) socket.close(1001, 'servidor reiniciando');
     this.controls.clear();
     this.sessions.clear();
     this.tenantBySdr.clear();
+    this.operations.clear();
   }
   isConnected(sdrId: string) { return this.controls.get(sdrId)?.readyState === WebSocket.OPEN; }
   getSocket(sdrId: string) { const socket = this.controls.get(sdrId); return socket?.readyState === WebSocket.OPEN ? socket : undefined; }
@@ -62,11 +67,49 @@ export class SdrGateway implements OnModuleDestroy {
     }
   }
 
+  broadcastToOperations(message: unknown, tenantId = legacyTenantId()) {
+    const payload = JSON.stringify(message);
+    for (const [socket, observer] of this.operations.entries()) {
+      if (observer.tenantId !== tenantId) continue;
+      if (socket.readyState === WebSocket.OPEN) {
+        try { socket.send(payload); } catch (error) { this.logger.debug(`Operations broadcast skipped: ${String(error)}`); }
+      }
+    }
+  }
+
   private handleControl(socket: WebSocket, identity: { userId: string; tenantId: string; name: string; platformRole: string }) {
     socket.on('message', (raw, isBinary) => { if (!isBinary) void this.handleControlMessage(socket, raw.toString(), identity); });
     socket.on('close', () => void this.controlClosed(socket));
     socket.on('error', () => void this.controlClosed(socket));
     try { socket.send(JSON.stringify({ type: 'connected' })); } catch { /* socket closed during handshake */ }
+  }
+
+  private async handleOperations(socket: WebSocket, identity: { userId: string; tenantId: string; name: string; platformRole: string }) {
+    if (identity.platformRole !== 'super_admin') {
+      const membership = await this.db.query(`
+        SELECT role FROM tenant_memberships
+        WHERE tenant_id = $1 AND user_id = $2 AND status = 'active'
+        LIMIT 1
+      `, [identity.tenantId, identity.userId]);
+      if (membership.rows[0]?.role !== 'leader') {
+        socket.close(1008, 'somente lideres podem observar a operacao');
+        return;
+      }
+    }
+
+    this.operations.set(socket, { tenantId: identity.tenantId, userId: identity.userId });
+    const cleanup = () => this.operations.delete(socket);
+    socket.on('close', cleanup);
+    socket.on('error', cleanup);
+    try {
+      socket.send(JSON.stringify({ type: 'operations_connected' }));
+      const snapshot = await this.dialer.getOperationsSnapshot(identity.tenantId);
+      if (socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ type: 'operations_snapshot', snapshot }));
+    } catch (error) {
+      this.logger.warn(`Falha ao preparar snapshot operacional: ${String(error)}`);
+      try { socket.close(1011, 'snapshot indisponivel'); } catch { /* socket closed */ }
+      cleanup();
+    }
   }
 
   private async handleControlMessage(socket: WebSocket, raw: string, identity: { userId: string; tenantId: string; name: string; platformRole: string }) {
