@@ -147,17 +147,11 @@ jobs:
 
           docker compose up -d postgres postgres-backup redis nats waxum
 
-          # Resolve the exact image reference Compose will build/run for each
-          # instance (rather than assuming a project-name convention), and
-          # normalize a missing tag to :latest so the tag operations below
-          # always have a concrete reference to work with.
-          resolve_image() {
-            local image
-            image=$(docker compose config --images "$1")
-            case "$image" in *:*) echo "$image" ;; *) echo "$image:latest" ;; esac
-          }
-          IMAGE_API_A=$(resolve_image api-a)
-          IMAGE_API_B=$(resolve_image api-b)
+          # These references are explicit in docker-compose.yml. Keeping the
+          # names deterministic prevents `docker compose config --images`
+          # from returning every service image as one invalid tag.
+          IMAGE_API_A=zapliga-api-a:latest
+          IMAGE_API_B=zapliga-api-b:latest
           SHA_TAG="${GITHUB_SHA:0:12}"
 
           # Snapshot whatever is currently live as the rollback target BEFORE

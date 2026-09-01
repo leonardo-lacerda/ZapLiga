@@ -151,6 +151,7 @@ services:
 
   api-a:
     <<: *api-common
+    image: zapliga-api-a:latest
     environment:
       <<: *api-environment
       API_INSTANCE_ID: api-a
@@ -159,6 +160,7 @@ services:
 
   api-b:
     <<: *api-common
+    image: zapliga-api-b:latest
     environment:
       <<: *api-environment
       API_INSTANCE_ID: api-b
