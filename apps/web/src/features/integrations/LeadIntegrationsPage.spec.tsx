@@ -4,16 +4,32 @@ import { server } from '../../test/setup';
 import { LeadIntegrationsPage } from './LeadIntegrationsPage';
 
 describe('LeadIntegrationsPage', () => {
-  it('creates an integration and shows one-time credentials', async () => {
+  it('reveals the setup progressively and creates an integration with one-time credentials', async () => {
     server.use(
       http.get('http://localhost:3000/api/tenants/tenant-1/lead-integrations', () => HttpResponse.json([])),
       http.get('http://localhost:3000/api/tenants/tenant-1/lead-ingestion/events', () => HttpResponse.json({ items: [], total: 0 })),
       http.post('http://localhost:3000/api/tenants/tenant-1/lead-integrations', () => HttpResponse.json({ api_key: 'zpl_in_test', signing_secret: 'zpl_sig_test', webhook_url: '/api/v1/lead-integrations/li_test/webhook' })),
     );
+
     render(<LeadIntegrationsPage tenantId="tenant-1" folders={[{ id: 'folder-1', name: 'Lista principal', is_active: true }]} />);
-    await screen.findByText('Nenhuma integração configurada');
-    expect(screen.getByText(/http:\/\/localhost:3000\/api\/v1\/lead-integrations\/\{public_id\}\/leads/)).toBeInTheDocument();
+
+    expect(screen.getByRole('heading', { name: 'Escolha a origem' })).toBeInTheDocument();
+    expect(screen.queryByText('Nenhuma integração configurada')).not.toBeInTheDocument();
+    expect(screen.queryByText('API key')).not.toBeInTheDocument();
+
+      fireEvent.click(screen.getByRole('button', { name: /Ver integrações/ }));
+    expect(await screen.findByText('Nenhuma entrada criada ainda')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Continuar' }));
+    expect(screen.getByRole('heading', { name: 'Configure o destino' })).toBeInTheDocument();
+
     fireEvent.change(screen.getByPlaceholderText('Nome da integração'), { target: { value: 'CRM principal' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Continuar' }));
+    expect(screen.getByRole('heading', { name: 'Ajuste as regras' })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Continuar' }));
+    expect(screen.getByRole('heading', { name: 'Finalize com segurança' })).toBeInTheDocument();
+
     fireEvent.click(screen.getByRole('button', { name: 'Gerar credenciais' }));
     expect(await screen.findByText('Credenciais prontas')).toBeInTheDocument();
     expect(screen.getByDisplayValue('zpl_in_test')).toBeInTheDocument();

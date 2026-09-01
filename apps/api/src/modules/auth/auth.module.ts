@@ -8,12 +8,13 @@ import { AuthGuard, RolesGuard, TenantMembershipGuard } from './auth.guards';
 import { AuthService } from './auth.service';
 import { AccountMailer } from './account-mailer';
 import { AccountController } from './account.controller';
+import { AccountSwitcherService } from './account-switcher.service';
 
 @Global()
 @Module({
   imports: [JwtModule.register({ secret: process.env.JWT_ACCESS_SECRET ?? 'dev-only-change-this-secret' }), RedisModule, forwardRef(() => UsersModule), forwardRef(() => AuditModule)],
   controllers: [AuthController, AccountController],
-  providers: [AuthService, AuthGuard, RolesGuard, TenantMembershipGuard, AccountMailer],
+  providers: [AuthService, AccountSwitcherService, AuthGuard, RolesGuard, TenantMembershipGuard, AccountMailer],
   exports: [AuthService, AuthGuard, RolesGuard, TenantMembershipGuard],
 })
 export class AuthModule {}

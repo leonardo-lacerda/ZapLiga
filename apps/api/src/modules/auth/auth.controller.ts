@@ -1,14 +1,16 @@
-import { Body, Controller, Get, Post, Req, Res, ServiceUnavailableException, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, Post, Req, Res, ServiceUnavailableException, UseGuards } from '@nestjs/common';
 import { Request, Response } from 'express';
 import { AuthGuard, CurrentUser, Roles, RolesGuard, TenantMembershipGuard } from './auth.guards';
 import { LoginDto } from './dto/login.dto';
 import { RegisterOrganizerDto } from './dto/register-organizer.dto';
 import { AuthService } from './auth.service';
+import { AccountSwitcherService } from './account-switcher.service';
+import { AddAccountDto } from './dto/add-account.dto';
 import { ForgotPasswordDto, ResendVerificationDto, ResetPasswordDto, TokenDto } from './dto/account-lifecycle.dto';
 
 @Controller('/api/auth')
 export class AuthController {
-  constructor(private readonly auth: AuthService) {}
+  constructor(private readonly auth: AuthService, private readonly accounts: AccountSwitcherService) {}
 
   @Post('/login')
   async login(@Body() body: LoginDto, @Req() request: Request, @Res({ passthrough: true }) response: Response) {
@@ -38,6 +40,31 @@ export class AuthController {
   @Post('/email/verify') verifyEmail(@Body() body: TokenDto, @Req() request: Request) { return this.auth.verifyEmail(body.token, request); }
   @Post('/email/resend-verification') resendVerification(@Body() body: ResendVerificationDto, @Req() request: Request) { return this.auth.resendVerification(body.email, request); }
   @Get('/legal-documents') legalDocuments() { return this.auth.legalDocuments(); }
+
+  @Get('/accounts')
+  @UseGuards(AuthGuard)
+  listAccounts(@CurrentUser() user: any, @Req() request: Request, @Res({ passthrough: true }) response: Response) {
+    return this.accounts.list(user.id, request, response);
+  }
+
+  @Post('/accounts/add')
+  @UseGuards(AuthGuard)
+  async addAccount(@Body() body: AddAccountDto, @CurrentUser() user: any, @Req() request: Request, @Res({ passthrough: true }) response: Response) {
+    const result = await this.accounts.add(user.id, body.email, body.password, request, response);
+    return result;
+  }
+
+  @Post('/accounts/:accountId/switch')
+  @UseGuards(AuthGuard)
+  async switchAccount(@Param('accountId') accountId: string, @CurrentUser() user: any, @Req() request: Request, @Res({ passthrough: true }) response: Response) {
+    return this.accounts.switch(user.id, accountId, request, response);
+  }
+
+  @Delete('/accounts/:accountId')
+  @UseGuards(AuthGuard)
+  unlinkAccount(@Param('accountId') accountId: string, @CurrentUser() user: any, @Req() request: Request) {
+    return this.accounts.remove(user.id, accountId, request);
+  }
 
   @Post('/logout')
   async logout(@Req() request: Request, @Res({ passthrough: true }) response: Response) {

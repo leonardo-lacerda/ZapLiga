@@ -19,8 +19,18 @@ export type AuthSession = {
   pendingLegalDocuments?: Array<{ id: string; document_type: string; version: string; title: string; url: string }>;
 };
 
+export type SavedAccount = {
+  id: string;
+  name: string;
+  email: string;
+  platformRole: 'user' | 'super_admin';
+  lastUsedAt?: string | null;
+  current: boolean;
+};
+
 type AuthContextValue = {
   session: AuthSession | null;
+  savedAccounts: SavedAccount[];
   loading: boolean;
   login: (email: string, password: string) => Promise<void>;
   register: (input: { name: string; email: string; password: string; companyName: string; companySlug?: string; legalAccepted: boolean }) => Promise<void>;
@@ -28,6 +38,9 @@ type AuthContextValue = {
   logout: () => Promise<void>;
   activeTenantId: string;
   selectTenant: (tenantId: string) => void;
+  switchAccount: (accountId: string) => Promise<void>;
+  addAccount: (email: string, password: string) => Promise<void>;
+  removeSavedAccount: (accountId: string) => Promise<void>;
   reload: () => Promise<void>;
 };
 
@@ -35,6 +48,7 @@ const AuthContext = createContext<AuthContextValue | null>(null);
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [session, setSession] = useState<AuthSession | null>(null);
+  const [savedAccounts, setSavedAccounts] = useState<SavedAccount[]>([]);
   const [activeTenantId, setActiveTenantState] = useState('');
   const [loading, setLoading] = useState(true);
   const sessionRef = useRef<AuthSession | null>(null);
@@ -66,13 +80,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         // Keep an already authenticated session during a transient network or
         // server failure. The next interval/401 will retry the refresh.
         if (refreshFailureReason() === 'transient' && sessionRef.current) return;
-        setSession(null);
+        setSession(null); setSavedAccounts([]);
         return;
       }
       applySession(await json('/api/auth/me', undefined, false));
+      setSavedAccounts(await json('/api/auth/accounts', undefined, false));
     } catch {
       clearAccessToken();
-      setSession(null);
+      setSession(null); setSavedAccounts([]);
     }
   }, [applySession]);
 
@@ -117,25 +132,55 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     const result = await json('/api/auth/login', { method: 'POST', body: JSON.stringify({ email, password }) });
     setAccessToken(result.accessToken);
     applySession(await json('/api/auth/me', undefined, false));
+    setSavedAccounts(await json('/api/auth/accounts', undefined, false));
   }, [applySession]);
 
   const register = useCallback(async (input: { name: string; email: string; password: string; companyName: string; companySlug?: string; legalAccepted: boolean }) => {
     const result = await json('/api/auth/register', { method: 'POST', body: JSON.stringify(input) });
     setAccessToken(result.accessToken);
     applySession(await json('/api/auth/me', undefined, false));
+    setSavedAccounts(await json('/api/auth/accounts', undefined, false));
   }, [applySession]);
 
   const acceptInvite = useCallback(async (token: string, name: string, password: string) => {
     const result = await json(`/api/invitations/${encodeURIComponent(token)}/accept`, { method: 'POST', body: JSON.stringify({ name, password }) });
     setAccessToken(result.accessToken);
     applySession(await json('/api/auth/me', undefined, false));
+    setSavedAccounts(await json('/api/auth/accounts', undefined, false));
   }, [applySession]);
 
-  const logout = useCallback(async () => {
-    try { await json('/api/auth/logout', { method: 'POST' }, false); } finally { clearAccessToken(); clearActiveTenantId(); setActiveTenantState(''); setSession(null); }
+  const switchAccount = useCallback(async (accountId: string) => {
+    if (shouldRefreshAccessToken(5)) await refreshAccessToken();
+    const result = await json(`/api/auth/accounts/${encodeURIComponent(accountId)}/switch`, { method: 'POST' });
+    setAccessToken(result.accessToken);
+    clearActiveTenantId();
+    setActiveTenantState('');
+    const nextSession = await json('/api/auth/me', undefined, false);
+    applySession(nextSession);
+    setSavedAccounts(await json('/api/auth/accounts', undefined, false));
+  }, [applySession]);
+
+  const addAccount = useCallback(async (email: string, password: string) => {
+    if (shouldRefreshAccessToken(5)) await refreshAccessToken();
+    const result = await json('/api/auth/accounts/add', { method: 'POST', body: JSON.stringify({ email, password }) });
+    setAccessToken(result.accessToken);
+    clearActiveTenantId();
+    setActiveTenantState('');
+    applySession(await json('/api/auth/me', undefined, false));
+    setSavedAccounts(await json('/api/auth/accounts', undefined, false));
+  }, [applySession]);
+
+  const removeSavedAccount = useCallback(async (accountId: string) => {
+    if (shouldRefreshAccessToken(5)) await refreshAccessToken();
+    await json(`/api/auth/accounts/${encodeURIComponent(accountId)}`, { method: 'DELETE' });
+    setSavedAccounts((current) => current.filter((account) => account.id !== accountId));
   }, []);
 
-  const value = useMemo(() => ({ session, loading, login, register, acceptInvite, logout, activeTenantId, selectTenant, reload }), [session, loading, login, register, acceptInvite, logout, activeTenantId, selectTenant, reload]);
+  const logout = useCallback(async () => {
+    try { await json('/api/auth/logout', { method: 'POST' }, false); } finally { clearAccessToken(); clearActiveTenantId(); setActiveTenantState(''); setSession(null); setSavedAccounts([]); }
+  }, []);
+
+  const value = useMemo(() => ({ session, savedAccounts, loading, login, register, acceptInvite, logout, activeTenantId, selectTenant, switchAccount, addAccount, removeSavedAccount, reload }), [session, savedAccounts, loading, login, register, acceptInvite, logout, activeTenantId, selectTenant, switchAccount, addAccount, removeSavedAccount, reload]);
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }
 

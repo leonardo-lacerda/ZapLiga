@@ -138,6 +138,9 @@ POST /api/auth/login
 POST /api/auth/refresh
 POST /api/auth/logout
 GET  /api/auth/me
+GET  /api/auth/accounts
+POST /api/auth/accounts/add
+POST /api/auth/accounts/:accountId/switch
 POST /api/auth/ws-ticket
 POST /api/auth/operations-ws-ticket
 GET  /api/dialer/operations

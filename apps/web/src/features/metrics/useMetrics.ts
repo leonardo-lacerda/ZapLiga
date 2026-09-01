@@ -4,6 +4,8 @@ import type { MetricsFolderRanking, MetricsNumberRanking, MetricsSdrRanking, Met
 
 const REFRESH_INTERVAL_MS = 30_000;
 
+export type MetricsRankingKey = 'sdrs' | 'folders' | 'numbers';
+
 const isoDate = (date: Date) => date.toISOString().slice(0, 10);
 
 export type MetricsFiltersState = {
@@ -74,44 +76,90 @@ export function useMetrics(tenantId: string) {
   const [refreshing, setRefreshing] = useState(false);
   const [summaryError, setSummaryError] = useState('');
   const [rankingsError, setRankingsError] = useState('');
+  const [rankingsLoading, setRankingsLoading] = useState(false);
   const [lastUpdatedAt, setLastUpdatedAt] = useState<Date | null>(null);
 
   const query = useMemo(() => toQueryParams(filters), [filters]);
   const queryKey = JSON.stringify(query);
   const hasLoadedOnce = useRef(false);
+  const loadedRankingKeys = useRef(new Set<string>());
+  const currentQueryKey = useRef(queryKey);
+  const summaryRequestId = useRef(0);
+  const rankingRequestId = useRef(0);
+  currentQueryKey.current = queryKey;
 
-  const load = useCallback(async (background: boolean) => {
+  const loadSummary = useCallback(async (background: boolean) => {
     if (!tenantId) return;
+    const requestId = ++summaryRequestId.current;
     if (background) setRefreshing(true); else setLoading(true);
-    const [summaryResult, sdrResult, folderResult, numberResult] = await Promise.allSettled([
-      fetchMetricsSummary(query),
-      fetchMetricsSdrRanking(query),
-      fetchMetricsFolderRanking(query),
-      fetchMetricsNumberRanking(query),
-    ]);
-    if (summaryResult.status === 'fulfilled') { setSummary(summaryResult.value); setSummaryError(''); }
-    else setSummaryError(errorMessage(summaryResult.reason));
-    if (sdrResult.status === 'fulfilled') setSdrRanking(sdrResult.value);
-    if (folderResult.status === 'fulfilled') setFolderRanking(folderResult.value);
-    if (numberResult.status === 'fulfilled') setNumberRanking(numberResult.value);
-    const rankingFailure = [sdrResult, folderResult, numberResult].find((result) => result.status === 'rejected') as PromiseRejectedResult | undefined;
-    setRankingsError(rankingFailure ? errorMessage(rankingFailure.reason) : '');
-    setLastUpdatedAt(new Date());
-    if (background) setRefreshing(false); else setLoading(false);
-    hasLoadedOnce.current = true;
-  }, [tenantId, query]);
+    try {
+      const result = await fetchMetricsSummary(query);
+      if (currentQueryKey.current === queryKey && requestId === summaryRequestId.current) {
+        setSummary(result);
+        setSummaryError('');
+        setLastUpdatedAt(new Date());
+      }
+    } catch (reason) {
+      if (currentQueryKey.current === queryKey && requestId === summaryRequestId.current) setSummaryError(errorMessage(reason));
+    } finally {
+      if (requestId === summaryRequestId.current) {
+        if (background) setRefreshing(false); else setLoading(false);
+        hasLoadedOnce.current = true;
+      }
+    }
+  }, [tenantId, query, queryKey]);
 
-  useEffect(() => { void load(hasLoadedOnce.current); }, [tenantId, queryKey, load]);
+  const loadRanking = useCallback(async (key: MetricsRankingKey) => {
+    if (!tenantId) return;
+    const requestKey = `${queryKey}:${key}`;
+    if (loadedRankingKeys.current.has(requestKey)) return;
+
+    const requestId = ++rankingRequestId.current;
+    setRankingsLoading(true);
+    setRankingsError('');
+    try {
+      if (key === 'sdrs') {
+        const result = await fetchMetricsSdrRanking(query);
+        if (currentQueryKey.current === queryKey && requestId === rankingRequestId.current) setSdrRanking(result);
+      }
+      if (key === 'folders') {
+        const result = await fetchMetricsFolderRanking(query);
+        if (currentQueryKey.current === queryKey && requestId === rankingRequestId.current) setFolderRanking(result);
+      }
+      if (key === 'numbers') {
+        const result = await fetchMetricsNumberRanking(query);
+        if (currentQueryKey.current === queryKey && requestId === rankingRequestId.current) setNumberRanking(result);
+      }
+      if (currentQueryKey.current === queryKey && requestId === rankingRequestId.current) {
+        loadedRankingKeys.current.add(requestKey);
+      }
+    } catch (reason) {
+      if (currentQueryKey.current === queryKey && requestId === rankingRequestId.current) setRankingsError(errorMessage(reason));
+    } finally {
+      if (requestId === rankingRequestId.current) setRankingsLoading(false);
+    }
+  }, [tenantId, query, queryKey]);
 
   useEffect(() => {
-    const interval = window.setInterval(() => { void load(true); }, REFRESH_INTERVAL_MS);
+    rankingRequestId.current += 1;
+    loadedRankingKeys.current.clear();
+    setSdrRanking(null);
+    setFolderRanking(null);
+    setNumberRanking(null);
+    setRankingsError('');
+    void loadSummary(hasLoadedOnce.current);
+  }, [tenantId, queryKey, loadSummary]);
+
+  useEffect(() => {
+    const interval = window.setInterval(() => { void loadSummary(true); }, REFRESH_INTERVAL_MS);
     return () => window.clearInterval(interval);
-  }, [load]);
+  }, [loadSummary]);
 
   return {
-    filters, setFilters, query,
+    filters, setFilters, query, queryKey,
     summary, sdrRanking, folderRanking, numberRanking,
-    loading, refreshing, summaryError, rankingsError, lastUpdatedAt,
-    reload: () => void load(false),
+    loading, refreshing, summaryError, rankingsError, rankingsLoading, lastUpdatedAt,
+    loadRanking,
+    reload: () => void loadSummary(false),
   };
 }

@@ -17,6 +17,9 @@ const KPI_DEFS: { key: keyof MetricsKpis; label: string; icon: string; tone: str
   { key: 'leadsInQueue', label: 'Leads na fila', icon: 'users', tone: 'orange', format: 'number', detail: 'Retrato do momento, sem comparação' },
 ];
 
+export const PRIMARY_KPI_KEYS: (keyof MetricsKpis)[] = ['callsMade', 'uniqueLeadsWorked', 'answerRate', 'positiveResults', 'connectedSeconds'];
+export const SECONDARY_KPI_KEYS: (keyof MetricsKpis)[] = ['callsAnswered', 'avgDurationSeconds', 'wrapUpRate', 'activeSdrs', 'leadsInQueue'];
+
 function formatValue(value: number, format: KpiFormat) {
   if (format === 'percent') return formatPercent(value);
   if (format === 'duration') return formatSecondsShort(value);
@@ -30,9 +33,9 @@ function TrendTag({ metric }: { metric: MetricValue }) {
   return <span className="metrics-trend metrics-trend-flat">estável</span>;
 }
 
-export function MetricsKpiGrid({ kpis }: { kpis: MetricsKpis }) {
+export function MetricsKpiGrid({ kpis, keys = PRIMARY_KPI_KEYS }: { kpis: MetricsKpis; keys?: (keyof MetricsKpis)[] }) {
   return <div className="metric-grid metrics-kpi-grid">
-    {KPI_DEFS.map((def) => {
+    {KPI_DEFS.filter((def) => keys.includes(def.key)).map((def) => {
       const metric = kpis[def.key];
       return <div className="metric-card metrics-kpi-card" key={def.key}>
         <div className={`metric-icon metric-${def.tone}`}><Icon name={def.icon} size={17} /></div>
