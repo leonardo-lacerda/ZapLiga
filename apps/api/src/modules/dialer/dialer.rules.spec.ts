@@ -1,4 +1,5 @@
 import {
+  analyzePcm16Le,
   capacityIsAvailable,
   computeCallOutcome,
   computeRateLimitBackoffSeconds,
@@ -24,6 +25,30 @@ describe('dialer rules', () => {
     expect(cooldownIsReady(null, 60, now)).toBe(true);
     expect(cooldownIsReady(new Date('2026-01-01T11:59:01.000Z'), 60, now)).toBe(false);
     expect(cooldownIsReady(new Date('2026-01-01T11:59:00.000Z'), 60, now)).toBe(true);
+  });
+
+  it('distinguishes ringing silence from actual inbound voice PCM', () => {
+    const silence = new Uint8Array(640);
+    expect(analyzePcm16Le(silence)).toEqual({
+      sampleCount: 320,
+      nonZeroSamples: 0,
+      peak: 0,
+      hasVoice: false,
+    });
+
+    const voice = new Int16Array(320);
+    for (let index = 0; index < 20; index += 1) voice[index] = index % 2 ? 1200 : -1200;
+    expect(analyzePcm16Le(new Uint8Array(voice.buffer))).toMatchObject({
+      sampleCount: 320,
+      nonZeroSamples: 20,
+      peak: 1200,
+      hasVoice: true,
+    });
+  });
+
+  it('does not classify tiny comfort-noise samples as voice', () => {
+    const comfortNoise = new Int16Array(320).fill(12);
+    expect(analyzePcm16Le(new Uint8Array(comfortNoise.buffer)).hasVoice).toBe(false);
   });
 
   it('enforces global and per-number capacity', () => {
@@ -102,5 +127,3 @@ describe('dialer rules', () => {
     });
   });
 });
-
-

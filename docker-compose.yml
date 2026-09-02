@@ -123,6 +123,11 @@ services:
       - "127.0.0.1:${NATS_MONITOR_HOST_PORT:-8222}:8222"
     volumes:
       - nats_data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:8222/healthz"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
 
   waxum:
     image: fdciabdul/waxum:0.12.6@sha256:7682a3f3c93eac2e5b5a0e2263b38d0d718f0033a8b976c6b04c0481d06a100b
@@ -149,7 +154,8 @@ services:
     volumes:
       - waxum_data:/app/whatsapp_sessions
     depends_on:
-      - nats
+      nats:
+        condition: service_healthy
 
   api-a:
     <<: *api-common

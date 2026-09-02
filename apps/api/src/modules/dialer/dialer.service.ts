@@ -14,6 +14,7 @@ import { DialerScheduleService } from '../dialer-schedule/dialer-schedule.servic
 import { FeatureFlagsService } from '../feature-flags/feature-flags.service';
 import { AuditService } from '../audit/audit.service';
 import {
+  analyzePcm16Le,
   computeCallOutcome,
   computeRateLimitBackoffSeconds,
   computeRateLimitCooldownWindowSeconds,
@@ -1160,7 +1161,7 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
       media.on('open', () => {
         resource.mediaOpen = true;
         if (browser.readyState === WebSocket.OPEN) {
-          try { browser.send(JSON.stringify({ type: 'media_open' })); } catch { /* browser disconnected */ }
+          try { browser.send(JSON.stringify({ type: 'media_open', callId })); } catch { /* browser disconnected */ }
         }
       });
       media.on('message', async (data, isBinary) => {
@@ -1194,31 +1195,32 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
         // Any media frame means the relay attached endpoints — the call
         // reached the ringing/media stage, so the line is NOT reachout-blocked.
         resource.receivedAnyFrame = true;
-        // Um frame de mídia pode chegar enquanto o WhatsApp ainda está tocando.
-        // Ele não confirma atendimento e não deve chegar ao SDR.
-        if (!resource.answerSignalReceived) {
-          if (!resource.answerEventLogged) {
-            resource.answerEventLogged = true;
-            this.log('Áudio recebido durante o toque; aguardando confirmação de atendimento', 'info', callId);
-          }
-          resource.inboundDroppedPreAnswer = (resource.inboundDroppedPreAnswer ?? 0) + 1;
-          return;
-        }
         const pcmBytes = Buffer.isBuffer(data)
           ? data
           : Array.isArray(data)
             ? Buffer.concat(data)
             : Buffer.from(data as ArrayBuffer);
-        let framePeak = 0;
-        let nonZero = 0;
-        for (let offset = 0; offset + 1 < pcmBytes.length; offset += 2) {
-          const sample = pcmBytes.readInt16LE(offset);
-          if (sample !== 0) nonZero += 1;
-          framePeak = Math.max(framePeak, Math.abs(sample));
+        const pcm = analyzePcm16Le(pcmBytes);
+        resource.inboundPcmSamples = (resource.inboundPcmSamples ?? 0) + pcm.sampleCount;
+        resource.inboundPcmNonZeroSamples = (resource.inboundPcmNonZeroSamples ?? 0) + pcm.nonZeroSamples;
+        resource.inboundPcmPeak = Math.max(resource.inboundPcmPeak ?? 0, pcm.peak);
+        // Um frame de mídia pode chegar enquanto o WhatsApp ainda está tocando.
+        // Silêncio não confirma atendimento e não deve chegar ao SDR. Voz
+        // real, porém, é uma confirmação segura quando o canal NATS falhou:
+        // o telefone só captura/envia a fala depois de atender.
+        if (!resource.answerSignalReceived) {
+          if (pcm.hasVoice) {
+            resource.answerSignalReceived = true;
+            this.log('Atendimento confirmado pelo áudio do cliente (fallback do canal de eventos)', 'warning', callId);
+          } else {
+            if (!resource.answerEventLogged) {
+              resource.answerEventLogged = true;
+              this.log('Áudio recebido durante o toque; aguardando confirmação de atendimento', 'info', callId);
+            }
+            resource.inboundDroppedPreAnswer = (resource.inboundDroppedPreAnswer ?? 0) + 1;
+            return;
+          }
         }
-        resource.inboundPcmSamples = (resource.inboundPcmSamples ?? 0) + Math.floor(pcmBytes.length / 2);
-        resource.inboundPcmNonZeroSamples = (resource.inboundPcmNonZeroSamples ?? 0) + nonZero;
-        resource.inboundPcmPeak = Math.max(resource.inboundPcmPeak ?? 0, framePeak);
         const firstActiveFrame = !resource.mediaActive;
         resource.mediaActive = true;
         if (firstActiveFrame) {

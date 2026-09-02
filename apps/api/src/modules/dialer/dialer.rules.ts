@@ -57,6 +57,26 @@ export function shouldQuarantineLine(failureCount: number, threshold: number) {
   return failureCount >= threshold;
 }
 
+// A non-silent inbound PCM frame is also proof that the remote party answered:
+// WhatsApp cannot capture/send their voice while the call is still ringing.
+// Keep this deliberately conservative so codec comfort noise cannot reveal an
+// automatic-dialer lead before an actual answer.
+export function analyzePcm16Le(data: Uint8Array) {
+  const sampleCount = Math.floor(data.byteLength / 2);
+  const view = new DataView(data.buffer, data.byteOffset, data.byteLength);
+  let peak = 0;
+  let nonZeroSamples = 0;
+  for (let index = 0; index < sampleCount; index += 1) {
+    const sample = view.getInt16(index * 2, true);
+    if (sample !== 0) nonZeroSamples += 1;
+    peak = Math.max(peak, Math.abs(sample));
+  }
+  const hasVoice = sampleCount >= 80
+    && peak >= 256
+    && nonZeroSamples / sampleCount >= 0.02;
+  return { sampleCount, nonZeroSamples, peak, hasVoice };
+}
+
 // Decides how a finished call and its lead should transition, mirroring the
 // three cases finishCall() must reconcile: a transient Waxum rate limit (put
 // the line and lead back as if nothing happened), a retryable failure within
