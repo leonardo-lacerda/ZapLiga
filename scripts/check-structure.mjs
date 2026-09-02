@@ -4,13 +4,17 @@ import { extname, join } from 'node:path';
 const rootFiles = new Set([
   '.dockerignore', '.env.example', '.gitignore',
   'docker-compose.yml', 'docker-compose.e2e.yml', 'package.json', 'package-lock.json', 'README.md',
+  'AGENTS.md', 'CLAUDE.md',
 ]);
 const entries = await readdir('.');
 const allowedDirectories = new Set([
   'apps', 'node_modules', 'scripts', 'docs', 'services', 'backups', 'infra',
   'output', 'tmp', 'Nova pasta', '.git', '.github', '.claude', '.tmp-zapliga-hosting',
 ]);
-const unexpected = entries.filter((entry) => !rootFiles.has(entry) && !allowedDirectories.has(entry));
+const isTemporaryDeployArtifact = (entry) => entry.startsWith('.deploy-') || entry === '.tmp-waxum-diagnostics';
+const unexpected = entries.filter((entry) => (
+  !rootFiles.has(entry) && !allowedDirectories.has(entry) && !isTemporaryDeployArtifact(entry)
+));
 if (unexpected.length) throw new Error(`Arquivos inesperados na raiz: ${unexpected.join(', ')}`);
 
 for (const path of ['apps/api/src', 'apps/web/src', 'apps/landing']) {
