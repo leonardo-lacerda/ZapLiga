@@ -11,4 +11,5 @@ docs/security-audit/__pycache__/
 .tmp-zapliga-hosting/
 output/
 tmp/
+.deploy-*.tar
 apps/web/test-results/
