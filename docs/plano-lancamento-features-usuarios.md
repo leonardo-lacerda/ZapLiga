@@ -69,13 +69,13 @@ O núcleo que deve ser preservado já contém:
 - métricas, metas, visualizações e exportações;
 - auditoria e administração global.
 
-Baseline validada em 30/08/2026:
+Baseline validada em 01/09/2026:
 
-Estado da implementacao (validacao final em 31/08/2026): as Fases 0-7 foram
+Estado da implementação (validação final em 01/09/2026): as Fases 0-7 foram
 implementadas no codigo, banco, interface, observabilidade, documentacao e CI.
 
-- 26 suites backend / 155 testes aprovados;
-- 8 arquivos frontend / 11 testes aprovados;
+- 28 suites backend / 165 testes aprovados;
+- 11 arquivos frontend / 15 testes aprovados;
 - typecheck, build de producao e verificacao estrutural aprovados;
 - smoke test multitenant aprovado (autenticacao, isolamento, quotas, IDOR,
   DTOs, tickets e refresh rotativo);
@@ -86,13 +86,6 @@ A Fase 8 continua condicional: o lancamento atual usa cobranca assistida/manual,
 conforme ADR 004, e portanto nao bloqueia o Gate B. O smoke test real contra o
 Waxum de staging e a operacao assistida do primeiro piloto sao atividades de
 rollout, nao pendencias de implementacao local.
-
-- typecheck de API e frontend aprovado;
-- 19 suítes e 130 testes backend aprovados;
-- build de produção aprovado;
-- verificador de estrutura aprovado;
-- verificação multitenant de integração não executada porque API e Docker não
-  estavam ativos.
 
 ## 4. Estratégia de entrega
 

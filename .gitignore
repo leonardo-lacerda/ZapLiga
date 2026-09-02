@@ -9,3 +9,6 @@ docs/security-audit/.venv/
 docs/security-audit/__pycache__/
 .claude/
 .tmp-zapliga-hosting/
+output/
+tmp/
+apps/web/test-results/

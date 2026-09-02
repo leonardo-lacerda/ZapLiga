@@ -133,8 +133,11 @@ export function useOperationsRealtime(tenantId: string, enabled = true): Operati
       void refresh();
       void connect();
     }
+    // The operations broadcast is local to the API process. Keep a bounded
+    // polling fallback even while the socket is open so an event produced by
+    // another API replica cannot leave this dashboard stale indefinitely.
     const fallbackTimer = enabled && tenantId ? window.setInterval(() => {
-      if (socket.current?.readyState !== WebSocket.OPEN) void refresh();
+      void refresh();
     }, 15_000) : undefined;
 
     return () => {

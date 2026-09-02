@@ -23,7 +23,11 @@ export class SdrGateway implements OnModuleDestroy {
   constructor(private readonly db: DatabaseService, private readonly auth: AuthService, @Inject(forwardRef(() => DialerService)) private readonly dialer: DialerService) {}
 
   attach(httpServer: Server) {
-    this.server = new WebSocketServer({ noServer: true });
+    // Control/observer messages are small JSON frames and media frames are
+    // chunked by the browser. Keep the upgrade endpoint from accepting the
+    // ws package's very large default payload while still leaving room for a
+    // media frame plus protocol overhead.
+    this.server = new WebSocketServer({ noServer: true, maxPayload: 1024 * 1024 });
     httpServer.on('upgrade', (request, socket, head) => {
       const url = new URL(request.url ?? '/', 'http://localhost');
       const route = parseSdrSocketPath(url.pathname);
@@ -146,7 +150,11 @@ export class SdrGateway implements OnModuleDestroy {
         `, [identity.userId, String(message.sessionId ?? ''), identity.tenantId, sdr.id, runtimeInstanceId]);
         const sdrId = claimed.rows[0].id;
         const tenantId = identity.tenantId;
+        const previousSocket = this.controls.get(sdrId);
         this.controls.set(sdrId, socket); this.sessions.set(socket, sdrId); this.tenantBySdr.set(sdrId, tenantId);
+        if (previousSocket && previousSocket !== socket) {
+          try { previousSocket.close(4000, 'nova sessao SDR conectada'); } catch { /* socket already closed */ }
+        }
         const state = await this.dialer.getSdrState(sdrId, tenantId);
         socket.send(JSON.stringify({ type: 'identified', sdr: { ...claimed.rows[0], ...state } }));
       } else if (message.type === 'availability') {

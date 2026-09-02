@@ -11,13 +11,13 @@ O teto real do produto é o **WhatsApp**, não a infraestrutura. Contas levam fl
 
 ---
 
-## 1. A aplicação roda como instância única, por construção
+## 1. A API tem duas réplicas no compose; as dependências continuam single-node
 
-- `docker-compose.yml` define **um** serviço `api`, sem `replicas`/load balancer. Postgres, Redis, NATS e Waxum também são instâncias únicas, tudo em `127.0.0.1`.
+- `docker-compose.yml` define `api-a` e `api-b`, com balanceamento no Nginx. Postgres, Redis, NATS e Waxum continuam sendo instâncias únicas, tudo em `127.0.0.1`.
 - `apps/api/Dockerfile:16` — `CMD ["node", "apps/api/dist/main.js"]`, sem cluster/PM2.
-- `apps/api/src/main.ts:26` — o WebSocket dos SDRs é anexado ao processo HTTP único (`app.get(SdrGateway).attach(...)`).
+- `apps/api/src/main.ts:26` — o WebSocket dos SDRs é anexado a cada processo HTTP (`app.get(SdrGateway).attach(...)`).
 
-Coerente com o estágio atual do produto, mas significa zero redundância: um crash do processo derruba todas as ligações e SDRs conectados ao mesmo tempo.
+Isso melhora a disponibilidade HTTP, mas não torna o estado de chamadas e sockets compartilhado. Um crash do processo ainda derruba as ligações e SDRs conectados àquela réplica; a seção 2 detalha o risco residual.
 
 ## 2. Estado crítico vive só na memória do processo — bloqueia scale-out horizontal
 
@@ -32,17 +32,30 @@ Se no futuro subirem 2+ instâncias da API (redundância ou capacidade), isto qu
 
 O próprio time já registrou essa lacuna: `docs/multi-tenant-plan.md:208` — *"Para produção, o tick deverá usar lock distribuído no Redis ou ser executado por um worker único, evitando que múltiplas instâncias da API processem a mesma fila."* O lock distribuído do tick já existe (`dialer.service.ts:478`), mas o registro de sockets/SDR ainda não tem equivalente.
 
-**Conclusão prática: hoje não dá para rodar 2 réplicas da API sem quebrar o roteamento de SDR/mídia.**
+**Conclusão prática: hoje dá para rodar 2 réplicas para HTTP, mas o failover de SDR/mídia e a distribuição de eventos em tempo real ainda não são transparentes.**
 
-## 3. Todo deploy/restart afeta TODOS os tenants ao mesmo tempo
+## 3. Deploy/restart: impacto global reduzido, mas ainda exige smoke de produção
+
+Status em 01/09/2026: os dois problemas de ciclo de vida descritos abaixo foram
+corrigidos no código. `main.ts` habilita graceful shutdown e as rotinas de
+recuperação agora verificam a instância viva no Redis e atualizam cada registro
+com seu próprio `tenant_id`. O risco residual é operacional: um deploy ainda
+desconecta sockets da instância substituída e deve ser validado com uma chamada
+autorizada em staging.
 
 Achado novo, combina dois problemas:
 
-- `dialer.service.ts:668-670` — `resetStaleSdrPresence()` roda `UPDATE sdrs SET available=false ...` **sem `WHERE tenant_id`**. Chamado em todo boot (`onModuleInit`, linha 64).
-- `dialer.service.ts:655-658` — `recoverInterruptedCalls()` seleciona `calls` em `reserved/dialing/media_active` de **todos os tenants** e marca como `failed/api_restarted`.
-- `apps/api/src/main.ts` **não chama `app.enableShutdownHooks()`** e não trata `SIGTERM`/`SIGINT`. Ou seja, o `onModuleDestroy()` do `DialerService` (`dialer.service.ts:67-70`, que tentaria abortar limpo as ligações) nunca roda num deploy — o processo é encerrado sem aviso.
+- `resetStaleSdrPresence()` consulta e atualiza cada SDR com `tenant_id` e `id`,
+  preservando o isolamento entre empresas.
+- `recoverInterruptedCalls()` só recupera chamadas cuja instância não está viva,
+  evitando que uma réplica encerre chamadas pertencentes à outra.
+- `apps/api/src/main.ts` chama `enableShutdownHooks(['SIGTERM', 'SIGINT'])`,
+  permitindo o encerramento controlado do discador durante deploy.
 
-Resultado combinado: **todo deploy da API já é, por construção, um desligamento sujo que desconecta os SDRs e cancela as ligações em andamento de todos os clientes simultaneamente**, não só do tenant afetado por uma mudança pontual. É o achado de maior impacto/menor esforço de correção desta auditoria.
+O risco de deploy não está eliminado: conexões WebSocket são locais ao processo
+e serão refeitas pelo navegador. O Gate B deve confirmar que uma chamada ativa,
+um SDR e o painel operacional se recuperam como esperado após a troca de uma
+réplica.
 
 ## 4. O tick de 1s escala linearmente com o número de tenants
 
@@ -95,7 +108,7 @@ Resultado combinado: **todo deploy da API já é, por construção, um desligame
 
 ## Prioridades recomendadas
 
-1. **Graceful shutdown + escopar `resetStaleSdrPresence`/`recoverInterruptedCalls` por tenant** (itens 2+3) — hoje todo deploy é um mini-incidente para a base inteira de clientes; maior impacto por menor esforço.
+1. **Validar reconexão e continuidade operacional em deploy** (itens 2+3) — o ciclo de vida foi corrigido, mas os sockets continuam sendo estado local e precisam de evidência em staging.
 2. **Trocar o polling de 3s do dashboard por push via WebSocket**, ou aplicar cache curto (Redis) nos endpoints `status`/`numbers`/`calls`/`logs` (item 5) — é o que vai doer primeiro conforme cresce o nº de tenants com painel aberto, antes mesmo do volume de ligações.
 3. **Medir o teto de chamadas por conta WhatsApp** (pendente, ver `[[zapcall-testes-pendentes]]`) — é o limite de negócio real, decide se o modelo SaaS fecha economicamente.
 4. Registro de SDR/mídia em memória (item 2) — só vira bloqueador quando decidirem rodar 2+ instâncias por redundância.

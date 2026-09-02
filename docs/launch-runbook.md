@@ -6,7 +6,7 @@
 2. Configurar Resend, `DATA_PROTECTION_SECRET`, `METRICS_TOKEN`, Sentry sanitizado e coleta de `/internal/metrics` com Bearer token.
 3. Importar `infra/monitoring/grafana-zapliga-dashboard.json` e `prometheus-alerts.yml`.
 4. Manter `PUBLIC_REGISTRATION_ENABLED=false`.
-5. Confirmar CI verde: tipos, 155+ testes API, testes frontend, build e 12 E2E.
+5. Confirmar CI verde: tipos, 165+ testes API, testes frontend, build e 12 E2E.
 6. Executar `npm run verify:multitenant` contra staging.
 7. Usar dois tenants piloto e uma linha/contato de teste com autorização escrita.
 
