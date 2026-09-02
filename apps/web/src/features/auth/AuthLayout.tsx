@@ -1,5 +1,7 @@
 import type { ReactNode } from 'react';
 import { Icon } from '../../components/ui';
+import { AccountSwitcher } from './AccountSwitcher';
+import { useOptionalAuth } from './AuthProvider';
 
 type AuthMode = 'login' | 'register';
 
@@ -12,6 +14,9 @@ export function AuthBrand({ compact = false }: { compact?: boolean }) {
 
 export function AuthShell({ mode, children }: { mode: AuthMode; children: ReactNode }) {
   const isRegister = mode === 'register';
+  const auth = useOptionalAuth();
+  const session = auth?.session ?? null;
+  const savedAccounts = auth?.savedAccounts ?? [];
 
   return <div className={`auth-shell auth-shell-${mode}`}>
     <div className="auth-glow auth-glow-one" />
@@ -33,6 +38,7 @@ export function AuthShell({ mode, children }: { mode: AuthMode; children: ReactN
       </aside>
       <main className="auth-main">
         <div className="auth-mobile-brand"><AuthBrand compact /></div>
+        {auth && session && savedAccounts.length > 1 && <div className="auth-account-switcher"><AccountSwitcher accounts={savedAccounts} currentName={session.user.name} onSwitch={auth.switchAccount} onAdd={auth.addAccount} onRemove={auth.removeSavedAccount} /></div>}
         {children}
         <p className="auth-copyright">© 2026 ZapLiga · Operação mais inteligente, todos os dias.</p>
       </main>

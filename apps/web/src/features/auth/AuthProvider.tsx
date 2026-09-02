@@ -74,6 +74,21 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     });
   }, []);
 
+  const loadSavedAccounts = useCallback(async (user: AuthUser | null) => {
+    if (!user) { setSavedAccounts([]); return; }
+    try {
+      setSavedAccounts(await json('/api/auth/accounts', undefined, false));
+    } catch {
+      // Account switching is an enhancement and must never make a valid
+      // primary session look like a failed login during a partial deploy.
+      setSavedAccounts((current) => {
+        const normalized = current.map((account) => ({ ...account, current: account.id === user.id }));
+        if (normalized.some((account) => account.id === user.id)) return normalized;
+        return [{ id: user.id, name: user.name, email: user.email, platformRole: user.platformRole, current: true }, ...normalized];
+      });
+    }
+  }, []);
+
   const reload = useCallback(async () => {
     try {
       if (!await refreshAccessToken()) {
@@ -83,13 +98,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         setSession(null); setSavedAccounts([]);
         return;
       }
-      applySession(await json('/api/auth/me', undefined, false));
-      setSavedAccounts(await json('/api/auth/accounts', undefined, false));
+      const next = await json('/api/auth/me', undefined, false);
+      applySession(next);
+      await loadSavedAccounts(next.user);
     } catch {
       clearAccessToken();
       setSession(null); setSavedAccounts([]);
     }
-  }, [applySession]);
+  }, [applySession, loadSavedAccounts]);
 
   useEffect(() => { void reload().finally(() => setLoading(false)); }, [reload]);
 
@@ -131,23 +147,20 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const login = useCallback(async (email: string, password: string) => {
     const result = await json('/api/auth/login', { method: 'POST', body: JSON.stringify({ email, password }) });
     setAccessToken(result.accessToken);
-    applySession(await json('/api/auth/me', undefined, false));
-    setSavedAccounts(await json('/api/auth/accounts', undefined, false));
-  }, [applySession]);
+    const next = await json('/api/auth/me', undefined, false); applySession(next); await loadSavedAccounts(next.user);
+  }, [applySession, loadSavedAccounts]);
 
   const register = useCallback(async (input: { name: string; email: string; password: string; companyName: string; companySlug?: string; legalAccepted: boolean }) => {
     const result = await json('/api/auth/register', { method: 'POST', body: JSON.stringify(input) });
     setAccessToken(result.accessToken);
-    applySession(await json('/api/auth/me', undefined, false));
-    setSavedAccounts(await json('/api/auth/accounts', undefined, false));
-  }, [applySession]);
+    const next = await json('/api/auth/me', undefined, false); applySession(next); await loadSavedAccounts(next.user);
+  }, [applySession, loadSavedAccounts]);
 
   const acceptInvite = useCallback(async (token: string, name: string, password: string) => {
     const result = await json(`/api/invitations/${encodeURIComponent(token)}/accept`, { method: 'POST', body: JSON.stringify({ name, password }) });
     setAccessToken(result.accessToken);
-    applySession(await json('/api/auth/me', undefined, false));
-    setSavedAccounts(await json('/api/auth/accounts', undefined, false));
-  }, [applySession]);
+    const next = await json('/api/auth/me', undefined, false); applySession(next); await loadSavedAccounts(next.user);
+  }, [applySession, loadSavedAccounts]);
 
   const switchAccount = useCallback(async (accountId: string) => {
     if (shouldRefreshAccessToken(5)) await refreshAccessToken();
@@ -157,8 +170,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setActiveTenantState('');
     const nextSession = await json('/api/auth/me', undefined, false);
     applySession(nextSession);
-    setSavedAccounts(await json('/api/auth/accounts', undefined, false));
-  }, [applySession]);
+    await loadSavedAccounts(nextSession.user);
+  }, [applySession, loadSavedAccounts]);
 
   const addAccount = useCallback(async (email: string, password: string) => {
     if (shouldRefreshAccessToken(5)) await refreshAccessToken();
@@ -166,9 +179,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setAccessToken(result.accessToken);
     clearActiveTenantId();
     setActiveTenantState('');
-    applySession(await json('/api/auth/me', undefined, false));
-    setSavedAccounts(await json('/api/auth/accounts', undefined, false));
-  }, [applySession]);
+    const next = await json('/api/auth/me', undefined, false); applySession(next); await loadSavedAccounts(next.user);
+  }, [applySession, loadSavedAccounts]);
 
   const removeSavedAccount = useCallback(async (accountId: string) => {
     if (shouldRefreshAccessToken(5)) await refreshAccessToken();
@@ -188,4 +200,8 @@ export function useAuth() {
   const value = useContext(AuthContext);
   if (!value) throw new Error('useAuth deve ser usado dentro de AuthProvider');
   return value;
+}
+
+export function useOptionalAuth() {
+  return useContext(AuthContext);
 }

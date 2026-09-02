@@ -38,7 +38,7 @@ export class AuthGuard implements CanActivate {
     if (!user || user.status !== 'active') { await this.redis?.incrementMetric('revoked_session_access_total'); throw new UnauthorizedException('Usuário bloqueado ou inexistente'); }
     const gatePaths = new Set(['/api/auth/me', '/api/auth/logout', '/api/auth/logout-all', '/api/me/profile', '/api/me/password', '/api/me/sessions', '/api/me/legal-acceptance']);
     const requestPath = String(request.path ?? '');
-    const accountGateAllowed = gatePaths.has(requestPath) || requestPath.startsWith('/api/me/sessions/');
+    const accountGateAllowed = gatePaths.has(requestPath) || requestPath.startsWith('/api/me/sessions/') || requestPath === '/api/auth/accounts' || requestPath.startsWith('/api/auth/accounts/');
     if (!accountGateAllowed) {
       if (!user.email_verified_at) throw new ForbiddenException({ code: 'email_verification_required', message: 'Verifique seu e-mail antes de continuar' });
       if (Number(user.pending_legal_count ?? 0) > 0) throw new ForbiddenException({ code: 'legal_acceptance_required', message: 'Aceite os documentos legais vigentes antes de continuar' });

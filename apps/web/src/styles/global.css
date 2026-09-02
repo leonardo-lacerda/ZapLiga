@@ -231,6 +231,8 @@ p { color: var(--muted); }
 .account-add-submit:disabled { opacity: .65; cursor: wait; }
 .account-switcher-note { display: block; padding: 7px 3px 0; }
 .account-switcher-message { padding: 7px 8px; border-radius: 6px; background: var(--error-soft); color: var(--error); font-size: 10px; }
+.auth-account-switcher { width: min(286px, 100%); margin: 0 0 12px auto; }
+.auth-account-switcher .account-switcher { margin: 0; }
 .tenant-selector { display: flex; align-items: center; justify-content: flex-end; gap: 8px; padding: 8px 20px 0; color: var(--muted); font-size: 10px; font-weight: 700; }.tenant-selector select { min-width: 220px; }
 .no-access-card { width: min(440px, calc(100% - 32px)); margin: auto; padding: 28px; border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--surface); text-align: center; box-shadow: var(--shadow-md); }.no-access-card p { color: var(--muted); line-height: 1.6; }
 .workspace-avatar, .avatar { width: 26px; height: 26px; display: grid; place-items: center; flex: 0 0 auto; border-radius: 50%; background: var(--primary-soft); color: var(--primary); font-weight: 700; font-size: 11px; }
