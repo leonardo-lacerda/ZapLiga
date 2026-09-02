@@ -125,7 +125,7 @@ services:
       - nats_data:/data
 
   waxum:
-    image: fdciabdul/waxum:0.12.4@sha256:056342ba0f4d269563057573d796de848df8e3b52043463f344bd68065227e18
+    image: fdciabdul/waxum:0.12.6@sha256:7682a3f3c93eac2e5b5a0e2263b38d0d718f0033a8b976c6b04c0481d06a100b
     restart: unless-stopped
     ports:
       - "127.0.0.1:${WAXUM_HOST_PORT:-3451}:3451"
@@ -136,7 +136,7 @@ services:
       SUPERADMIN_TOKEN: ${WAXUM_API_KEY:-zapcall-local-waxum-token}
       JWT_SECRET: ${WAXUM_JWT_SECRET:-zapcall-local-jwt-secret-change-me}
       NATS_URL: nats://nats:4222
-      # ZapLiga owns request pacing and abuse protection. Waxum 0.12.4 allows
+      # ZapLiga owns request pacing and abuse protection. Waxum 0.12.6 allows
       # its peer-IP middleware to be disabled, avoiding one shared Docker-IP
       # quota for every tenant and API replica.
       RATE_LIMIT_ENABLED: "false"

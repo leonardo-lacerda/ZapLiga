@@ -22,7 +22,7 @@ Plataforma de operação SDR para chamadas de voz pelo WhatsApp. O ZapLiga centr
 - **Persistência:** PostgreSQL 16, com migrations versionadas em `apps/api/src/database/migrations`.
 - **Coordenação e cache:** Redis 7.
 - **Eventos:** NATS 2.10 com JetStream.
-- **Telefonia:** Waxum 0.12.4, com imagem fixada por digest no Compose.
+- **Telefonia:** Waxum 0.12.6, com imagem fixada por digest no Compose.
 - **Execução:** Docker Compose para desenvolvimento e produção; Nginx faz o roteamento externo no deploy.
 
 No ambiente de produção, o Compose mantém duas instâncias da API (`api-a` e `api-b`), além dos serviços compartilhados, backups diários do PostgreSQL e o painel web.
@@ -197,7 +197,7 @@ As migrations são de ida e rodam no boot da API. Se uma migration causar proble
 
 - Gravação de chamadas e CRM completo não fazem parte do escopo atual.
 - A detecção de atendimento usa o primeiro áudio recebido pelo WebSocket do Waxum.
-- Sessão, QR Code e reconexão dependem do contrato do Waxum 0.12.4 instalado.
+- Sessão, QR Code e reconexão dependem do contrato do Waxum 0.12.6 instalado.
 - O navegador precisa permitir o microfone e permanecer conectado durante a chamada.
 - A operação com gateway não oficial pode resultar em instabilidade ou bloqueio de contas; mantenha consentimento, opt-out e conformidade com a legislação aplicável.
 

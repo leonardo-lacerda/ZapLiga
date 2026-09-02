@@ -2,15 +2,15 @@
 
 ## Versão validada
 
-- Versão: `0.12.4`
-- Imagem: `fdciabdul/waxum:0.12.4`
-- Digest do manifesto multi-arquitetura: `sha256:056342ba0f4d269563057573d796de848df8e3b52043463f344bd68065227e18`
-- Digest Linux/amd64: `sha256:7a2c551b83b7eb0d7cd92a76d9f76f82a2888228c2993ef8a04e4e842ec3a576`
-- Validada em: `2026-08-30`
+- Versão: `0.12.6`
+- Imagem: `fdciabdul/waxum:0.12.6`
+- Digest do manifesto multi-arquitetura: `sha256:7682a3f3c93eac2e5b5a0e2263b38d0d718f0033a8b976c6b04c0481d06a100b`
+- Digest Linux/amd64: `sha256:5367a77988c7b2a504b8826d9fc355f7361c0009e7e92850ad95a888ae42d98b`
+- Validada em: `2026-09-01`
 
 ## Build usado pelo ZapLiga
 
-- Commit oficial: `4cfb4e44983e5381667396799bd0e6442a32c4c4` (`v0.12.4`)
+- Commit oficial: `e835160d3f9348dcf7cb99fb2a99c8a18ea4d2ec` (`v0.12.6`)
 - Imagem oficial fixada pelo digest do manifesto acima.
 - Sem fork ou patch local do Waxum.
 - Middleware global de rate limit do Waxum desativado explicitamente com
