@@ -56,6 +56,21 @@ type CallResource = {
   inboundRelayed?: number;
   inboundDroppedPreAnswer?: number;
   micFramesRelayed?: number;
+  inboundPcmSamples?: number;
+  inboundPcmNonZeroSamples?: number;
+  inboundPcmPeak?: number;
+  micPcmSamples?: number;
+  micPcmNonZeroSamples?: number;
+  micPcmPeak?: number;
+  browserPlayback?: {
+    contextState?: string;
+    outputSampleRate?: number;
+    framesReceived?: number;
+    framesScheduled?: number;
+    framesEnded?: number;
+    peak?: number;
+    queuedSeconds?: number;
+  };
   previousSdrAvailable: boolean;
   previousSdrState: string;
 };
@@ -1189,6 +1204,21 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
           resource.inboundDroppedPreAnswer = (resource.inboundDroppedPreAnswer ?? 0) + 1;
           return;
         }
+        const pcmBytes = Buffer.isBuffer(data)
+          ? data
+          : Array.isArray(data)
+            ? Buffer.concat(data)
+            : Buffer.from(data as ArrayBuffer);
+        let framePeak = 0;
+        let nonZero = 0;
+        for (let offset = 0; offset + 1 < pcmBytes.length; offset += 2) {
+          const sample = pcmBytes.readInt16LE(offset);
+          if (sample !== 0) nonZero += 1;
+          framePeak = Math.max(framePeak, Math.abs(sample));
+        }
+        resource.inboundPcmSamples = (resource.inboundPcmSamples ?? 0) + Math.floor(pcmBytes.length / 2);
+        resource.inboundPcmNonZeroSamples = (resource.inboundPcmNonZeroSamples ?? 0) + nonZero;
+        resource.inboundPcmPeak = Math.max(resource.inboundPcmPeak ?? 0, framePeak);
         const firstActiveFrame = !resource.mediaActive;
         resource.mediaActive = true;
         if (firstActiveFrame) {
@@ -1261,7 +1291,40 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
           resource.browserAudioLogged = true;
           this.log(`Audio do microfone recebido (${Buffer.byteLength(data as any)} bytes)`, 'info', callId);
         }
-        if (isBinary && this.relayAudio(media, data)) resource.micFramesRelayed = (resource.micFramesRelayed ?? 0) + 1;
+        if (isBinary) {
+          const pcmBytes = Buffer.isBuffer(data)
+            ? data
+            : Array.isArray(data)
+              ? Buffer.concat(data)
+              : Buffer.from(data as ArrayBuffer);
+          let framePeak = 0;
+          let nonZero = 0;
+          for (let offset = 0; offset + 1 < pcmBytes.length; offset += 2) {
+            const sample = pcmBytes.readInt16LE(offset);
+            if (sample !== 0) nonZero += 1;
+            framePeak = Math.max(framePeak, Math.abs(sample));
+          }
+          resource.micPcmSamples = (resource.micPcmSamples ?? 0) + Math.floor(pcmBytes.length / 2);
+          resource.micPcmNonZeroSamples = (resource.micPcmNonZeroSamples ?? 0) + nonZero;
+          resource.micPcmPeak = Math.max(resource.micPcmPeak ?? 0, framePeak);
+          if (this.relayAudio(media, data)) resource.micFramesRelayed = (resource.micFramesRelayed ?? 0) + 1;
+        }
+        if (!isBinary) {
+          try {
+            const message = JSON.parse(data.toString());
+            if (message.type === 'audio_playback_status' && message.callId === callId) {
+              resource.browserPlayback = {
+                contextState: String(message.contextState ?? ''),
+                outputSampleRate: Number(message.outputSampleRate) || 0,
+                framesReceived: Number(message.framesReceived) || 0,
+                framesScheduled: Number(message.framesScheduled) || 0,
+                framesEnded: Number(message.framesEnded) || 0,
+                peak: Number(message.peak) || 0,
+                queuedSeconds: Number(message.queuedSeconds) || 0,
+              };
+            }
+          } catch { /* unrelated control message */ }
+        }
       };
       resource.browserCloseHandler = () => {
         void this.finishCall(callId, resource.mediaActive ? 'failed' : 'cancelled', 'browser_disconnected')
@@ -1347,6 +1410,8 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
         if (resource.browser && resource.browserCloseHandler) resource.browser.off('close', resource.browserCloseHandler);
         if (resource.browser && resource.browserErrorHandler) resource.browser.off('error', resource.browserErrorHandler);
         this.log(`Áudio da chamada: entrada repassada=${resource.inboundRelayed ?? 0}, entrada descartada(pré-atendimento)=${resource.inboundDroppedPreAnswer ?? 0}, microfone repassado=${resource.micFramesRelayed ?? 0}, atendimento sinalizado=${Boolean(resource.answerSignalReceived)}, mediaAtiva=${resource.mediaActive}`, 'info', callId, tenantId);
+        const playback = resource.browserPlayback;
+        this.log(`Diagnóstico de reprodução: cliente→servidor pico=${resource.inboundPcmPeak ?? 0}, amostras não-zero=${resource.inboundPcmNonZeroSamples ?? 0}/${resource.inboundPcmSamples ?? 0}; SDR→cliente pico=${resource.micPcmPeak ?? 0}, amostras não-zero=${resource.micPcmNonZeroSamples ?? 0}/${resource.micPcmSamples ?? 0}; navegador=${playback ? `${playback.contextState}@${playback.outputSampleRate}Hz recebidos=${playback.framesReceived} agendados=${playback.framesScheduled} concluídos=${playback.framesEnded} pico=${playback.peak} fila=${playback.queuedSeconds?.toFixed(2)}s` : 'sem telemetria'}`, 'info', callId, tenantId);
         // Explicitly hang up the WhatsApp call. Closing the media WS alone can
         // leave the lead's phone stuck on "Reconnecting…"; terminating by
         // call_id makes Waxum send the `<terminate>` stanza reliably.

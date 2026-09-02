@@ -2,7 +2,9 @@ export class AudioBridge {
   private context?: AudioContext;
   private stream?: MediaStream;
   private processor?: ScriptProcessorNode;
+  private playbackGain?: GainNode;
   private starting?: Promise<void>;
+  private resuming?: Promise<void>;
   private socket?: WebSocket;
   private stopRequested = false;
   private nextPlayTime = 0;
@@ -13,6 +15,11 @@ export class AudioBridge {
   private readonly frameSamples = 960;
   private muted = false;
   private pendingPlayback: ArrayBuffer[] = [];
+  private activeCallId = '';
+  private playbackFramesReceived = 0;
+  private playbackFramesScheduled = 0;
+  private playbackFramesEnded = 0;
+  private playbackPeak = 0;
 
   /**
    * Opens the browser microphone from an explicit user action. Preparing it
@@ -32,10 +39,12 @@ export class AudioBridge {
     return this.starting;
   }
 
-  async start(socket: WebSocket) {
+  async start(socket: WebSocket, callId: string) {
     this.socket = socket;
+    this.activeCallId = callId;
     await this.prepare();
     if (this.context?.state === 'suspended') await this.context.resume();
+    this.reportPlaybackStatus(true);
   }
 
   private async startInternal() {
@@ -64,7 +73,10 @@ export class AudioBridge {
       return;
     }
 
-    const context = new AudioContext({ sampleRate: 16000 });
+    // Keep the physical output at the device's native sample rate. Forcing a
+    // 16 kHz context can be silent with some Chrome/Windows audio drivers.
+    // Web Audio resamples the 16 kHz call buffers to this output rate.
+    const context = new AudioContext({ latencyHint: 'interactive' });
     await context.resume();
     if (context.state !== 'running') {
       stream.getTracks().forEach((track) => track.stop());
@@ -103,6 +115,9 @@ export class AudioBridge {
     source.connect(this.processor);
     this.processor.connect(silent);
     silent.connect(context.destination);
+    this.playbackGain = context.createGain();
+    this.playbackGain.gain.value = 1;
+    this.playbackGain.connect(context.destination);
     const pending = this.pendingPlayback.splice(0);
     pending.forEach((frame) => this.enqueuePlayback(frame));
   }
@@ -116,47 +131,93 @@ export class AudioBridge {
     return this.muted;
   }
 
-  play(raw: ArrayBuffer) {
+  play(raw: ArrayBuffer | Blob) {
+    // Depending on the browser/runtime, a binary WebSocket message can still
+    // arrive as a Blob even when binaryType was set to arraybuffer. Convert it
+    // before touching byteLength/DataView; otherwise the first inbound frame
+    // throws and the SDR hears silence while the server keeps relaying audio.
+    if (raw instanceof Blob) {
+      void raw.arrayBuffer().then((buffer) => this.play(buffer)).catch(() => undefined);
+      return;
+    }
     if (raw.byteLength < 2) return;
-    if (!this.context) {
+    if (!this.context || this.context.state === 'suspended' || this.resuming) {
       // Media can arrive in the same turn as media_open, before getUserMedia
       // and the AudioContext have finished initializing. Keep a bounded queue
       // instead of dropping the first inbound voice frames.
       if (this.pendingPlayback.length < 100) this.pendingPlayback.push(raw.slice(0));
-      return;
-    }
-    if (this.context.state === 'suspended') {
-      void this.context.resume().then(() => this.enqueuePlayback(raw));
+      if (this.context?.state === 'suspended') void this.resumeAndFlushPlayback();
       return;
     }
     this.enqueuePlayback(raw);
   }
 
+  private async resumeAndFlushPlayback() {
+    if (!this.context || this.context.state === 'closed') return;
+    this.resuming ??= this.context.resume().then(() => {
+      if (this.context?.state !== 'running') return;
+      const pending = this.pendingPlayback.splice(0);
+      pending.forEach((frame) => this.enqueuePlayback(frame));
+    }).catch(() => undefined).finally(() => { this.resuming = undefined; });
+    await this.resuming;
+  }
+
   private enqueuePlayback(raw: ArrayBuffer) {
-    if (!this.context || raw.byteLength < 2) return;
+    if (!this.context || !this.playbackGain || raw.byteLength < 2 || this.context.state === 'closed') return;
     const sampleCount = Math.floor(raw.byteLength / 2);
     const pcm = new Int16Array(sampleCount);
     const view = new DataView(raw);
-    for (let i = 0; i < sampleCount; i++) pcm[i] = view.getInt16(i * 2, true);
+    let peak = 0;
+    for (let i = 0; i < sampleCount; i++) {
+      pcm[i] = view.getInt16(i * 2, true);
+      peak = Math.max(peak, Math.abs(pcm[i]));
+    }
+    this.playbackFramesReceived += 1;
+    this.playbackPeak = Math.max(this.playbackPeak, peak);
     const buffer = this.context.createBuffer(1, sampleCount, 16000);
     const channel = buffer.getChannelData(0);
     for (let i = 0; i < pcm.length; i++) channel[i] = pcm[i] / 0x7fff;
     const source = this.context.createBufferSource();
     source.buffer = buffer;
-    source.connect(this.context.destination);
+    source.connect(this.playbackGain);
+    source.onended = () => { this.playbackFramesEnded += 1; };
     this.nextPlayTime = Math.max(this.nextPlayTime, this.context.currentTime);
     source.start(this.nextPlayTime);
     this.nextPlayTime += buffer.duration;
+    this.playbackFramesScheduled += 1;
+    if (this.playbackFramesScheduled === 1 || this.playbackFramesScheduled % 100 === 0) this.reportPlaybackStatus();
+  }
+
+  private reportPlaybackStatus(force = false) {
+    if (!this.socket || this.socket.readyState !== WebSocket.OPEN || !this.activeCallId) return;
+    if (!force && this.playbackFramesScheduled === 0) return;
+    try {
+      this.socket.send(JSON.stringify({
+        type: 'audio_playback_status',
+        callId: this.activeCallId,
+        contextState: this.context?.state ?? 'missing',
+        outputSampleRate: this.context?.sampleRate ?? 0,
+        framesReceived: this.playbackFramesReceived,
+        framesScheduled: this.playbackFramesScheduled,
+        framesEnded: this.playbackFramesEnded,
+        peak: this.playbackPeak,
+        queuedSeconds: this.context ? Math.max(0, this.nextPlayTime - this.context.currentTime) : 0,
+      }));
+    } catch { /* diagnostic reporting must never interrupt audio */ }
   }
 
   async stop() {
     this.stopRequested = true;
+    this.reportPlaybackStatus(true);
     this.processor?.disconnect();
+    this.playbackGain?.disconnect();
     this.stream?.getTracks().forEach((track) => track.stop());
     await this.context?.close();
     this.processor = undefined;
+    this.playbackGain = undefined;
     this.stream = undefined;
     this.context = undefined;
+    this.resuming = undefined;
     this.socket = undefined;
     this.nextPlayTime = 0;
     this.captureSampleRate = 16000;
@@ -165,6 +226,11 @@ export class AudioBridge {
     this.outgoingSamples = [];
     this.muted = false;
     this.pendingPlayback = [];
+    this.activeCallId = '';
+    this.playbackFramesReceived = 0;
+    this.playbackFramesScheduled = 0;
+    this.playbackFramesEnded = 0;
+    this.playbackPeak = 0;
   }
 
   /** Waxum expects mono PCM16 at exactly 16 kHz. Browsers may run the

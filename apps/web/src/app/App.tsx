@@ -173,7 +173,7 @@ function AuthenticatedApp() {
   const startAudio = (socket: WebSocket, callId: string) => {
     if (audioCall.current === callId) return;
     audioCall.current = callId;
-    void audio.current.start(socket).catch((e) => {
+    void audio.current.start(socket, callId).catch((e) => {
       const message = e instanceof Error ? e.message : String(e);
       setError(`Áudio do SDR: ${message}`);
       if (socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ type: 'outcome', callId, outcome: `audio_error:${message.slice(0, 120)}` }));

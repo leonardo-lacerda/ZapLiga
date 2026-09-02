@@ -145,7 +145,15 @@ jobs:
             exit 1
           fi
 
-          docker compose up -d postgres postgres-backup redis nats waxum
+          COMPOSE=(docker compose -f docker-compose.yml)
+          # Production currently uses the SRTP/audio-fixed Waxum image. Keep
+          # that host-owned override active during CI/CD so a normal push does
+          # not silently replace it with the upstream image.
+          if [ -f waxum-encfix.override.yml ]; then
+            COMPOSE+=(-f waxum-encfix.override.yml)
+          fi
+
+          "${COMPOSE[@]}" up -d postgres postgres-backup redis nats waxum
 
           # These references are explicit in docker-compose.yml. Keeping the
           # names deterministic prevents `docker compose config --images`
@@ -161,9 +169,9 @@ jobs:
             docker image inspect "$img" >/dev/null 2>&1 && docker tag "$img" "${img%:*}:rollback" || true
           done
 
-          docker compose build api-a api-b web
-          docker compose stop api >/dev/null 2>&1 || true
-          docker compose rm -sf api >/dev/null 2>&1 || true
+          "${COMPOSE[@]}" build api-a api-b web
+          "${COMPOSE[@]}" stop api >/dev/null 2>&1 || true
+          "${COMPOSE[@]}" rm -sf api >/dev/null 2>&1 || true
 
           # Roll api-a and api-b out one at a time instead of together. The
           # nginx upstream (infra/nginx/api.zapliga.com.conf) already routes
@@ -174,7 +182,7 @@ jobs:
           deploy_instance() {
             local service="$1" port="$2" image="$3"
             echo "Subindo $service ($image)..."
-            docker compose up -d --no-deps "$service"
+            "${COMPOSE[@]}" up -d --no-deps "$service"
             local attempt
             for attempt in $(seq 1 30); do
               if curl -fsS "http://127.0.0.1:${port}/health" >/dev/null; then
@@ -184,11 +192,11 @@ jobs:
               fi
               if [ "$attempt" -eq 30 ]; then
                 echo "$service não ficou saudável a tempo" >&2
-                docker compose logs --tail=80 "$service" >&2 || true
+                "${COMPOSE[@]}" logs --tail=80 "$service" >&2 || true
                 if docker image inspect "${image%:*}:rollback" >/dev/null 2>&1; then
                   echo "Revertendo $service para a imagem anterior" >&2
                   docker tag "${image%:*}:rollback" "$image"
-                  docker compose up -d --no-deps --no-build "$service"
+                  "${COMPOSE[@]}" up -d --no-deps --no-build "$service"
                 else
                   echo "Nenhuma imagem anterior disponível para reverter $service (primeiro deploy?)" >&2
                 fi
@@ -200,7 +208,7 @@ jobs:
           deploy_instance api-a 3000 "$IMAGE_API_A"
           deploy_instance api-b 3001 "$IMAGE_API_B"
 
-          docker compose up -d --remove-orphans web
+          "${COMPOSE[@]}" up -d --remove-orphans web
 
           # Keep the rollback tag plus the last 5 SHA tags per API image so the
           # host doesn't accumulate every build indefinitely.
@@ -226,5 +234,5 @@ jobs:
           fi
           docker exec "$NGINX_CONTAINER" nginx -s reload
 
-          docker compose ps
+          "${COMPOSE[@]}" ps
           REMOTE

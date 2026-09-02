@@ -90,3 +90,15 @@ curl -fsS http://127.0.0.1:3000/health
 curl -fsS http://127.0.0.1:3001/health
 npm --workspace apps/api run db:migrate:status
 ```
+
+## Regra operacional: nao compilar em producao
+
+Builds pesados (especialmente Rust/Waxum) devem rodar no GitHub Actions ou em
+uma maquina de build separada. A VPS de producao recebe apenas a imagem pronta
+(`docker load`/pull) e faz a troca controlada do container.
+
+Em 2026-09-02, um `cargo build --release` executado dentro da VPS causou
+pressao de memoria, carga acima de 25 em 4 CPUs, timeouts de healthcheck e
+indisponibilidade de SSH/HTTP. Nao repetir esse procedimento; se for
+necessario gerar uma imagem customizada, compile fora da VPS e preserve o
+volume de dados ao atualizar o servico.
