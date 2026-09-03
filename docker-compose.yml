@@ -130,7 +130,12 @@ services:
       retries: 10
 
   waxum:
-    image: fdciabdul/waxum:0.12.6@sha256:7682a3f3c93eac2e5b5a0e2263b38d0d718f0033a8b976c6b04c0481d06a100b
+    # Build local em whatsapp-rust com a correcao de selecao de relay de midia
+    # (issue #1098 upstream: sem isso, uma chamada podia "conectar" mas ficar
+    # unidirecional porque o relay escolhido nunca devolvia o audio do peer).
+    # A imagem stock do fdciabdul/waxum NAO tem essa correcao — nao trocar de
+    # volta para ela sem reaplicar o patch em whatsapp-rust/. Ver docs/deploy-runbook.md.
+    image: zapliga-waxum:0.12.6-relay-fna-v2
     entrypoint: ["/bin/sh", "/usr/local/bin/waxum-entrypoint-guard.sh"]
     command: ["/app/waxum"]
     restart: unless-stopped
