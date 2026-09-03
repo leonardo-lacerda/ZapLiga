@@ -76,6 +76,13 @@ describe('DialerService', () => {
 
       expect(result).toEqual(expect.objectContaining({ status: 'reserved' }));
       expect(db.transaction).toHaveBeenCalledTimes(1);
+      expect((service as any).redis.reserve).toHaveBeenCalledWith(expect.objectContaining({
+        waxumSessionId: 'num-2',
+        maxCallsPerWindow: 3,
+        callWindowSeconds: 180,
+        maxCallsPerMinute: 6,
+        minSecondsBetweenCalls: 10,
+      }));
     });
 
     it('allows manual dialing for a connected but unavailable SDR', async () => {
@@ -96,7 +103,7 @@ describe('DialerService', () => {
       }));
     });
 
-    it('does not renew a Waxum rate-limit window with another manual attempt', async () => {
+    it('respects a future-dated line protection on another manual attempt', async () => {
       const gateway = makeGateway();
       const redis = makeRedis();
       const db = makeDb({
@@ -166,7 +173,7 @@ describe('DialerService', () => {
       const redis = makeRedis();
       const gateway = makeGateway();
       const serviceWithGateway = new DialerService(db as any, redis as any, makeWaxum() as any, gateway as any);
-      (serviceWithGateway as any).active.set('call-1', { tenantId: 'tenant-1', token: 'tok', numberId: 'num-1', leadId: 'lead-1', sdrId: 'sdr-1', mediaActive: false, rateLimitBackoffSeconds: 240, previousSdrAvailable: false, previousSdrState: 'offline' });
+      (serviceWithGateway as any).active.set('call-1', { tenantId: 'tenant-1', token: 'tok', numberId: 'num-1', waxumSessionId: 'session-1', leadId: 'lead-1', sdrId: 'sdr-1', mediaActive: false, rateLimitBackoffSeconds: 240, previousSdrAvailable: false, previousSdrState: 'offline' });
 
       await (serviceWithGateway as any).finishCall('call-1', 'cancelled', 'waxum_rate_limited', false, 'tenant-1');
 
@@ -174,12 +181,26 @@ describe('DialerService', () => {
       expect(leadUpdate[1]).toEqual(['tenant-1', 'lead-1']);
       const numberUpdate = client.query.mock.calls.find((call: any[]) => call[0].includes('UPDATE whatsapp_numbers'));
       expect(numberUpdate[1]).toEqual([240, 'num-1']);
-      expect(redis.release).toHaveBeenCalledWith(expect.objectContaining({ tenantId: 'tenant-1', numberId: 'num-1' }));
+      expect(redis.release).toHaveBeenCalledWith(expect.objectContaining({ tenantId: 'tenant-1', numberId: 'num-1', waxumSessionId: 'session-1' }));
       expect(gateway.sendToSdr).toHaveBeenCalledWith('sdr-1', expect.objectContaining({
         type: 'call_finished',
         available: false,
         state: 'offline',
       }));
+    });
+
+    it('future-dates the line after a rapid drop so the dialer cannot redial immediately', async () => {
+      const client = { query: jest.fn().mockResolvedValue({ rows: [] }) };
+      const db = { query: jest.fn().mockResolvedValue({ rows: [baseCallRow] }), transaction: jest.fn(async (cb: any) => cb(client)) };
+      const redis = makeRedis();
+      const service = new DialerService(db as any, redis as any, makeWaxum() as any, makeGateway() as any);
+      (service as any).active.set('call-1', { tenantId: 'tenant-1', token: 'tok', numberId: 'num-1', waxumSessionId: 'session-1', leadId: 'lead-1', sdrId: 'sdr-1', mediaActive: false, rapidFailureBackoffSeconds: 180, previousSdrAvailable: false, previousSdrState: 'offline' });
+
+      await (service as any).finishCall('call-1', 'no_answer', 'waxum_closed:1006', false, 'tenant-1');
+
+      const numberUpdate = client.query.mock.calls.find((call: any[]) => call[0].includes('UPDATE whatsapp_numbers'));
+      expect(numberUpdate[1]).toEqual([180, 'num-1']);
+      expect(numberUpdate[0]).toContain('last_call_ended_at = now() +');
     });
   });
 
@@ -200,7 +221,7 @@ describe('DialerService', () => {
         'tenant-1',
       )).rejects.toThrow('lista de não contato');
 
-      expect(redis.release).toHaveBeenCalledWith({ tenantId: 'tenant-1', token: 'reservation-1', numberId: 'number-1', leadId: 'lead-1', sdrId: 'sdr-1' });
+      expect(redis.release).toHaveBeenCalledWith({ tenantId: 'tenant-1', token: 'reservation-1', numberId: 'number-1', waxumSessionId: 'number-1', leadId: 'lead-1', sdrId: 'sdr-1' });
       expect(client.query.mock.calls.some((call: any[]) => call[0].includes('INSERT INTO calls'))).toBe(false);
     });
   });
@@ -242,6 +263,19 @@ describe('DialerService', () => {
       expect(redis.client.expire).toHaveBeenCalledWith('zapcall:line-failures:num-1', 24 * 60 * 60);
       expect(db.query.mock.calls.find((call: any[]) => call[0].includes('SET flagged_until'))).toBeUndefined();
       expect(gateway.broadcast).not.toHaveBeenCalled();
+    });
+
+    it('assigns a protective backoff even before quarantine is reached', async () => {
+      const db = makeDb();
+      const redis = makeRedis();
+      redis.client.incr.mockResolvedValue(1);
+      const service = new DialerService(db as any, redis as any, makeWaxum() as any, makeGateway() as any);
+      const resource = { numberId: 'num-1', tenantId: 'tenant-1' };
+
+      await (service as any).registerLineInstantFailure('num-1', 'tenant-1', 'call-1', resource);
+
+      expect(resource).toEqual(expect.objectContaining({ rapidFailureBackoffSeconds: 180 }));
+      expect(db.query.mock.calls.find((call: any[]) => call[0].includes('SET flagged_until'))).toBeUndefined();
     });
   });
 

@@ -94,7 +94,7 @@ réplica.
 
 ## 9. Redis — bem desenhado, já pronto para múltiplas instâncias
 
-- `infrastructure/redis/redis.service.ts:4-16` — Lua script de `reserve`/`release` (limites globais e por número via `ZCARD`, locks de lead/SDR/número via `EXISTS`) roda atomicamente dentro do Redis; não há race condition apesar do padrão check-then-act.
+- `infrastructure/redis/redis.service.ts:4-16` — Lua script de `reserve`/`release` (limites globais e por número via `ZCARD`, locks de lead/SDR/número/sessão Waxum via `EXISTS`) roda atomicamente dentro do Redis; não há race condition apesar do padrão check-then-act.
 - Também usado para: lock distribuído do tick (`acquireLock`/`releaseLock`), cache de LID do WhatsApp (30 dias TTL), cache de métricas (20s) e rate limit por tenant+usuário (30 req/10s) em `metrics-query-guard.service.ts`.
 - Essa é a peça que já está corretamente pronta para múltiplas instâncias da API — ao contrário do registro de sockets do SDR (item 2).
 

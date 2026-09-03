@@ -27,7 +27,7 @@ export class NumbersController {
     if (!label) throw new BadRequestException('label é obrigatório');
     try {
       const session = await this.createWaxumSession(label);
-      const result = await this.db.query(`INSERT INTO whatsapp_numbers (id,tenant_id,label,phone,waxum_session_id,max_concurrent_calls,cooldown_seconds) VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING *`, [randomUUID(), tenantId, label, digits(body.phone) || null, session.id, Number(body.maxConcurrentCalls ?? 1), Number(body.cooldownSeconds ?? 60)]);
+      const result = await this.db.query(`INSERT INTO whatsapp_numbers (id,tenant_id,label,phone,waxum_session_id,max_concurrent_calls,cooldown_seconds,max_calls_per_window,call_window_seconds) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING *`, [randomUUID(), tenantId, label, digits(body.phone) || null, session.id, Number(body.maxConcurrentCalls ?? 1), Number(body.cooldownSeconds ?? 60), Number(body.maxCallsPerWindow ?? 3), Number(body.callWindowSeconds ?? 180)]);
       await this.audit.record({ actorUserId: user.id, tenantId, action: 'number.created', entityType: 'whatsapp_number', entityId: result.rows[0].id });
       return result.rows[0];
     } catch (error) {
@@ -101,7 +101,7 @@ export class NumbersController {
   @Roles('leader', 'super_admin')
   @Patch(['/api/numbers/:id/settings', '/api/tenants/:tenantId/numbers/:id/settings'])
   async settings(@Param('id') id: string, @Body() body: UpdateNumberDto, @CurrentTenant() tenantId: string, @CurrentUser() user: any) {
-    const result = await this.db.query(`UPDATE whatsapp_numbers SET max_concurrent_calls = COALESCE($1,max_concurrent_calls), cooldown_seconds = COALESCE($2,cooldown_seconds), label = COALESCE($3,label) WHERE id = $4 AND tenant_id = $5 AND status <> 'removed' RETURNING *`, [body.maxConcurrentCalls == null ? null : Number(body.maxConcurrentCalls), body.cooldownSeconds == null ? null : Number(body.cooldownSeconds), body.label ? String(body.label) : null, id, tenantId]);
+    const result = await this.db.query(`UPDATE whatsapp_numbers SET max_concurrent_calls = COALESCE($1,max_concurrent_calls), cooldown_seconds = COALESCE($2,cooldown_seconds), max_calls_per_window = COALESCE($3,max_calls_per_window), call_window_seconds = COALESCE($4,call_window_seconds), label = COALESCE($5,label) WHERE id = $6 AND tenant_id = $7 AND status <> 'removed' RETURNING *`, [body.maxConcurrentCalls == null ? null : Number(body.maxConcurrentCalls), body.cooldownSeconds == null ? null : Number(body.cooldownSeconds), body.maxCallsPerWindow == null ? null : Number(body.maxCallsPerWindow), body.callWindowSeconds == null ? null : Number(body.callWindowSeconds), body.label ? String(body.label) : null, id, tenantId]);
     if (!result.rows[0]) throw new NotFoundException('Número não encontrado');
     await this.audit.record({ actorUserId: user.id, tenantId, action: 'number.settings_changed', entityType: 'whatsapp_number', entityId: id });
     return result.rows[0];

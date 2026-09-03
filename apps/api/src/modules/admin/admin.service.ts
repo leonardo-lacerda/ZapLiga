@@ -113,7 +113,7 @@ export class AdminService {
     const pagination = page(filters.limit, filters.offset);
     const total = await this.db.query(`SELECT count(*)::int AS total FROM whatsapp_numbers WHERE tenant_id = $1 AND status <> 'removed'`, [tenantId]);
     const items = await this.db.query(`
-      SELECT n.id, n.label, n.phone, n.status, n.max_concurrent_calls, n.cooldown_seconds, n.created_at, ${NUMBER_LOCK_FIELDS}
+      SELECT n.id, n.label, n.phone, n.status, n.max_concurrent_calls, n.cooldown_seconds, n.max_calls_per_window, n.call_window_seconds, n.created_at, ${NUMBER_LOCK_FIELDS}
       FROM whatsapp_numbers n
       WHERE n.tenant_id = $1 AND n.status <> 'removed'
       ORDER BY n.created_at DESC LIMIT $2 OFFSET $3
@@ -197,7 +197,7 @@ export class AdminService {
         ORDER BY active_calls DESC, queued_leads DESC, t.name LIMIT 100
       `, [scope]),
       this.db.query(`SELECT c.id, c.tenant_id, t.name AS tenant_name, c.status, c.created_at, c.duration_seconds, c.owner_instance_id, GREATEST(0, EXTRACT(EPOCH FROM (now() - c.created_at))::int) AS age_seconds, l.name AS lead_name, s.name AS sdr_name, n.label AS number_label FROM calls c JOIN tenants t ON t.id = c.tenant_id JOIN leads l ON l.tenant_id = c.tenant_id AND l.id = c.lead_id JOIN sdrs s ON s.tenant_id = c.tenant_id AND s.id = c.sdr_id JOIN whatsapp_numbers n ON n.id = c.number_id WHERE ($1::text IS NULL OR c.tenant_id = $1) ORDER BY c.created_at DESC LIMIT 30`, [scope]),
-      this.db.query(`SELECT n.id, n.tenant_id, COALESCE(t.name, 'Sem organização') AS tenant_name, n.label, n.phone, n.status, n.max_concurrent_calls, n.cooldown_seconds, ${NUMBER_LOCK_FIELDS} FROM whatsapp_numbers n LEFT JOIN tenants t ON t.id = n.tenant_id WHERE n.status <> 'removed' AND ($1::text IS NULL OR n.tenant_id = $1) ORDER BY CASE WHEN n.status IN ('connected','online','ready','authenticated') THEN 1 ELSE 0 END, n.created_at DESC LIMIT 50`, [scope]),
+      this.db.query(`SELECT n.id, n.tenant_id, COALESCE(t.name, 'Sem organização') AS tenant_name, n.label, n.phone, n.status, n.max_concurrent_calls, n.cooldown_seconds, n.max_calls_per_window, n.call_window_seconds, ${NUMBER_LOCK_FIELDS} FROM whatsapp_numbers n LEFT JOIN tenants t ON t.id = n.tenant_id WHERE n.status <> 'removed' AND ($1::text IS NULL OR n.tenant_id = $1) ORDER BY CASE WHEN n.status IN ('connected','online','ready','authenticated') THEN 1 ELSE 0 END, n.created_at DESC LIMIT 50`, [scope]),
       this.db.query(`SELECT s.id, s.tenant_id, t.name AS tenant_name, s.name, s.available, s.state, s.last_assigned_at FROM sdrs s JOIN tenants t ON t.id = s.tenant_id WHERE ($1::text IS NULL OR s.tenant_id = $1) ORDER BY CASE s.state WHEN 'in_call' THEN 0 WHEN 'post_call' THEN 1 WHEN 'available' THEN 2 ELSE 3 END, s.name LIMIT 50`, [scope]),
     ]);
     return { tenants: tenants.rows, recentCalls: calls.rows, numbers: numbers.rows, sdrs: sdrs.rows, generatedAt: new Date().toISOString() };

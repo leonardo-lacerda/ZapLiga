@@ -7,6 +7,8 @@ const weekdays = ['Domingo', 'Segunda-feira', 'Terça-feira', 'Quarta-feira', 'Q
 const timezones = ['America/Sao_Paulo', 'America/Manaus', 'America/Cuiaba', 'America/Fortaleza', 'America/Recife', 'America/Bahia', 'America/Belem', 'America/Rio_Branco'];
 const settingFields = [
   ['global_max_concurrent_calls', 'Chamadas simultâneas', 1, 1000],
+  ['max_calls_per_minute', 'Máximo de chamadas por minuto', 1, 60],
+  ['min_seconds_between_calls', 'Espera entre ligações (s)', 0, 3600],
   ['max_attempts_per_lead', 'Tentativas por lead', 1, 100],
   ['retry_delay_minutes', 'Intervalo entre tentativas (min)', 0, 10080],
   ['ring_timeout_seconds', 'Tempo de toque (s)', 1, 600],
@@ -23,7 +25,7 @@ export function OperationSettingsPage({ status, onChanged }: { status: AnyRow; o
     try {
       const next = await json('/api/dialer/schedule');
       setSchedule({ ...next, windows: next.windows ?? [], exceptions: next.exceptions ?? [] });
-      setSettings(status.settings ?? {});
+      setSettings({ max_calls_per_minute: 6, min_seconds_between_calls: 10, ...(status.settings ?? {}) });
     } catch (error) { setMessage(error instanceof Error ? error.message : String(error)); }
   }, [status.settings]);
   useEffect(() => { void load(); }, [load]);

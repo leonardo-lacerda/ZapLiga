@@ -16,6 +16,10 @@ export function NumbersPage({ numbers, numbersTotal, numbersOffset, onNumbersPag
       <form className="form-row" onSubmit={createNumber}>
         <input placeholder="Nome do numero" value={numberForm.label} onChange={(e) => setNumberForm({ ...numberForm, label: e.target.value })} required />
         <input placeholder="Telefone opcional" value={numberForm.phone} onChange={(e) => setNumberForm({ ...numberForm, phone: e.target.value })} />
+        <input aria-label="Chamadas simultaneas por linha" placeholder="Simultaneas" type="number" min="1" max="50" value={numberForm.maxConcurrentCalls ?? 1} onChange={(e) => setNumberForm({ ...numberForm, maxConcurrentCalls: Number(e.target.value) })} title="Limite simultaneo da linha" />
+        <input aria-label="Cooldown entre chamadas" placeholder="Cooldown (s)" type="number" min="0" max="3600" value={numberForm.cooldownSeconds ?? 60} onChange={(e) => setNumberForm({ ...numberForm, cooldownSeconds: Number(e.target.value) })} title="Segundos entre chamadas" />
+        <input aria-label="Limite de chamadas na janela" placeholder="Tentativas" type="number" min="1" max="20" value={numberForm.maxCallsPerWindow ?? 3} onChange={(e) => setNumberForm({ ...numberForm, maxCallsPerWindow: Number(e.target.value) })} title="Tentativas permitidas por janela" />
+        <input aria-label="Janela de chamadas em segundos" placeholder="Janela (s)" type="number" min="60" max="3600" value={numberForm.callWindowSeconds ?? 180} onChange={(e) => setNumberForm({ ...numberForm, callWindowSeconds: Number(e.target.value) })} title="Janela móvel em segundos" />
         <Button icon="plus">Criar sessao</Button>
       </form>
     </Panel>}
@@ -24,6 +28,7 @@ export function NumbersPage({ numbers, numbersTotal, numbersOffset, onNumbersPag
         <div className="resource-card-header"><div className="resource-icon blue"><Icon name="phone" size={18} /></div><Badge tone={connectedStatuses.includes(String(number.status).toLowerCase()) ? 'success' : 'neutral'}>{labelStatus(number.status)}</Badge></div>
         <h3>{number.label}</h3><p>{number.phone || 'Telefone nao informado'}</p>
         <div className="resource-meta"><span>Limite de chamadas</span><strong>{number.max_concurrent_calls}</strong></div>
+        <div className="resource-meta"><span>Cadência protegida</span><strong>{number.max_calls_per_window ?? 3} / {number.call_window_seconds ?? 180}s</strong></div>
         {canManageNumbers && <div className="card-actions">{!connectedStatuses.includes(String(number.status).toLowerCase()) && <Button variant="secondary" icon="qr" disabled={qrLoading} onClick={() => void showQr(number.id)}>Abrir QR</Button>}<Button variant="ghost" icon="refresh" disabled={qrLoading} onClick={() => void reconnectNumber(number.id)}>Reconectar</Button><Button variant="danger" icon="close" disabled={qrLoading} onClick={() => void removeNumber(number.id, number.label)}>Remover</Button></div>}
       </div>)}
       {!numbers.length && <div className="full-span"><EmptyState title="Nenhum numero cadastrado" description={canManageNumbers ? 'Adicione uma sessao para conectar seu WhatsApp.' : 'Os numeros serao configurados pelo administrador da plataforma.'} /></div>}

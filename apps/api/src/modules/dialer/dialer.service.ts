@@ -18,6 +18,7 @@ import {
   computeCallOutcome,
   computeRateLimitBackoffSeconds,
   computeRateLimitCooldownWindowSeconds,
+  cooldownIsReady,
   isInstantFailure,
   isSelfCallNumber,
   normalizePhone,
@@ -28,6 +29,7 @@ type CallResource = {
   tenantId: string;
   token: string;
   numberId: string;
+  waxumSessionId: string;
   leadId: string;
   sdrId: string;
   media?: WebSocket;
@@ -47,12 +49,12 @@ type CallResource = {
   browserErrorHandler?: () => void;
   finishing?: boolean;
   rateLimitBackoffSeconds?: number;
+  rapidFailureBackoffSeconds?: number;
   callPlacedAt?: number;
   receivedAnyFrame?: boolean;
   // VoIP recipient (`<lid>@lid`) and Waxum session, kept so we can send an
   // explicit `POST /calls/terminate` when the SDR hangs up.
   recipient?: string;
-  waxumSessionId?: string;
   // Diagnostic counters for the audio bridge, logged when the call finishes.
   inboundRelayed?: number;
   inboundDroppedPreAnswer?: number;
@@ -83,6 +85,19 @@ const safeOperationalError = (error: unknown) => String(error instanceof Error ?
   .replace(/([?&](?:token|ticket)=)[^&\s]+/gi, '$1[redacted]')
   .slice(0, 300);
 
+// Every WhatsApp number owns exactly one Waxum session. Keep the session ID in
+// the reservation key so a connection cannot be shared by two calls, even if
+// two API requests somehow reference the same line concurrently.
+const numberSessionId = (number: any) => String(number.waxum_session_id ?? number.id);
+const numberRateConfig = (number: any) => ({
+  maxCallsPerWindow: Math.max(1, Number(number.max_calls_per_window ?? 3) || 3),
+  callWindowSeconds: Math.max(60, Number(number.call_window_seconds ?? 180) || 180),
+});
+const dialerPacingConfig = (settings: any) => ({
+  maxCallsPerMinute: Math.max(1, Number(settings.max_calls_per_minute ?? 6) || 6),
+  minSecondsBetweenCalls: Math.max(0, Number(settings.min_seconds_between_calls ?? 10) || 0),
+});
+
 @Injectable()
 export class DialerService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(DialerService.name);
@@ -97,8 +112,9 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
   // Consecutive "instant failure" count per WhatsApp line (no media frames, no
   // answer, closed in <FLAG_FAST_FAIL_MS). Repeated instant failures are the
   // signature of a WhatsApp reachout timelock (463 MissingTcToken).
-  private readonly FLAG_FAILURE_THRESHOLD = 2;
-  private readonly FLAG_FAST_FAIL_MS = 5000;
+  private readonly FLAG_FAILURE_THRESHOLD = Math.max(2, Number(process.env.WHATSAPP_RAPID_FAILURE_THRESHOLD) || 2);
+  private readonly FLAG_FAST_FAIL_MS = Math.max(3000, Number(process.env.WHATSAPP_RAPID_FAILURE_WINDOW_MS) || 5000);
+  private readonly rapidFailureBackoffSeconds = Math.min(600, Math.max(180, Number(process.env.WHATSAPP_RAPID_FAILURE_BACKOFF_SECONDS) || 180));
   private readonly flagQuarantineHours = Math.max(1, Number(process.env.WHATSAPP_FLAG_HOURS) || 6);
 
   constructor(
@@ -339,7 +355,7 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
 
   async updateSettings(input: Record<string, unknown>, tenantId = legacyTenantId()) {
     const allowed = [
-      'global_max_concurrent_calls', 'max_attempts_per_lead', 'retry_delay_minutes',
+      'global_max_concurrent_calls', 'max_calls_per_minute', 'min_seconds_between_calls', 'max_attempts_per_lead', 'retry_delay_minutes',
       'ring_timeout_seconds', 'default_number_cooldown_seconds', 'queue_strategy',
     ];
     const values: unknown[] = [];
@@ -392,8 +408,8 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
           )
         ORDER BY s.last_assigned_at NULLS FIRST, s.last_assigned_at ASC
       `, [tenantId]),
-      // Manual calls intentionally bypass the number cooldown for the MVP.
-      // Redis still enforces the global and per-number concurrent limits.
+      // Manual and automatic calls share the same line protections. An
+      // explicit click cannot bypass the WhatsApp cooldown/rate window.
       this.db.query(`SELECT * FROM whatsapp_numbers WHERE tenant_id = $1 AND status IN ('connected', 'online', 'ready', 'authenticated') AND (flagged_until IS NULL OR flagged_until <= now()) ORDER BY last_call_ended_at NULLS FIRST, last_call_ended_at ASC`, [tenantId]),
       this.db.query(`SELECT l.* FROM leads l JOIN lead_folders f ON f.tenant_id = l.tenant_id AND f.id = l.folder_id WHERE l.tenant_id = $1 AND l.id = $2 AND f.is_active = true AND l.do_not_call = false AND l.status IN ('queued', 'retry_wait') AND l.attempts < $3`, [tenantId, leadId, settings.max_attempts_per_lead]),
     ]);
@@ -402,7 +418,7 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
     if (!lead) throw new Error('Este lead não está elegível para uma chamada manual');
     if (!sdr) throw new Error('Nenhum SDR conectado e disponível');
     if (!numbers.rows.length) throw new Error('Nenhum número WhatsApp conectado');
-    const readyNumbers = numbers.rows.filter((row: any) => !row.last_call_ended_at || new Date(row.last_call_ended_at).getTime() <= Date.now());
+    const readyNumbers = numbers.rows.filter((row: any) => cooldownIsReady(row.last_call_ended_at, Number(row.cooldown_seconds ?? settings.default_number_cooldown_seconds ?? 60)));
     if (!readyNumbers.length) throw new Error('A linha WhatsApp está temporariamente protegida por limite de chamadas. Aguarde alguns minutos e tente novamente.');
     const number = readyNumbers.find((row: any) => !isSelfCallNumber(row.phone, lead.phone));
     if (!number) throw new Error('O número de destino é a própria linha de WhatsApp conectada. Ligue para um número diferente.');
@@ -410,7 +426,9 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
     const token = randomUUID();
     const reserved = await this.redis.reserve({
       tenantId, token, globalMax: settings.global_max_concurrent_calls,
-      numberMax: number.max_concurrent_calls, numberId: number.id,
+      numberMax: number.max_concurrent_calls, numberId: number.id, waxumSessionId: numberSessionId(number),
+      ...numberRateConfig(number),
+      ...dialerPacingConfig(settings),
       leadId: lead.id, sdrId: sdr.id,
       ttlMs: (Number(settings.ring_timeout_seconds) + 60) * 1000,
     });
@@ -475,7 +493,7 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
     const sdr = sdrs.rows.find((row: any) => this.gateway.isConnected(row.id));
     if (!sdr) throw new Error('Nenhum SDR conectado e disponivel');
     if (!numbers.rows.length) throw new Error('Nenhum numero WhatsApp conectado');
-    const readyNumbers = numbers.rows.filter((row: any) => !row.last_call_ended_at || new Date(row.last_call_ended_at).getTime() <= Date.now());
+    const readyNumbers = numbers.rows.filter((row: any) => cooldownIsReady(row.last_call_ended_at, Number(row.cooldown_seconds ?? settings.default_number_cooldown_seconds ?? 60)));
     if (!readyNumbers.length) throw new Error('A linha WhatsApp esta temporariamente protegida por limite de chamadas. Aguarde alguns minutos e tente novamente.');
     // WhatsApp cannot place a call to the line's own number (self-call closes
     // the media socket immediately), so never pair a lead with its own line.
@@ -485,7 +503,9 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
     const token = randomUUID();
     const reserved = await this.redis.reserve({
       tenantId, token, globalMax: settings.global_max_concurrent_calls,
-      numberMax: number.max_concurrent_calls, numberId: number.id,
+      numberMax: number.max_concurrent_calls, numberId: number.id, waxumSessionId: numberSessionId(number),
+      ...numberRateConfig(number),
+      ...dialerPacingConfig(settings),
       leadId: lead.id, sdrId: sdr.id,
       ttlMs: (Number(settings.ring_timeout_seconds) + 60) * 1000,
     });
@@ -551,6 +571,7 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
       this.db.query(`SELECT l.status, count(*)::int AS count FROM leads l JOIN lead_folders f ON f.tenant_id = l.tenant_id AND f.id = l.folder_id WHERE l.tenant_id = $1 AND f.is_active = true GROUP BY l.status`, [tenantId]),
       this.db.query(`
         SELECT n.id, n.label, n.status, n.max_concurrent_calls, n.cooldown_seconds,
+          n.max_calls_per_window, n.call_window_seconds,
           n.last_call_ended_at, n.flagged_until,
           (n.flagged_until IS NOT NULL AND n.flagged_until > now()) AS flagged,
           CASE WHEN n.flagged_until IS NULL OR n.flagged_until <= now() THEN 0
@@ -900,23 +921,27 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
         if (!this.gateway.isConnected(sdr.id)) continue;
         const lead = leads.rows[i];
         // Skip self-calls: WhatsApp closes the media immediately when the line
-        // dials its own number. Pick another connected line if available.
-        const number = numbers.rows.find((row: any) => !isSelfCallNumber(row.phone, lead.phone));
-        if (!number) continue;
-        const token = randomUUID();
-        const reserved = await this.redis.reserve({
-          tenantId, token, globalMax: settings.global_max_concurrent_calls,
-          numberMax: number.max_concurrent_calls, numberId: number.id,
-          leadId: lead.id, sdrId: sdr.id,
-          ttlMs: (Number(settings.ring_timeout_seconds) + 60) * 1000,
-        });
-        if (!reserved) continue;
-
-        try {
-          await this.startReservedCall(sdr, number, lead, settings, token, 'automatico', tenantId);
-        } catch (error) {
-          this.logger.error(`Could not reserve call: ${safeOperationalError(error)}`);
-          Sentry.captureException(error);
+        // dials its own number. Try every eligible line so a rate-limited line
+        // does not prevent a healthy connected line from serving this lead.
+        const candidateNumbers = numbers.rows.filter((row: any) => !isSelfCallNumber(row.phone, lead.phone));
+        for (const number of candidateNumbers) {
+          const token = randomUUID();
+          const reserved = await this.redis.reserve({
+            tenantId, token, globalMax: settings.global_max_concurrent_calls,
+            numberMax: number.max_concurrent_calls, numberId: number.id, waxumSessionId: numberSessionId(number),
+            ...numberRateConfig(number),
+            ...dialerPacingConfig(settings),
+            leadId: lead.id, sdrId: sdr.id,
+            ttlMs: (Number(settings.ring_timeout_seconds) + 60) * 1000,
+          });
+          if (!reserved) continue;
+          try {
+            await this.startReservedCall(sdr, number, lead, settings, token, 'automatico', tenantId);
+          } catch (error) {
+            this.logger.error(`Could not reserve call: ${safeOperationalError(error)}`);
+            Sentry.captureException(error);
+          }
+          break;
         }
       }
       const round = Number(settings.dialer_round ?? 1);
@@ -1006,6 +1031,7 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
     const callId = randomUUID();
     const expires = new Date(Date.now() + Number(settings.ring_timeout_seconds) * 1000);
     const isAutomatic = source === 'automatico';
+    const waxumSessionId = numberSessionId(number);
     try {
       // Última barreira antes de persistir a chamada. Protege chamadas já
       // reservadas quando a janela encerra entre a seleção e a transação.
@@ -1033,6 +1059,7 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
         tenantId,
         token,
         numberId: number.id,
+        waxumSessionId,
         leadId: lead.id,
         sdrId: sdr.id,
         mediaActive: false,
@@ -1063,7 +1090,7 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
       if (browser) void this.attachMedia(callId, sdr.id, browser, tenantId);
       return { callId, status: 'reserved' };
     } catch (error) {
-      await this.redis.release({ tenantId, token, numberId: number.id, leadId: lead.id, sdrId: sdr.id });
+      await this.redis.release({ tenantId, token, numberId: number.id, waxumSessionId, leadId: lead.id, sdrId: sdr.id });
       throw error;
     }
   }
@@ -1266,7 +1293,7 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
         });
         response.resume();
       });
-      media.on('close', (code, reason) => {
+      media.on('close', async (code, reason) => {
         const detail = reason.toString().trim();
         const closeReason = detail ? `waxum_closed:${code}:${detail}` : `waxum_closed:${code}`;
         const gotSignal = resource.mediaActive || resource.receivedAnyFrame || resource.answerSignalReceived;
@@ -1274,10 +1301,11 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
         if (gotSignal) {
           // Healthy call (audio/answer reached) — the line is fine; clear any
           // instant-failure streak.
-          void this.redis.client.del(`zapcall:line-failures:${resource.numberId}`);
+          await this.redis.client.del(`zapcall:line-failures:${resource.numberId}`).catch((error) => this.logger.error(`Could not clear line failure streak for ${callId}: ${safeOperationalError(error)}`));
         } else if (isInstantFailure(elapsed, this.FLAG_FAST_FAIL_MS)) {
           // Opened then died instantly with no audio: reachout-block signature.
-          void this.registerLineInstantFailure(resource.numberId, resource.tenantId, callId)
+          resource.rapidFailureBackoffSeconds = this.rapidFailureBackoffSeconds;
+          await this.registerLineInstantFailure(resource.numberId, resource.tenantId, callId, resource)
             .catch((error) => this.logger.error(`Could not register line failure for ${callId}: ${safeOperationalError(error)}`));
         }
         void this.finishCall(callId, resource.mediaActive ? 'completed' : 'no_answer', resource.mediaActive ? 'remote_hangup' : closeReason)
@@ -1385,7 +1413,8 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
   // these in a row on the same line, quarantine it so the dialer routes to
   // healthy lines instead of hammering (and deepening the penalty on) a
   // flagged account. A single call that produces audio resets the counter.
-  private async registerLineInstantFailure(numberId: string, tenantId: string, callId: string) {
+  private async registerLineInstantFailure(numberId: string, tenantId: string, callId: string, resource?: CallResource) {
+    if (resource) resource.rapidFailureBackoffSeconds = this.rapidFailureBackoffSeconds;
     const failureKey = `zapcall:line-failures:${numberId}`;
     const count = await this.redis.client.incr(failureKey);
     if (count === 1) await this.redis.client.expire(failureKey, 24 * 60 * 60);
@@ -1470,19 +1499,20 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
         } else {
           await client.query(`UPDATE sdrs SET available = $1, state = $2, current_pause_id = NULL WHERE tenant_id = $3 AND id = $4`, [restoredAvailable, restoredState, tenantId, row.sdr_id]);
         }
-        if (transientRateLimit) {
-          // WhatsApp rate-limited this line. Push its next-eligible time out by
-          // the requested backoff so the dialer stops hammering it every tick.
+        if (transientRateLimit || resource?.rapidFailureBackoffSeconds) {
+          // WhatsApp protection (429 or rapid-drop streak) is active. Push the
+          // next-eligible time out by the backoff so the dialer stops hammering
+          // this line every tick.
           // The eligibility gate is `last_call_ended_at <= now() - cooldown`, so
           // future-dating it by (backoff - cooldown) makes the line eligible
           // again only after `backoff` seconds.
-          const backoff = computeRateLimitCooldownWindowSeconds(row.cooldown_seconds, resource?.rateLimitBackoffSeconds);
+          const backoff = computeRateLimitCooldownWindowSeconds(row.cooldown_seconds, transientRateLimit ? resource?.rateLimitBackoffSeconds : resource?.rapidFailureBackoffSeconds);
           await client.query(`UPDATE whatsapp_numbers SET last_call_ended_at = now() + (($1::int - cooldown_seconds) * interval '1 second') WHERE id = $2`, [backoff, row.number_id]);
         } else {
           await client.query(`UPDATE whatsapp_numbers SET last_call_ended_at = now() WHERE id = $1`, [row.number_id]);
         }
       });
-      if (resource) await this.redis.release({ tenantId: resource.tenantId, token: resource.token, numberId: resource.numberId, leadId: resource.leadId, sdrId: resource.sdrId });
+      if (resource) await this.redis.release({ tenantId: resource.tenantId, token: resource.token, numberId: resource.numberId, waxumSessionId: resource.waxumSessionId, leadId: resource.leadId, sdrId: resource.sdrId });
       const nextState = requiresPostCall ? 'post_call' : restoredState;
       const nextAvailable = requiresPostCall ? false : restoredAvailable;
       this.gateway.sendToSdr(row.sdr_id, { type: 'call_finished', callId, status: finalCallStatus, outcome, pause, state: nextState, available: nextAvailable });

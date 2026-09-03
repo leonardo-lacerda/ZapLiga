@@ -74,7 +74,7 @@ Os números de leads e chamadas são **premissas de planejamento**, não limites
 
 ### C.3 Números, cooldown e produtividade
 
-O banco cria cada número com max_concurrent_calls = 1 e cooldown padrão de 60 segundos. Na prática, uma organização precisa de ao menos um número saudável para uma chamada simultânea; para mais concorrência, precisa de mais linhas ou de limites explicitamente testados. O código também coloca uma linha em quarentena quando identifica falhas rápidas repetidas.
+O banco cria cada número com max_concurrent_calls = 1 e cooldown padrão de 60 segundos. Na prática, uma organização precisa de ao menos um número saudável para uma chamada simultânea; para mais concorrência, precisa de mais linhas ou de limites explicitamente testados. A reserva Redis também trava a sessão Waxum, garantindo que a mesma conexão não seja compartilhada por duas chamadas. O código também coloca uma linha em quarentena quando identifica falhas rápidas repetidas.
 
 Como referência operacional, usando 9 horas/dia, 20 dias/mês e 2,5 minutos médios por tentativa, 20 chamadas concorrentes produziriam aproximadamente 2.500–2.600 tentativas/dia a 60% de ocupação. Isso é uma **capacidade matemática de agenda**, não uma promessa de entregabilidade do WhatsApp.
 
