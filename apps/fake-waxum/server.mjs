@@ -4,6 +4,7 @@ import { WebSocketServer } from 'ws';
 import { connect, StringCodec } from 'nats';
 
 const port = Number(process.env.PORT ?? 3451);
+const publishAccept = process.env.PUBLISH_ACCEPT !== 'false';
 const sessions = new Map();
 const json = (response, status, payload) => { response.writeHead(status, { 'content-type': 'application/json' }); response.end(JSON.stringify(payload)); };
 const readBody = async (request) => { const chunks = []; for await (const chunk of request) chunks.push(chunk); try { return JSON.parse(Buffer.concat(chunks).toString('utf8') || '{}'); } catch { return {}; } };
@@ -51,9 +52,12 @@ websocketServer.on('connection', (socket, _request, sessionId) => {
   socket.send(JSON.stringify({ type: 'call_started', call_id: callId }));
   setTimeout(async () => {
     if (socket.readyState !== 1) return;
-    const connection = await getNats();
-    connection.publish(`wa.events.${sessionId}.incoming_call`, codec.encode(JSON.stringify({ event: 'incoming_call', data: { call_id: callId, action: 'Accept' } })));
+    if (publishAccept) {
+      const connection = await getNats();
+      connection.publish(`wa.events.${sessionId}.incoming_call`, codec.encode(JSON.stringify({ event: 'incoming_call', data: { call_id: callId, action: 'Accept' } })));
+    }
     const frame = Buffer.alloc(640);
+    for (let offset = 0; offset < frame.length; offset += 2) frame.writeInt16LE(offset % 4 === 0 ? 2400 : -2400, offset);
     socket.send(frame);
     setTimeout(() => { if (socket.readyState === 1) socket.send(frame); }, 350);
   }, 350);

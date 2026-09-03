@@ -49,6 +49,18 @@ async function waitForWs(type: string, timeout = 12_000): Promise<any> {
     control.on('message', listener);
   });
 }
+async function waitForBinary(timeout = 12_000): Promise<Buffer> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => { cleanup(); reject(new Error('Timeout aguardando áudio do cliente')); }, timeout);
+    const listener = (raw: WebSocket.RawData, binary: boolean) => {
+      if (!binary) return;
+      cleanup();
+      resolve(Buffer.from(raw as any));
+    };
+    const cleanup = () => { clearTimeout(timer); control.off('message', listener); };
+    control.on('message', listener);
+  });
+}
 async function waitForPause(api: any) {
   for (let attempt = 0; attempt < 20; attempt++) {
     const response = await api.get(`/api/tenants/${tenantA}/me/sdr`, { headers: headers(sdrToken, tenantA) });
@@ -177,7 +189,7 @@ test.describe.serial('Gate B - jornadas criticas', () => {
     await api.dispose();
   });
 
-  test('8. chamada completa percorre audio simulado e pos-atendimento', async () => {
+  test('8. voz chega ao SDR sem depender do evento Accept e abre pos-atendimento', async () => {
     const api = await context();
     const ticket = await expectOk(await api.post('/api/auth/ws-ticket', { headers: headers(sdrToken, tenantA) }));
     control = new WebSocket(`${wsBase}/ws/tenants/${tenantA}/sdr?ticket=${encodeURIComponent(ticket.ticket)}`);
@@ -185,9 +197,15 @@ test.describe.serial('Gate B - jornadas criticas', () => {
     control.send(JSON.stringify({ type: 'identify', sessionId: `e2e-${suffix}` }));
     const identified = await waitForWs('identified'); sdrId = identified.sdr.id;
     const startedPromise = waitForWs('call_started');
+    const audioPromise = waitForBinary();
     control.send(JSON.stringify({ type: 'availability', available: true }));
     await waitForWs('availability_changed');
     const started = await startedPromise;
+    const audio = await audioPromise;
+    let peak = 0;
+    for (let offset = 0; offset + 1 < audio.length; offset += 2) peak = Math.max(peak, Math.abs(audio.readInt16LE(offset)));
+    expect(audio.length).toBeGreaterThanOrEqual(640);
+    expect(peak).toBeGreaterThanOrEqual(2000);
     await delay(500);
     control.send(JSON.stringify({ type: 'outcome', callId: started.callId, outcome: 'completed' }));
     const pause = await waitForPause(api);

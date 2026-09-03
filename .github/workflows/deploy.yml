@@ -38,6 +38,12 @@ jobs:
       - name: Testes frontend
         run: npm run test:web
 
+      - name: Validar proteção operacional de áudio
+        run: |
+          docker compose config --quiet
+          docker compose -f docker-compose.yml -f docker-compose.e2e.yml config --quiet
+          sh -n infra/waxum/entrypoint-guard.sh
+
       - name: Build
         run: npm run build
 
@@ -154,6 +160,24 @@ jobs:
           fi
 
           "${COMPOSE[@]}" up -d postgres postgres-backup redis nats waxum
+
+          # HTTP alone is insufficient: Waxum previously reported /livez while
+          # its NATS integration was permanently disabled. The guarded
+          # healthcheck only becomes healthy after NATS lists the Rust client.
+          WAXUM_CONTAINER=$("${COMPOSE[@]}" ps -q waxum)
+          for attempt in $(seq 1 60); do
+            waxum_health=$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}missing{{end}}' "$WAXUM_CONTAINER" 2>/dev/null || true)
+            if [ "$waxum_health" = healthy ]; then
+              echo "Waxum saudável e conectado ao NATS"
+              break
+            fi
+            if [ "$attempt" -eq 60 ]; then
+              echo "Waxum não confirmou conexão com NATS; deploy bloqueado" >&2
+              "${COMPOSE[@]}" logs --tail=120 nats waxum >&2 || true
+              exit 1
+            fi
+            sleep 2
+          done
 
           # These references are explicit in docker-compose.yml. Keeping the
           # names deterministic prevents `docker compose config --images`

@@ -51,9 +51,9 @@ x-api-common: &api-common
     redis:
       condition: service_healthy
     waxum:
-      condition: service_started
+      condition: service_healthy
     nats:
-      condition: service_started
+      condition: service_healthy
   restart: unless-stopped
   stop_grace_period: 45s
   healthcheck:
@@ -131,6 +131,8 @@ services:
 
   waxum:
     image: fdciabdul/waxum:0.12.6@sha256:7682a3f3c93eac2e5b5a0e2263b38d0d718f0033a8b976c6b04c0481d06a100b
+    entrypoint: ["/bin/sh", "/usr/local/bin/waxum-entrypoint-guard.sh"]
+    command: ["/app/waxum"]
     restart: unless-stopped
     ports:
       - "127.0.0.1:${WAXUM_HOST_PORT:-3451}:3451"
@@ -146,13 +148,14 @@ services:
       # quota for every tenant and API replica.
       RATE_LIMIT_ENABLED: "false"
     healthcheck:
-      test: ["CMD", "curl", "-fsS", "--max-time", "4", "http://127.0.0.1:3451/livez"]
+      test: ["CMD-SHELL", "curl -fsS --max-time 4 http://127.0.0.1:3451/livez >/dev/null && test -f /tmp/waxum-nats-ready"]
       interval: 30s
       timeout: 5s
       start_period: 20s
       retries: 3
     volumes:
       - waxum_data:/app/whatsapp_sessions
+      - ./infra/waxum/entrypoint-guard.sh:/usr/local/bin/waxum-entrypoint-guard.sh:ro
     depends_on:
       nats:
         condition: service_healthy

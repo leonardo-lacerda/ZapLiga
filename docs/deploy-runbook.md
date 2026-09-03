@@ -7,6 +7,7 @@ Todo push em `main` dispara `.github/workflows/deploy.yml`:
 1. **`validate`**: `npm ci` → `typecheck` → `test -- --runInBand` → `build`. Qualquer falha aqui impede o deploy.
 2. **`deploy`**: envia o repositório para `/opt/zapliga` no servidor via SSH e roda o script remoto, que:
    - sobe `postgres`, `postgres-backup`, `redis`, `nats`, `waxum` (infraestrutura compartilhada);
+   - só prossegue quando o Waxum confirma simultaneamente `/livez` e uma conexão Rust ativa no NATS; o container aguarda o NATS antes do boot e se reinicia automaticamente após três falhas consecutivas dessa integração;
    - builda as imagens de `api-a`, `api-b` e `web`;
    - **antes de buildar**, marca a imagem atualmente rodando de cada instância com a tag `:rollback` (é o alvo do rollback automático abaixo);
    - sobe **`api-a` sozinho**, espera `http://127.0.0.1:3000/health` responder (até 60s); só então sobe **`api-b`** e espera `:3001/health`;
@@ -90,6 +91,21 @@ curl -fsS http://127.0.0.1:3000/health
 curl -fsS http://127.0.0.1:3001/health
 npm --workspace apps/api run db:migrate:status
 ```
+
+Para validar especificamente a proteção de áudio e sinalização:
+
+```bash
+docker compose ps nats waxum
+docker compose logs --tail=100 waxum | grep -E 'NATS|Waxum pronto'
+curl -fsS http://127.0.0.1:8222/connz | grep -Eq '"lang"[[:space:]]*:[[:space:]]*"rust"'
+```
+
+O Waxum só fica `healthy` depois de registrar sua conexão no NATS. Se essa
+conexão falhar três vezes consecutivas durante a execução, o guard encerra o
+processo e a política `restart: unless-stopped` recria o serviço. Além disso, a
+jornada E2E 8 omite propositalmente o evento `Accept`, envia PCM não silencioso
+e exige que esse áudio chegue ao WebSocket do SDR; remover o fallback volta a
+bloquear o CI antes do deploy.
 
 ## Regra operacional: nao compilar em producao
 

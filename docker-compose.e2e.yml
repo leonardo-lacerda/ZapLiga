@@ -1,12 +1,17 @@
 services:
   waxum:
     image: zapliga-fake-waxum:e2e
+    entrypoint: []
+    command: ["node", "apps/fake-waxum/server.mjs"]
     build:
       context: .
       dockerfile: apps/fake-waxum/Dockerfile
     environment:
       PORT: 3451
       NATS_URL: nats://nats:4222
+      # Regression fixture: voice must reach the SDR even when the signalling
+      # event is absent, exactly like the production incident.
+      PUBLISH_ACCEPT: "false"
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3451/livez"]
       interval: 2s
