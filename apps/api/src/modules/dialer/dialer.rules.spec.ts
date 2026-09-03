@@ -6,6 +6,7 @@ import {
   computeRateLimitCooldownWindowSeconds,
   cooldownIsReady,
   isInstantFailure,
+  isInboundAudioStalled,
   isSelfCallNumber,
   leadIsEligible,
   normalizePhone,
@@ -49,6 +50,22 @@ describe('dialer rules', () => {
   it('does not classify tiny comfort-noise samples as voice', () => {
     const comfortNoise = new Int16Array(320).fill(12);
     expect(analyzePcm16Le(new Uint8Array(comfortNoise.buffer)).hasVoice).toBe(false);
+  });
+
+  it('detects sustained exact-zero inbound PCM only when the answered call has a live microphone', () => {
+    const base = {
+      answeredForMs: 12_000,
+      postAnswerSamples: 160_000,
+      postAnswerNonZeroSamples: 0,
+      microphoneNonZeroSamples: 10,
+      minDurationMs: 10_000,
+      minSamples: 120_000,
+    };
+    expect(isInboundAudioStalled(base)).toBe(true);
+    expect(isInboundAudioStalled({ ...base, postAnswerNonZeroSamples: 1 })).toBe(false);
+    expect(isInboundAudioStalled({ ...base, microphoneNonZeroSamples: 0 })).toBe(false);
+    expect(isInboundAudioStalled({ ...base, answeredForMs: 9_999 })).toBe(false);
+    expect(isInboundAudioStalled({ ...base, postAnswerSamples: 119_999 })).toBe(false);
   });
 
   it('enforces global and per-number capacity', () => {
@@ -99,6 +116,11 @@ describe('dialer rules', () => {
     it('treats a Waxum rate limit as transient: cancels the call and requeues the lead immediately', () => {
       const result = computeCallOutcome({ ...base, status: 'cancelled', reason: 'waxum_rate_limited' });
       expect(result).toEqual(expect.objectContaining({ transientRateLimit: true, retryable: false, finalCallStatus: 'cancelled', leadStatus: 'queued' }));
+    });
+
+    it('treats stalled inbound Waxum audio as transient and preserves the automatic lead attempt', () => {
+      const result = computeCallOutcome({ ...base, status: 'failed', reason: 'waxum_inbound_audio_stalled' });
+      expect(result).toEqual(expect.objectContaining({ transientInfrastructureFailure: true, retryable: false, finalCallStatus: 'cancelled', leadStatus: 'queued' }));
     });
 
     it('retries an automatic no_answer/failed call within the attempt budget', () => {

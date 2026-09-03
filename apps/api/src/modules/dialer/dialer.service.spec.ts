@@ -202,6 +202,31 @@ describe('DialerService', () => {
       expect(numberUpdate[1]).toEqual([180, 'num-1']);
       expect(numberUpdate[0]).toContain('last_call_ended_at = now() +');
     });
+
+    it('requeues a lead and skips post-call when answered media is a Waxum zero-audio stall', async () => {
+      const client = { query: jest.fn().mockResolvedValue({ rows: [] }) };
+      const stalledCall = { ...baseCallRow, status: 'media_active', connected_at: new Date(), attempts: 1 };
+      const db = { query: jest.fn().mockResolvedValue({ rows: [stalledCall] }), transaction: jest.fn(async (cb: any) => cb(client)) };
+      const redis = makeRedis();
+      const gateway = makeGateway();
+      const service = new DialerService(db as any, redis as any, makeWaxum() as any, gateway as any);
+      (service as any).active.set('call-1', {
+        tenantId: 'tenant-1', token: 'tok', numberId: 'num-1', waxumSessionId: 'session-1',
+        leadId: 'lead-1', sdrId: 'sdr-1', mediaActive: true, rapidFailureBackoffSeconds: 90,
+        previousSdrAvailable: true, previousSdrState: 'available',
+      });
+
+      await (service as any).finishCall('call-1', 'failed', 'waxum_inbound_audio_stalled', false, 'tenant-1');
+
+      const callUpdate = client.query.mock.calls.find((call: any[]) => call[0].includes('UPDATE calls SET status'));
+      expect(callUpdate[1]).toEqual(expect.arrayContaining(['cancelled', 'waxum_inbound_audio_stalled']));
+      const leadUpdate = client.query.mock.calls.find((call: any[]) => call[0].includes("attempts = GREATEST(0, attempts - 1)"));
+      expect(leadUpdate).toBeDefined();
+      expect(client.query.mock.calls.some((call: any[]) => call[0].includes('INSERT INTO sdr_pauses'))).toBe(false);
+      expect(gateway.sendToSdr).toHaveBeenCalledWith('sdr-1', expect.objectContaining({
+        type: 'call_finished', status: 'cancelled', state: 'available', available: true,
+      }));
+    });
   });
 
   describe('contact suppression safety barrier', () => {

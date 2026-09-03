@@ -25,6 +25,7 @@ const server = http.createServer(async (request, response) => {
   if (request.method === 'GET' && suffix === '/status') return json(response, 200, { status: 'connected', connected: true, phone_number: sessions.get(id).phone_number, session: sessions.get(id) });
   if (request.method === 'GET' && suffix === '/qr') return json(response, 200, { status: 'connected', qr_codes: [], phone_number: sessions.get(id).phone_number });
   if (request.method === 'POST' && suffix === '/connect') return json(response, 200, { status: 'connected' });
+  if (request.method === 'POST' && suffix === '/disconnect') return json(response, 200, { status: 'disconnected' });
   if (request.method === 'POST' && suffix === '/contacts/check') {
     const body = await readBody(request); const phone = String(body.phones?.[0] ?? '').replace(/\D/g, '');
     return json(response, 200, { results: [{ phone, jid: `${phone}@s.whatsapp.net`, is_registered: true }] });

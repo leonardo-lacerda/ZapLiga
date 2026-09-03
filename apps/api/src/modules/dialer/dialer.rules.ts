@@ -77,6 +77,25 @@ export function analyzePcm16Le(data: Uint8Array) {
   return { sampleCount, nonZeroSamples, peak, hasVoice };
 }
 
+// Waxum emits zero-filled PCM while its VoIP transport has no inbound RTP.
+// Require an answered call, sustained exact digital silence, enough decoded
+// samples and a live SDR microphone before classifying this as an
+// infrastructure stall. This deliberately does not treat ordinary quiet or
+// comfort noise as a failure.
+export function isInboundAudioStalled(input: {
+  answeredForMs: number;
+  postAnswerSamples: number;
+  postAnswerNonZeroSamples: number;
+  microphoneNonZeroSamples: number;
+  minDurationMs: number;
+  minSamples: number;
+}) {
+  return input.answeredForMs >= input.minDurationMs
+    && input.postAnswerSamples >= input.minSamples
+    && input.postAnswerNonZeroSamples === 0
+    && input.microphoneNonZeroSamples > 0;
+}
+
 // Decides how a finished call and its lead should transition, mirroring the
 // three cases finishCall() must reconcile: a transient Waxum rate limit (put
 // the line and lead back as if nothing happened), a retryable failure within
@@ -91,15 +110,17 @@ export function computeCallOutcome(input: {
 }) {
   const outcome = input.reason ?? input.status;
   const transientRateLimit = outcome === 'waxum_rate_limited';
-  const retryable = input.isAutomatic && !transientRateLimit
+  const transientInfrastructureFailure = outcome === 'waxum_inbound_audio_stalled';
+  const transientFailure = transientRateLimit || transientInfrastructureFailure;
+  const retryable = input.isAutomatic && !transientFailure
     && ['no_answer', 'failed'].includes(input.status)
     && !input.forceNoRetry
     && input.attempts < input.maxAttemptsPerLead;
-  const finalCallStatus = transientRateLimit ? 'cancelled' : retryable ? 'retry_wait' : input.status;
-  const leadStatus = transientRateLimit ? 'queued'
+  const finalCallStatus = transientFailure ? 'cancelled' : retryable ? 'retry_wait' : input.status;
+  const leadStatus = transientFailure ? 'queued'
     : retryable ? 'retry_wait'
     : input.status === 'completed' ? 'completed'
     : input.status === 'cancelled' ? 'queued'
     : input.status;
-  return { outcome, transientRateLimit, retryable, finalCallStatus, leadStatus };
+  return { outcome, transientRateLimit, transientInfrastructureFailure, retryable, finalCallStatus, leadStatus };
 }

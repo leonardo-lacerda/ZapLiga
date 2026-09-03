@@ -19,6 +19,7 @@ import {
   computeRateLimitBackoffSeconds,
   computeRateLimitCooldownWindowSeconds,
   cooldownIsReady,
+  isInboundAudioStalled,
   isInstantFailure,
   isSelfCallNumber,
   normalizePhone,
@@ -37,6 +38,7 @@ type CallResource = {
   mediaActive: boolean;
   mediaOpen?: boolean;
   answerSignalReceived?: boolean;
+  answerConfirmedAt?: number;
   answerAbort?: AbortController;
   answerWatcherStarted?: boolean;
   sdrNotified?: boolean;
@@ -62,6 +64,9 @@ type CallResource = {
   inboundPcmSamples?: number;
   inboundPcmNonZeroSamples?: number;
   inboundPcmPeak?: number;
+  postAnswerPcmSamples?: number;
+  postAnswerPcmNonZeroSamples?: number;
+  inboundAudioStallDetected?: boolean;
   micPcmSamples?: number;
   micPcmNonZeroSamples?: number;
   micPcmPeak?: number;
@@ -116,6 +121,9 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
   private readonly FLAG_FAST_FAIL_MS = Math.max(3000, Number(process.env.WHATSAPP_RAPID_FAILURE_WINDOW_MS) || 5000);
   private readonly rapidFailureBackoffSeconds = Math.min(600, Math.max(180, Number(process.env.WHATSAPP_RAPID_FAILURE_BACKOFF_SECONDS) || 180));
   private readonly flagQuarantineHours = Math.max(1, Number(process.env.WHATSAPP_FLAG_HOURS) || 6);
+  private readonly inboundAudioStallMs = Math.max(5000, Number(process.env.WHATSAPP_INBOUND_AUDIO_STALL_MS) || 10_000);
+  private readonly inboundAudioStallSamples = Math.max(80_000, Number(process.env.WHATSAPP_INBOUND_AUDIO_STALL_SAMPLES) || 120_000);
+  private readonly inboundAudioRecoveryBackoffSeconds = Math.min(600, Math.max(60, Number(process.env.WHATSAPP_INBOUND_AUDIO_RECOVERY_BACKOFF_SECONDS) || 90));
 
   constructor(
     private readonly db: DatabaseService,
@@ -1205,6 +1213,7 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
                 .then((answered) => {
                   if (!answered || resource.finishing || resource.mediaActive) return;
                   resource.answerSignalReceived = true;
+                  resource.answerConfirmedAt ??= Date.now();
                   this.notifyAnswered(callId, sdrId, call.rows[0], resource);
                   this.log('Atendimento sinalizado pelo WhatsApp; aguardando mídia pós-atendimento', 'info', callId);
                 })
@@ -1238,6 +1247,7 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
         if (!resource.answerSignalReceived) {
           if (pcm.hasVoice) {
             resource.answerSignalReceived = true;
+            resource.answerConfirmedAt ??= Date.now();
             this.log('Atendimento confirmado pelo áudio do cliente (fallback do canal de eventos)', 'warning', callId);
           } else {
             if (!resource.answerEventLogged) {
@@ -1247,6 +1257,20 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
             resource.inboundDroppedPreAnswer = (resource.inboundDroppedPreAnswer ?? 0) + 1;
             return;
           }
+        }
+        resource.answerConfirmedAt ??= Date.now();
+        resource.postAnswerPcmSamples = (resource.postAnswerPcmSamples ?? 0) + pcm.sampleCount;
+        resource.postAnswerPcmNonZeroSamples = (resource.postAnswerPcmNonZeroSamples ?? 0) + pcm.nonZeroSamples;
+        if (isInboundAudioStalled({
+          answeredForMs: Date.now() - resource.answerConfirmedAt,
+          postAnswerSamples: resource.postAnswerPcmSamples,
+          postAnswerNonZeroSamples: resource.postAnswerPcmNonZeroSamples,
+          microphoneNonZeroSamples: resource.micPcmNonZeroSamples ?? 0,
+          minDurationMs: this.inboundAudioStallMs,
+          minSamples: this.inboundAudioStallSamples,
+        })) {
+          this.handleInboundAudioStall(callId, resource);
+          return;
         }
         const firstActiveFrame = !resource.mediaActive;
         resource.mediaActive = true;
@@ -1407,6 +1431,52 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
       .catch((finishError) => this.logger.error(`Could not finish Waxum rate limit for ${callId}: ${safeOperationalError(finishError)}`));
   }
 
+  private async recoverWaxumSession(sessionId: string, numberId: string, tenantId: string, callId: string) {
+    const lockKey = `zapcall:global:lock:waxum-audio-recovery:${sessionId}`;
+    const lockToken = randomUUID();
+    if (!await this.redis.acquireLock(lockKey, lockToken, 45_000).catch(() => false)) return;
+    try {
+      this.log('Recuperando a sessao do WhatsApp apos falha de audio de entrada', 'warning', callId, tenantId);
+      await this.db.query(`UPDATE whatsapp_numbers SET status = 'reconnecting' WHERE id = $1 AND tenant_id = $2`, [numberId, tenantId]);
+      await this.waxum.disconnect(sessionId);
+      await new Promise((resolve) => setTimeout(resolve, 750));
+      await this.waxum.reconnect(sessionId);
+
+      let connected = false;
+      for (let attempt = 0; attempt < 20; attempt += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 750));
+        const status = normalizeWaxumStatus(await this.waxum.getStatus(sessionId));
+        if (status.connected) {
+          connected = true;
+          await this.db.query(`UPDATE whatsapp_numbers SET status = 'connected', phone = COALESCE($1, phone) WHERE id = $2 AND tenant_id = $3`, [status.phone, numberId, tenantId]);
+          break;
+        }
+      }
+      if (!connected) throw new Error('Waxum session did not reconnect within 15 seconds');
+      await this.redis.incrementMetric('waxum_audio_recovery_success');
+      this.log('Sessao do WhatsApp reconectada; linha liberada apos o cooldown de seguranca', 'info', callId, tenantId);
+      this.notifyOperationsChanged(tenantId, 'number_audio_recovered', { kind: 'number_audio_recovered', numberId });
+    } catch (error) {
+      await this.redis.incrementMetric('waxum_audio_recovery_failure');
+      await this.db.query(`UPDATE whatsapp_numbers SET status = 'disconnected' WHERE id = $1 AND tenant_id = $2`, [numberId, tenantId]).catch(() => undefined);
+      this.log(`Falha ao recuperar a sessao do WhatsApp: ${safeOperationalError(error)}`, 'error', callId, tenantId);
+      Sentry.captureException(error);
+    } finally {
+      await this.redis.releaseLock(lockKey, lockToken).catch(() => undefined);
+    }
+  }
+
+  private handleInboundAudioStall(callId: string, resource: CallResource) {
+    if (resource.inboundAudioStallDetected || resource.finishing) return;
+    resource.inboundAudioStallDetected = true;
+    resource.rapidFailureBackoffSeconds = this.inboundAudioRecoveryBackoffSeconds;
+    this.log('Falha real de audio detectada: Waxum entregou apenas PCM zerado apos o atendimento; a linha sera reconectada', 'error', callId, resource.tenantId);
+    void this.redis.incrementMetric('waxum_inbound_audio_stalled');
+    void this.finishCall(callId, 'failed', 'waxum_inbound_audio_stalled', false, resource.tenantId)
+      .then(() => this.recoverWaxumSession(resource.waxumSessionId, resource.numberId, resource.tenantId, callId))
+      .catch((error) => this.logger.error(`Could not recover stalled Waxum audio for ${callId}: ${safeOperationalError(error)}`));
+  }
+
   // A call that opens the media socket but closes almost immediately with no
   // audio and no answer is the signature of a WhatsApp reachout timelock
   // (463 MissingTcToken): the relay attaches no endpoints. After a couple of
@@ -1458,20 +1528,20 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
       const row = call.rows[0];
       if (['completed', 'no_answer', 'failed', 'cancelled'].includes(row.status)) return;
       const isAutomatic = row.source !== 'manual';
-      const { outcome, transientRateLimit, retryable, finalCallStatus, leadStatus } = computeCallOutcome({
+      const { outcome, transientRateLimit, transientInfrastructureFailure, retryable, finalCallStatus, leadStatus } = computeCallOutcome({
         status, reason, forceNoRetry, isAutomatic,
         attempts: Number(row.attempts), maxAttemptsPerLead: Number(row.max_attempts_per_lead),
       });
-      const requiresPostCall = Boolean(row.connected_at);
+      const requiresPostCall = Boolean(row.connected_at) && !transientInfrastructureFailure;
       const restoredAvailable = resource?.previousSdrAvailable ?? (isAutomatic ? true : false);
       const restoredState = restoredAvailable ? 'available' : (resource?.previousSdrState ?? 'offline');
       let pause: any = null;
-      this.log(`Chamada encerrada: ${finalCallStatus} (${outcome})`, transientRateLimit ? 'warning' : finalCallStatus === 'failed' ? 'error' : 'info', callId, tenantId);
+      this.log(`Chamada encerrada: ${finalCallStatus} (${outcome})`, transientRateLimit || transientInfrastructureFailure ? 'warning' : finalCallStatus === 'failed' ? 'error' : 'info', callId, tenantId);
       await this.db.transaction(async (client) => {
         await client.query(`UPDATE calls SET status = $1, ended_at = now(), duration_seconds = CASE WHEN COALESCE(connected_at, started_at) IS NULL THEN 0 ELSE EXTRACT(EPOCH FROM (now() - COALESCE(connected_at, started_at)))::int END, ring_duration_seconds = CASE WHEN started_at IS NULL THEN NULL ELSE GREATEST(0, EXTRACT(EPOCH FROM (COALESCE(connected_at, now()) - started_at))::int) END, connected_duration_seconds = CASE WHEN connected_at IS NULL THEN NULL ELSE GREATEST(0, EXTRACT(EPOCH FROM (now() - connected_at))::int) END, outcome = $2, failure_reason = CASE WHEN $4 IN ('failed','no_answer') OR $2 = 'waxum_rate_limited' THEN $2 ELSE failure_reason END WHERE tenant_id = $5 AND id = $3 AND status NOT IN ('completed','no_answer','failed','cancelled')`, [finalCallStatus, outcome, callId, status, tenantId]);
         if (!isAutomatic) {
           // Manual calls must not alter the automatic queue or attempt budget.
-        } else if (transientRateLimit) {
+        } else if (transientRateLimit || transientInfrastructureFailure) {
           await client.query(`UPDATE leads SET status = 'queued', attempts = GREATEST(0, attempts - 1), next_eligible_at = now() + interval '10 seconds' WHERE tenant_id = $1 AND id = $2`, [tenantId, row.lead_id]);
         } else if (retryable) {
           await client.query(`UPDATE leads SET status = $2, next_eligible_at = now() + ($1::int * interval '1 minute') WHERE tenant_id = $3 AND id = $4`, [row.retry_delay_minutes, leadStatus, tenantId, row.lead_id]);
@@ -1499,7 +1569,7 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
         } else {
           await client.query(`UPDATE sdrs SET available = $1, state = $2, current_pause_id = NULL WHERE tenant_id = $3 AND id = $4`, [restoredAvailable, restoredState, tenantId, row.sdr_id]);
         }
-        if (transientRateLimit || resource?.rapidFailureBackoffSeconds) {
+        if (transientRateLimit || transientInfrastructureFailure || resource?.rapidFailureBackoffSeconds) {
           // WhatsApp protection (429 or rapid-drop streak) is active. Push the
           // next-eligible time out by the backoff so the dialer stops hammering
           // this line every tick.
