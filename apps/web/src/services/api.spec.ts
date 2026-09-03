@@ -1,5 +1,5 @@
 import { vi } from 'vitest';
-import { apiFetch, clearAccessToken, clearActiveTenantId, json, setAccessToken, setActiveTenantId } from './api';
+import { apiFetch, clearAccessToken, clearActiveTenantId, json, runAuthTransition, setAccessToken, setActiveTenantId } from './api';
 
 describe('tenant request lifecycle', () => {
   afterEach(() => { clearAccessToken(); clearActiveTenantId(); vi.unstubAllGlobals(); });
@@ -30,6 +30,44 @@ describe('tenant request lifecycle', () => {
     await expect(json('/api/numbers')).resolves.toEqual({ ok: true });
     expect(urls).toEqual([
       'http://localhost:3000/api/auth/refresh',
+      'http://localhost:3000/api/numbers',
+    ]);
+  });
+
+  it('does not let a stale 401 rotate the refresh cookie during an account switch', async () => {
+    const oldPayload = btoa(JSON.stringify({ exp: Math.floor(Date.now() / 1000) + 900 }));
+    const nextPayload = btoa(JSON.stringify({ exp: Math.floor(Date.now() / 1000) + 900 }));
+    const oldToken = `old.${oldPayload}.token`;
+    const nextToken = `next.${nextPayload}.token`;
+    const urls: string[] = [];
+    let numbersRequests = 0;
+    let releaseTransition!: () => void;
+    const transitionPaused = new Promise<void>((resolve) => { releaseTransition = resolve; });
+
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+      urls.push(String(url));
+      if (String(url).endsWith('/api/numbers')) {
+        numbersRequests += 1;
+        return new Response('{}', { status: numbersRequests === 1 ? 401 : 200, headers: { 'content-type': 'application/json' } });
+      }
+      if (String(url).endsWith('/api/auth/refresh')) return new Response(JSON.stringify({ accessToken: nextToken }), { status: 200, headers: { 'content-type': 'application/json' } });
+      return new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } });
+    }));
+    setAccessToken(oldToken);
+
+    const transition = runAuthTransition(async () => {
+      await transitionPaused;
+      setAccessToken(nextToken);
+    });
+    const request = json('/api/numbers');
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(urls).toEqual(['http://localhost:3000/api/numbers']);
+    releaseTransition();
+    await transition;
+    await expect(request).resolves.toEqual({});
+    expect(urls).toEqual([
+      'http://localhost:3000/api/numbers',
       'http://localhost:3000/api/numbers',
     ]);
   });

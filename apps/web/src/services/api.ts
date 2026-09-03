@@ -3,6 +3,7 @@ let accessToken = '';
 let activeTenantId = '';
 let tenantRequestController = new AbortController();
 let refreshInFlight: Promise<boolean> | null = null;
+let authTransitionInFlight: Promise<unknown> | null = null;
 let accessTokenRevision = 0;
 let lastRefreshFailure: 'unauthorized' | 'transient' | null = null;
 const refreshChannel = typeof BroadcastChannel !== 'undefined' ? new BroadcastChannel('zapliga-auth') : null;
@@ -62,6 +63,18 @@ const fetchJson = async (path: string, init?: RequestInit) => {
 
 export const apiFetch = fetchJson;
 
+export const runAuthTransition = <T,>(operation: () => Promise<T>) => {
+  const previous = authTransitionInFlight ?? Promise.resolve();
+  const current = previous.catch(() => undefined).then(operation);
+  authTransitionInFlight = current.then(() => undefined, () => undefined);
+  return current;
+};
+
+export const waitForRefresh = async () => {
+  const pending = refreshInFlight;
+  if (pending) await pending.catch(() => false);
+};
+
 const rotateRefreshToken = async () => {
   // A transient 5xx/network failure must not turn an otherwise valid session
   // into a logout. A rotated token may also briefly race with another tab, so
@@ -91,11 +104,20 @@ const rotateRefreshToken = async () => {
 
 export const refreshFailureReason = () => lastRefreshFailure;
 
-export const refreshAccessToken = () => {
+export const refreshAccessToken = (allowDuringAuthTransition = false): Promise<boolean> => {
   // Several API calls can receive 401 at the same time (for example when a
   // dashboard refreshes all of its widgets). Since refresh tokens rotate,
   // those calls must share one rotation instead of racing with each other.
   if (refreshInFlight) return refreshInFlight;
+  if (authTransitionInFlight && !allowDuringAuthTransition) {
+    const tokenBeforeTransition = accessToken;
+    return authTransitionInFlight.then(() => {
+      // The transition already installed a newer account token. Reuse it
+      // instead of rotating the new account's refresh cookie unnecessarily.
+      if (accessToken && accessToken !== tokenBeforeTransition) return true;
+      return refreshAccessToken();
+    });
+  }
   const revisionAtStart = accessTokenRevision;
   refreshInFlight = (async () => {
     // The refresh cookie is shared by tabs. The Web Locks API serializes

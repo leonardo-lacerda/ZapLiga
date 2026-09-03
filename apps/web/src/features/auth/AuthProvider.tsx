@@ -1,5 +1,5 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
-import { clearAccessToken, clearActiveTenantId, json, refreshAccessToken, refreshFailureReason, setAccessToken, setActiveTenantId, shouldRefreshAccessToken } from '../../services/api';
+import { clearAccessToken, clearActiveTenantId, json, refreshAccessToken, refreshFailureReason, runAuthTransition, setAccessToken, setActiveTenantId, shouldRefreshAccessToken, waitForRefresh } from '../../services/api';
 
 export type AuthUser = {
   id: string;
@@ -90,21 +90,23 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const reload = useCallback(async () => {
-    try {
-      if (!await refreshAccessToken()) {
-        // Keep an already authenticated session during a transient network or
-        // server failure. The next interval/401 will retry the refresh.
-        if (refreshFailureReason() === 'transient' && sessionRef.current) return;
+    return runAuthTransition(async () => {
+      try {
+        if (!await refreshAccessToken(true)) {
+          // Keep an already authenticated session during a transient network or
+          // server failure. The next interval/401 will retry the refresh.
+          if (refreshFailureReason() === 'transient' && sessionRef.current) return;
+          setSession(null); setSavedAccounts([]);
+          return;
+        }
+        const next = await json('/api/auth/me', undefined, false);
+        applySession(next);
+        await loadSavedAccounts(next.user);
+      } catch {
+        clearAccessToken();
         setSession(null); setSavedAccounts([]);
-        return;
       }
-      const next = await json('/api/auth/me', undefined, false);
-      applySession(next);
-      await loadSavedAccounts(next.user);
-    } catch {
-      clearAccessToken();
-      setSession(null); setSavedAccounts([]);
-    }
+    });
   }, [applySession, loadSavedAccounts]);
 
   useEffect(() => { void reload().finally(() => setLoading(false)); }, [reload]);
@@ -145,51 +147,72 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, [reload]);
 
   const login = useCallback(async (email: string, password: string) => {
-    const result = await json('/api/auth/login', { method: 'POST', body: JSON.stringify({ email, password }) });
-    setAccessToken(result.accessToken);
-    const next = await json('/api/auth/me', undefined, false); applySession(next); await loadSavedAccounts(next.user);
+    return runAuthTransition(async () => {
+      await waitForRefresh();
+      const result = await json('/api/auth/login', { method: 'POST', body: JSON.stringify({ email, password }) });
+      setAccessToken(result.accessToken);
+      const next = await json('/api/auth/me', undefined, false); applySession(next); await loadSavedAccounts(next.user);
+    });
   }, [applySession, loadSavedAccounts]);
 
   const register = useCallback(async (input: { name: string; email: string; password: string; companyName: string; companySlug?: string; legalAccepted: boolean }) => {
-    const result = await json('/api/auth/register', { method: 'POST', body: JSON.stringify(input) });
-    setAccessToken(result.accessToken);
-    const next = await json('/api/auth/me', undefined, false); applySession(next); await loadSavedAccounts(next.user);
+    return runAuthTransition(async () => {
+      await waitForRefresh();
+      const result = await json('/api/auth/register', { method: 'POST', body: JSON.stringify(input) });
+      setAccessToken(result.accessToken);
+      const next = await json('/api/auth/me', undefined, false); applySession(next); await loadSavedAccounts(next.user);
+    });
   }, [applySession, loadSavedAccounts]);
 
   const acceptInvite = useCallback(async (token: string, name: string, password: string) => {
-    const result = await json(`/api/invitations/${encodeURIComponent(token)}/accept`, { method: 'POST', body: JSON.stringify({ name, password }) });
-    setAccessToken(result.accessToken);
-    const next = await json('/api/auth/me', undefined, false); applySession(next); await loadSavedAccounts(next.user);
+    return runAuthTransition(async () => {
+      await waitForRefresh();
+      const result = await json(`/api/invitations/${encodeURIComponent(token)}/accept`, { method: 'POST', body: JSON.stringify({ name, password }) });
+      setAccessToken(result.accessToken);
+      const next = await json('/api/auth/me', undefined, false); applySession(next); await loadSavedAccounts(next.user);
+    });
   }, [applySession, loadSavedAccounts]);
 
   const switchAccount = useCallback(async (accountId: string) => {
-    if (shouldRefreshAccessToken(5)) await refreshAccessToken();
-    const result = await json(`/api/auth/accounts/${encodeURIComponent(accountId)}/switch`, { method: 'POST' });
-    setAccessToken(result.accessToken);
-    clearActiveTenantId();
-    setActiveTenantState('');
-    const nextSession = await json('/api/auth/me', undefined, false);
-    applySession(nextSession);
-    await loadSavedAccounts(nextSession.user);
+    return runAuthTransition(async () => {
+      await waitForRefresh();
+      if (shouldRefreshAccessToken(5) && !await refreshAccessToken(true)) throw new Error('Sua sessão expirou. Entre novamente para continuar.');
+      const result = await json(`/api/auth/accounts/${encodeURIComponent(accountId)}/switch`, { method: 'POST' });
+      setAccessToken(result.accessToken);
+      clearActiveTenantId();
+      setActiveTenantState('');
+      const nextSession = await json('/api/auth/me', undefined, false);
+      applySession(nextSession);
+      await loadSavedAccounts(nextSession.user);
+    });
   }, [applySession, loadSavedAccounts]);
 
   const addAccount = useCallback(async (email: string, password: string) => {
-    if (shouldRefreshAccessToken(5)) await refreshAccessToken();
-    const result = await json('/api/auth/accounts/add', { method: 'POST', body: JSON.stringify({ email, password }) });
-    setAccessToken(result.accessToken);
-    clearActiveTenantId();
-    setActiveTenantState('');
-    const next = await json('/api/auth/me', undefined, false); applySession(next); await loadSavedAccounts(next.user);
+    return runAuthTransition(async () => {
+      await waitForRefresh();
+      if (shouldRefreshAccessToken(5) && !await refreshAccessToken(true)) throw new Error('Sua sessão expirou. Entre novamente para continuar.');
+      const result = await json('/api/auth/accounts/add', { method: 'POST', body: JSON.stringify({ email, password }) });
+      setAccessToken(result.accessToken);
+      clearActiveTenantId();
+      setActiveTenantState('');
+      const next = await json('/api/auth/me', undefined, false); applySession(next); await loadSavedAccounts(next.user);
+    });
   }, [applySession, loadSavedAccounts]);
 
   const removeSavedAccount = useCallback(async (accountId: string) => {
-    if (shouldRefreshAccessToken(5)) await refreshAccessToken();
-    await json(`/api/auth/accounts/${encodeURIComponent(accountId)}`, { method: 'DELETE' });
-    setSavedAccounts((current) => current.filter((account) => account.id !== accountId));
+    return runAuthTransition(async () => {
+      await waitForRefresh();
+      if (shouldRefreshAccessToken(5) && !await refreshAccessToken(true)) throw new Error('Sua sessão expirou. Entre novamente para continuar.');
+      await json(`/api/auth/accounts/${encodeURIComponent(accountId)}`, { method: 'DELETE' });
+      setSavedAccounts((current) => current.filter((account) => account.id !== accountId));
+    });
   }, []);
 
   const logout = useCallback(async () => {
-    try { await json('/api/auth/logout', { method: 'POST' }, false); } finally { clearAccessToken(); clearActiveTenantId(); setActiveTenantState(''); setSession(null); setSavedAccounts([]); }
+    return runAuthTransition(async () => {
+      await waitForRefresh();
+      try { await json('/api/auth/logout', { method: 'POST' }, false); } finally { clearAccessToken(); clearActiveTenantId(); setActiveTenantState(''); setSession(null); setSavedAccounts([]); }
+    });
   }, []);
 
   const value = useMemo(() => ({ session, savedAccounts, loading, login, register, acceptInvite, logout, activeTenantId, selectTenant, switchAccount, addAccount, removeSavedAccount, reload }), [session, savedAccounts, loading, login, register, acceptInvite, logout, activeTenantId, selectTenant, switchAccount, addAccount, removeSavedAccount, reload]);
