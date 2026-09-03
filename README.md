@@ -210,3 +210,4 @@ As migrations são de ida e rodam no boot da API. Se uma migration causar proble
 - [Plano de prontidão das features de usuário para lançamento](docs/plano-lancamento-features-usuarios.md)
 - [Runbook de lançamento, rollout, incidente e LGPD](docs/launch-runbook.md)
 - [Catálogo de eventos de auditoria](docs/audit-events.md)
+- [Roadmap de vantagens defensáveis](docs/roadmap-diferenciais/README.md)
