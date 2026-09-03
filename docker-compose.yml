@@ -148,7 +148,7 @@ services:
       # quota for every tenant and API replica.
       RATE_LIMIT_ENABLED: "false"
     healthcheck:
-      test: ["CMD-SHELL", "curl -fsS --max-time 4 http://127.0.0.1:3451/livez >/dev/null && test -f /tmp/waxum-nats-ready"]
+      test: ["CMD", "/bin/sh", "/usr/local/bin/waxum-healthcheck.sh"]
       interval: 30s
       timeout: 5s
       start_period: 20s
@@ -156,6 +156,7 @@ services:
     volumes:
       - waxum_data:/app/whatsapp_sessions
       - ./infra/waxum/entrypoint-guard.sh:/usr/local/bin/waxum-entrypoint-guard.sh:ro
+      - ./infra/waxum/healthcheck.sh:/usr/local/bin/waxum-healthcheck.sh:ro
     depends_on:
       nats:
         condition: service_healthy
