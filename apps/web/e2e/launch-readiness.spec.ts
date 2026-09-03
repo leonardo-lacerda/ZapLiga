@@ -159,6 +159,10 @@ test.describe.serial('Gate B - jornadas criticas', () => {
     const api = await context();
     const created = await expectOk(await api.post(`/api/tenants/${tenantA}/numbers`, { headers: headers(leaderToken, tenantA), data: { label: 'Linha CI', phone: '5511999999999', maxConcurrentCalls: 1, cooldownSeconds: 0 } }));
     numberId = created.id;
+    // The deterministic fixture performs two calls in quick succession in
+    // journeys 8 and 9. Disable only the operation pacing for this synthetic
+    // test; production keeps the conservative defaults from migration 041.
+    await expectOk(await api.patch(`/api/tenants/${tenantA}/dialer/settings`, { headers: headers(leaderToken, tenantA), data: { max_calls_per_minute: 60, min_seconds_between_calls: 0 } }));
     await expectOk(await api.get(`/api/tenants/${tenantA}/numbers/${numberId}/qr`, { headers: headers(leaderToken, tenantA) }));
     const numbers = await expectOk(await api.get(`/api/tenants/${tenantA}/numbers`, { headers: headers(leaderToken, tenantA) }));
     expect(numbers.items).toHaveLength(1);
