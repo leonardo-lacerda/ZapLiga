@@ -5,9 +5,10 @@ import { DialerService } from './dialer.service';
 import { ContactComplianceModule } from '../contact-compliance/contact-compliance.module';
 import { DialerScheduleModule } from '../dialer-schedule/dialer-schedule.module';
 import { AuditModule } from '../audit/audit.module';
+import { CampaignsModule } from '../campaigns/campaigns.module';
 
 @Module({
-  imports: [ContactComplianceModule, DialerScheduleModule, AuditModule],
+  imports: [ContactComplianceModule, DialerScheduleModule, AuditModule, CampaignsModule],
   providers: [WaxumClient, DialerService, SdrGateway],
   exports: [DialerService, SdrGateway, WaxumClient],
 })

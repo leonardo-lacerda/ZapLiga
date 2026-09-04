@@ -48,9 +48,11 @@ try {
   const files = (await readdir(migrationsDir)).filter((file) => file.endsWith('.sql')).sort();
   const campaignMigration = '043_campaigns_read_model.sql';
   const lifecycleMigration = '044_campaign_lifecycle.sql';
+  const executionMigration = '045_campaign_execution.sql';
   const legacyMigrations = files.filter((file) => file < campaignMigration);
   assert(files.includes(campaignMigration), `Migration ausente: ${campaignMigration}`);
   assert(files.includes(lifecycleMigration), `Migration ausente: ${lifecycleMigration}`);
+  assert(files.includes(executionMigration), `Migration ausente: ${executionMigration}`);
 
   for (const file of legacyMigrations) await applyMigration(database, migrationsDir, file);
 
@@ -90,6 +92,15 @@ try {
     immutableVersionRejected = error?.code === '55000';
   }
   assert(immutableVersionRejected, 'Versão publicada aceitou mutação');
+
+  await applyMigration(database, migrationsDir, executionMigration);
+  await database.query('UPDATE leads SET campaign_id=$1, campaign_version=1 WHERE id=$2', [campaign.id, 'legacy-lead']);
+  const executionLead = (await database.query("SELECT campaign_id, campaign_version FROM leads WHERE id = 'legacy-lead'")).rows[0];
+  assert(executionLead.campaign_id === campaign.id && executionLead.campaign_version === 1, 'Lead nÃ£o recebeu contexto campanha-versÃ£o');
+  await database.query(`INSERT INTO campaign_event_outbox
+    (id, tenant_id, campaign_id, campaign_version, event_type, aggregate_type, aggregate_id, idempotency_key, payload)
+    VALUES ('execution-event', 'tenant-legado', $1, 1, 'lead.received', 'lead', 'legacy-lead', 'execution-event', '{}'::jsonb)`, [campaign.id]);
+  assert((await database.query("SELECT count(*)::int AS count FROM campaign_event_outbox WHERE tenant_id='tenant-legado'")).rows[0].count === 1, 'Outbox de execuÃ§Ã£o nÃ£o registrou evento');
 
   await database.query("INSERT INTO tenants (id, name, slug, status) VALUES ('tenant-other', 'Outro tenant', 'outro-tenant', 'active')");
   await database.query("INSERT INTO sdrs (id, tenant_id, name) VALUES ('other-sdr', 'tenant-other', 'SDR externo')");

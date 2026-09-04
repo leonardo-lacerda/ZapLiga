@@ -451,5 +451,34 @@ describe('DialerService', () => {
       await expect(service.finishPause('sdr-1', 'pause-1', { callResult: 'interessado', pipelineStage: 'qualificado', notes: 'Enviar proposta', continueAvailable: true }, 'tenant-1')).rejects.toThrow('Conecte o canal');
       expect(db.transaction).not.toHaveBeenCalled();
     });
+
+    it('persists the effective campaign version and reserved event atomically', async () => {
+      const client = { query: jest.fn(async (sql: string) => {
+        if (sql.includes('SELECT l.folder_id')) return { rows: [{ folder_id: 'folder-1', attempts: 0, campaign_id: 'campaign-a', campaign_version: 2, is_active: true, contact_allowed: true }] };
+        return { rows: [] };
+      }) };
+      const db = { query: jest.fn().mockResolvedValue({ rows: [] }), transaction: jest.fn(async (callback: any) => callback(client)) };
+      const campaignExecution = { resolveForLead: jest.fn().mockResolvedValue({
+        allowed: true, campaignId: 'campaign-a', campaignVersion: 2, effectiveConfig: {
+          maxAttemptsPerLead: { value: 3, origin: 'campaign_override' },
+          scheduleWindows: [],
+        },
+      }) };
+      const campaignEvents = { record: jest.fn().mockResolvedValue(undefined) };
+      const service = new DialerService(db as any, makeRedis() as any, makeWaxum() as any, makeGateway() as any, undefined, undefined, undefined, undefined, campaignExecution as any, campaignEvents as any);
+
+      await (service as any).startReservedCall(
+        { id: 'sdr-1', name: 'SDR', available: true, state: 'available' },
+        { id: 'number-1', label: 'Linha', waxum_session_id: 'session-1', max_concurrent_calls: 1 },
+        { id: 'lead-1', name: 'Lead', phone: '5511999990000', attempts: 0 },
+        { ring_timeout_seconds: 30, max_attempts_per_lead: 3, dialer_round: 1 },
+        'token-1', 'automatico', 'tenant-1',
+      );
+
+      const insert = client.query.mock.calls.find(([sql]) => sql.includes('INSERT INTO calls'));
+      expect(insert?.[0]).toContain('campaign_id, campaign_version');
+      expect((insert as any)?.[1]).toEqual(expect.arrayContaining(['campaign-a', 2]));
+      expect(campaignEvents.record).toHaveBeenCalledWith(expect.objectContaining({ eventType: 'call.reserved', campaignId: 'campaign-a', campaignVersion: 2 }), client);
+    });
   });
 });

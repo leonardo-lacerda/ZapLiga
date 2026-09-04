@@ -8,6 +8,7 @@ describe('LeadIntegrationsPage', () => {
     server.use(
       http.get('http://localhost:3000/api/tenants/tenant-1/lead-integrations', () => HttpResponse.json([])),
       http.get('http://localhost:3000/api/tenants/tenant-1/lead-ingestion/events', () => HttpResponse.json({ items: [], total: 0 })),
+      http.get('http://localhost:3000/api/tenants/tenant-1/campaigns', () => HttpResponse.json({ items: [] })),
       http.post('http://localhost:3000/api/tenants/tenant-1/lead-integrations', () => HttpResponse.json({ api_key: 'zpl_in_test', signing_secret: 'zpl_sig_test', webhook_url: '/api/v1/lead-integrations/li_test/webhook' })),
     );
 

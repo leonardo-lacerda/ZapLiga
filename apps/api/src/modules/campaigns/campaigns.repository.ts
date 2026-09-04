@@ -186,4 +186,28 @@ export class CampaignsRepository {
       FROM campaign_versions WHERE tenant_id = $1 AND campaign_id = $2 AND version = $3`,
     [tenantId, campaignId, version])).rows[0];
   }
+
+  async createPlaybook(client: QueryExecutor, input: {
+    id: string; tenantId: string; name: string; description?: string | null;
+    sourceCampaignId: string; snapshot: unknown; hash: string; userId: string;
+  }) {
+    return (await client.query(`INSERT INTO campaign_playbooks
+      (id, tenant_id, name, description, source_campaign_id, config_snapshot, config_hash, created_by)
+      VALUES ($1,$2,$3,$4,$5,$6::jsonb,$7,$8) RETURNING *`, [
+      input.id, input.tenantId, input.name, input.description ?? null, input.sourceCampaignId,
+      JSON.stringify(input.snapshot), input.hash, input.userId,
+    ])).rows[0];
+  }
+
+  async listPlaybooks(tenantId: string) {
+    return (await this.db.query(`SELECT p.id, p.tenant_id, p.name, p.description, p.source_campaign_id,
+      p.config_hash, p.created_by, p.created_at, p.updated_at, c.name AS source_campaign_name
+      FROM campaign_playbooks p
+      LEFT JOIN campaigns c ON c.tenant_id=p.tenant_id AND c.id=p.source_campaign_id
+      WHERE p.tenant_id=$1 ORDER BY p.created_at DESC, p.id`, [tenantId])).rows;
+  }
+
+  async findPlaybook(tenantId: string, playbookId: string) {
+    return (await this.db.query('SELECT * FROM campaign_playbooks WHERE tenant_id=$1 AND id=$2', [tenantId, playbookId])).rows[0];
+  }
 }

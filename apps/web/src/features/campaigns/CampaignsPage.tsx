@@ -93,6 +93,13 @@ export function CampaignsPage({ tenantId, folders, sdrs, numbers, featureEnabled
     try { const next = await json(`/api/tenants/${tenantId}/campaigns/${selected.id}/duplicate`, { method: 'POST', body: JSON.stringify({ name }) }); setSelected(next); setCreating(false); setEditing(false); setMessage('Cópia criada como rascunho.'); await load(); }
     catch (error) { setMessage(errorMessage(error)); } finally { setBusy(false); }
   };
+  const saveAsPlaybook = async () => {
+    if (!selected || selected.is_legacy) return;
+    const name = window.prompt('Nome do playbook:', `${selected.name} (playbook)`); if (name === null) return;
+    setBusy(true); setMessage('');
+    try { await json(`/api/tenants/${tenantId}/campaigns/${selected.id}/playbook`, { method: 'POST', body: JSON.stringify({ name }) }); setMessage('Playbook salvo. Ele pode gerar novos rascunhos sem copiar trabalho manual.'); }
+    catch (error) { setMessage(errorMessage(error)); } finally { setBusy(false); }
+  };
   const loadDiff = async () => { if (versions.length < 2 || !selected) return; try { setDiff(await json(`/api/tenants/${tenantId}/campaigns/${selected.id}/diff?from=${versions[1].version}&to=${versions[0].version}`)); } catch (error) { setMessage(errorMessage(error)); } };
   const summary = useMemo(() => ({ running: campaigns.filter((item) => item.status === 'running').length, drafts: campaigns.filter((item) => item.status === 'draft').length, leads: campaigns.reduce((total, item) => total + Number(item.lead_count ?? 0), 0) }), [campaigns]);
   const selectedConfig = selected ? campaignConfigFromRow(selected) : null;
@@ -100,6 +107,7 @@ export function CampaignsPage({ tenantId, folders, sdrs, numbers, featureEnabled
   if (!featureEnabled) return <div className="campaigns-page"><Panel><EmptyState title="Campanhas ainda não estão habilitadas" description="Peça a um super admin para habilitar este módulo em Admin → Detalhes da empresa → Recursos." /></Panel></div>;
 
   return <div className="campaigns-page">
+    {selected && !selected.is_legacy && !creating && <div className="campaign-playbook-quick-action"><Button variant="secondary" icon="copy" onClick={() => void saveAsPlaybook()}>Salvar como playbook</Button></div>}
     <div className="campaigns-heading"><div><span className="eyebrow">ORQUESTRAÇÃO</span><h1>Campanhas</h1><p>Transforme objetivo, equipe e regras em uma operação reproduzível.</p></div><Button icon="plus" onClick={startCreate}>Nova campanha</Button></div>
     {message && <div className="alert" role="status"><Icon name="alert" size={15} /><span>{message}</span><button type="button" aria-label="Fechar mensagem" onClick={() => setMessage('')}><Icon name="close" size={14} /></button></div>}
     <div className="campaign-summary-grid"><div><span>Campanhas</span><strong>{campaigns.length}</strong><small>no tenant atual</small></div><div><span>Em operação</span><strong>{summary.running}</strong><small>com versão imutável</small></div><div><span>Rascunhos</span><strong>{summary.drafts}</strong><small>aguardando publicação</small></div><div><span>Leads no escopo</span><strong>{summary.leads}</strong><small>somados nas filas</small></div></div>

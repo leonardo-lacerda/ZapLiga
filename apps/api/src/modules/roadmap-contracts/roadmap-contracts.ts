@@ -35,6 +35,7 @@ export type RoadmapReasonCode = typeof ROADMAP_REASON_CODES[number];
 
 export const ROADMAP_EVENT_TYPES = [
   'campaign.created',
+  'campaign.updated',
   'campaign.version_published',
   'campaign.started',
   'campaign.paused',

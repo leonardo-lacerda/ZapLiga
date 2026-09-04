@@ -29,7 +29,7 @@ async function cleanup() {
       'dialer_schedule_exceptions', 'dialer_schedule_windows', 'contact_compliance_events', 'contact_suppressions',
       'metric_exports', 'metric_saved_views', 'metric_goals', 'metrics_daily_rollup', 'lead_stage_history',
       'number_status_history', 'sdr_availability_history', 'tenant_notes', 'call_result_catalog', 'pipeline_stage_catalog',
-      'lead_callbacks', 'campaigns', 'lead_folders', 'calls', 'sdr_pauses', 'leads', 'audit_logs', 'invitations',
+      'lead_callbacks', 'campaign_event_outbox', 'campaign_playbooks', 'lead_ingestion_outbox', 'lead_ingestion_events', 'lead_integrations', 'calls', 'sdr_pauses', 'leads', 'campaigns', 'lead_folders', 'audit_logs', 'invitations',
       'tenant_memberships', 'websocket_tickets', 'dialer_settings', 'sdrs', 'whatsapp_numbers',
     ]) {
       await pool.query(`DELETE FROM ${table} WHERE tenant_id = $1`, [tenantId]);

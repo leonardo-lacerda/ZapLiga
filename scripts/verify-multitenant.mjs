@@ -49,6 +49,7 @@ const cleanup = async () => {
         'lead_stage_history', 'number_status_history', 'sdr_availability_history',
         'tenant_notes', 'call_result_catalog', 'pipeline_stage_catalog',
         'lead_callbacks', 'calls', 'sdr_pauses', 'leads', 'audit_logs', 'invitations',
+        'campaign_event_outbox', 'campaign_playbooks', 'lead_ingestion_outbox', 'lead_ingestion_events', 'lead_integrations',
         'tenant_memberships', 'websocket_tickets', 'dialer_settings',
         'campaigns', 'lead_folders', 'sdrs', 'whatsapp_numbers',
       ]) {

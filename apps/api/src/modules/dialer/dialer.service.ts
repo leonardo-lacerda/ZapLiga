@@ -13,6 +13,8 @@ import { ContactComplianceService } from '../contact-compliance/contact-complian
 import { DialerScheduleService } from '../dialer-schedule/dialer-schedule.service';
 import { FeatureFlagsService } from '../feature-flags/feature-flags.service';
 import { AuditService } from '../audit/audit.service';
+import { CampaignExecutionService } from '../campaigns/campaign-execution.service';
+import { CampaignEventsService } from '../campaigns/campaign-events.service';
 import {
   analyzePcm16Le,
   computeCallOutcome,
@@ -153,6 +155,8 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
     @Optional() private readonly schedule?: DialerScheduleService,
     @Optional() private readonly featureFlags?: FeatureFlagsService,
     @Optional() private readonly audit?: AuditService,
+    @Optional() private readonly campaignExecution?: CampaignExecutionService,
+    @Optional() private readonly campaignEvents?: CampaignEventsService,
   ) {}
 
   onModuleInit() {
@@ -441,14 +445,18 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
       this.db.query(`SELECT * FROM whatsapp_numbers WHERE tenant_id = $1 AND status IN ('connected', 'online', 'ready', 'authenticated') AND (flagged_until IS NULL OR flagged_until <= now()) ORDER BY last_call_ended_at NULLS FIRST, last_call_ended_at ASC`, [tenantId]),
       this.db.query(`SELECT l.* FROM leads l JOIN lead_folders f ON f.tenant_id = l.tenant_id AND f.id = l.folder_id WHERE l.tenant_id = $1 AND l.id = $2 AND f.is_active = true AND l.do_not_call = false AND l.status IN ('queued', 'retry_wait') AND l.attempts < $3`, [tenantId, leadId, settings.max_attempts_per_lead]),
     ]);
-    const sdr = sdrs.rows.find((row: any) => this.gateway.isConnected(row.id));
     const lead = leads.rows[0];
+    if (!lead) throw new Error('Este lead nao esta elegivel para uma chamada manual');
+    const execution = this.campaignExecution ? await this.campaignExecution.resolveForLead(tenantId, lead) : undefined;
+    if (execution && !execution.allowed) throw new Error('A campanha deste lead nÃ£o estÃ¡ em execuÃ§Ã£o ou nÃ£o possui recursos disponÃ­veis');
+    if (execution && !CampaignExecutionService.scheduleAllowed(execution.effectiveConfig)) throw new Error('A campanha deste lead estÃ¡ fora da janela de atendimento');
+    const sdr = sdrs.rows.find((row: any) => this.gateway.isConnected(row.id) && (!execution?.campaignId || execution.sdrIds.includes(row.id)));
     if (!lead) throw new Error('Este lead não está elegível para uma chamada manual');
     if (!sdr) throw new Error('Nenhum SDR conectado e disponível');
     if (!numbers.rows.length) throw new Error('Nenhum número WhatsApp conectado');
     const readyNumbers = numbers.rows.filter((row: any) => !lineIsProtected(row.last_call_ended_at));
     if (!readyNumbers.length) throw new Error('A linha WhatsApp está temporariamente protegida por limite de chamadas. Aguarde alguns minutos e tente novamente.');
-    const number = readyNumbers.find((row: any) => !isSelfCallNumber(row.phone, lead.phone));
+    const number = readyNumbers.find((row: any) => !isSelfCallNumber(row.phone, lead.phone) && (!execution?.campaignId || execution.numberIds.includes(row.id)));
     if (!number) throw new Error('O número de destino é a própria linha de WhatsApp conectada. Ligue para um número diferente.');
 
     const token = randomUUID();
@@ -517,7 +525,10 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
       `, [tenantId, sdrUserId ?? null]),
       this.db.query(`SELECT * FROM whatsapp_numbers WHERE tenant_id = $1 AND status IN ('connected', 'online', 'ready', 'authenticated') AND (flagged_until IS NULL OR flagged_until <= now()) ORDER BY last_call_ended_at NULLS FIRST, last_call_ended_at ASC`, [tenantId]),
     ]);
-    const sdr = sdrs.rows.find((row: any) => this.gateway.isConnected(row.id));
+    const execution = this.campaignExecution ? await this.campaignExecution.resolveForLead(tenantId, lead) : undefined;
+    if (execution && !execution.allowed) throw new Error('A campanha deste lead nÃ£o estÃ¡ em execuÃ§Ã£o ou nÃ£o possui recursos disponÃ­veis');
+    if (execution && !CampaignExecutionService.scheduleAllowed(execution.effectiveConfig)) throw new Error('A campanha deste lead estÃ¡ fora da janela de atendimento');
+    const sdr = sdrs.rows.find((row: any) => this.gateway.isConnected(row.id) && (!execution?.campaignId || execution.sdrIds.includes(row.id)));
     if (!sdr) throw new Error('Nenhum SDR conectado e disponivel');
     if (!numbers.rows.length) throw new Error('Nenhum numero WhatsApp conectado');
     // Protections only (see manualCall): a manual call is not paced by the cooldown.
@@ -525,7 +536,7 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
     if (!readyNumbers.length) throw new Error('A linha WhatsApp esta temporariamente protegida por limite de chamadas. Aguarde alguns minutos e tente novamente.');
     // WhatsApp cannot place a call to the line's own number (self-call closes
     // the media socket immediately), so never pair a lead with its own line.
-    const number = readyNumbers.find((row: any) => !isSelfCallNumber(row.phone, lead.phone));
+    const number = readyNumbers.find((row: any) => !isSelfCallNumber(row.phone, lead.phone) && (!execution?.campaignId || execution.numberIds.includes(row.id)));
     if (!number) throw new Error('O numero de destino e a propria linha de WhatsApp conectada. Ligue para um numero diferente.');
 
     const token = randomUUID();
@@ -943,21 +954,23 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
         this.db.query(`SELECT count(*)::int AS count FROM lead_folders WHERE tenant_id = $1 AND is_active = true`, [tenantId]),
       ]);
 
-      for (let i = 0; i < Math.min(sdrs.rows.length, numbers.rows.length, leads.rows.length); i++) {
-        const sdr = sdrs.rows[i];
-        if (!this.gateway.isConnected(sdr.id)) continue;
-        const lead = leads.rows[i];
-        // Skip self-calls: WhatsApp closes the media immediately when the line
-        // dials its own number. Try every eligible line so a rate-limited line
-        // does not prevent a healthy connected line from serving this lead.
-        const candidateNumbers = numbers.rows.filter((row: any) => !isSelfCallNumber(row.phone, lead.phone));
+      for (const lead of leads.rows) {
+        const execution = this.campaignExecution ? await this.campaignExecution.resolveForLead(tenantId, lead, { globalSettings: settings }) : undefined;
+        if (execution && (!execution.allowed || !CampaignExecutionService.scheduleAllowed(execution.effectiveConfig))) continue;
+        const sdr = sdrs.rows.find((row: any) => this.gateway.isConnected(row.id) && (!execution?.campaignId || execution.sdrIds.includes(row.id)));
+        if (!sdr) continue;
+        // A campaign owns its resource pool. Legacy leads keep the global pool.
+        // Self-calls are excluded before the Redis reservation so another line
+        // can serve the lead in the same tick.
+        const candidateNumbers = numbers.rows.filter((row: any) => !isSelfCallNumber(row.phone, lead.phone) && (!execution?.campaignId || execution.numberIds.includes(row.id)));
         for (const number of candidateNumbers) {
           const token = randomUUID();
           const reserved = await this.redis.reserve({
             tenantId, token, globalMax: settings.global_max_concurrent_calls,
             numberMax: number.max_concurrent_calls, numberId: number.id, waxumSessionId: numberSessionId(number),
             ...numberRateConfig(number),
-            ...dialerPacingConfig(settings),
+            maxCallsPerMinute: execution?.effectiveConfig.maxCallsPerMinute.value ?? dialerPacingConfig(settings).maxCallsPerMinute,
+            minSecondsBetweenCalls: execution?.effectiveConfig.minSecondsBetweenCalls.value ?? dialerPacingConfig(settings).minSecondsBetweenCalls,
             leadId: lead.id, sdrId: sdr.id,
             ttlMs: (Number(settings.ring_timeout_seconds) + 60) * 1000,
           });
@@ -1065,7 +1078,7 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
       if (this.schedule) await this.schedule.assertAllowed(tenantId);
       await this.db.transaction(async (client) => {
         const folder = await client.query(`
-          SELECT l.folder_id, f.is_active,
+          SELECT l.folder_id, l.attempts, l.campaign_id, l.campaign_version, f.is_active,
             (l.do_not_call = false AND NOT EXISTS (
               SELECT 1 FROM contact_suppressions cs
               WHERE cs.tenant_id = l.tenant_id AND cs.phone = l.phone AND cs.lifted_at IS NULL
@@ -1076,7 +1089,14 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
         if (!folder.rows[0]) throw new Error('Lead não encontrado');
         if (folder.rows[0].contact_allowed === false) { await this.redis.incrementMetric?.('calls_blocked_suppression_total'); await this.audit?.record({ tenantId, action: 'call.blocked_suppression', entityType: 'contact' }).catch(() => undefined); throw new Error('Este telefone está na lista de não contato'); }
         if (isAutomatic && !folder.rows[0]?.is_active) throw new Error('A pasta deste lead está inativa');
-        await client.query(`INSERT INTO calls (id, tenant_id, folder_id, lead_id, number_id, sdr_id, status, attempt_number, source, offer_expires_at, owner_instance_id) VALUES ($1,$2,$3,$4,$5,$6,'reserved',$7,$8,$9,$10)`, [callId, tenantId, folder.rows[0].folder_id, lead.id, number.id, sdr.id, isAutomatic ? Number(lead.attempts) + 1 : 0, source, expires, runtimeInstanceId]);
+        const execution = this.campaignExecution ? await this.campaignExecution.resolveForLead(tenantId, { id: lead.id, folder_id: folder.rows[0].folder_id, campaign_id: folder.rows[0].campaign_id, campaign_version: folder.rows[0].campaign_version }, { sdrId: sdr.id, numberId: number.id, globalSettings: settings }, client) : undefined;
+        if (execution && !execution.allowed) throw new Error('A campanha deste lead nÃ£o estÃ¡ em execuÃ§Ã£o ou nÃ£o autoriza esta equipe/linha');
+        if (execution && !CampaignExecutionService.scheduleAllowed(execution.effectiveConfig)) throw new Error('A campanha deste lead estÃ¡ fora da janela de atendimento');
+        const maxAttempts = execution?.effectiveConfig.maxAttemptsPerLead.value ?? Number(settings.max_attempts_per_lead ?? 2);
+        if (isAutomatic && Number(folder.rows[0].attempts ?? lead.attempts ?? 0) >= maxAttempts) throw new Error('O limite de tentativas desta campanha foi atingido');
+        if (execution?.campaignId && !folder.rows[0].campaign_id) await client.query('UPDATE leads SET campaign_id=$1, campaign_version=$2 WHERE tenant_id=$3 AND id=$4', [execution.campaignId, execution.campaignVersion, tenantId, lead.id]);
+        await client.query(`INSERT INTO calls (id, tenant_id, folder_id, lead_id, number_id, sdr_id, campaign_id, campaign_version, status, attempt_number, source, offer_expires_at, owner_instance_id) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'reserved',$9,$10,$11,$12)`, [callId, tenantId, folder.rows[0].folder_id, lead.id, number.id, sdr.id, execution?.campaignId ?? null, execution?.campaignVersion ?? null, isAutomatic ? Number(lead.attempts) + 1 : 0, source, expires, runtimeInstanceId]);
+        await this.campaignEvents?.record({ tenantId, campaignId: execution?.campaignId ?? null, campaignVersion: execution?.campaignVersion ?? null, eventType: 'call.reserved', aggregateType: 'call', aggregateId: callId, idempotencyKey: `call.reserved:${callId}`, payload: { leadId: lead.id, sdrId: sdr.id, numberId: number.id, source } }, client as any);
         if (isAutomatic) {
           await client.query(`UPDATE leads SET status = 'reserved', attempts = attempts + 1, last_auto_round = $1 WHERE tenant_id = $2 AND id = $3`, [Number(settings.dialer_round ?? 1), tenantId, lead.id]);
         }
@@ -1167,6 +1187,10 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
       at: new Date().toISOString(),
       activity: { kind: 'call_started', callId, sdrId, leadId: row.lead_id, leadName: row.name },
     }, resource.tenantId);
+    if (!resource.answerEventLogged) {
+      resource.answerEventLogged = true;
+      void this.campaignEvents?.record({ tenantId: resource.tenantId, campaignId: row.campaign_id ?? null, campaignVersion: row.campaign_version ?? null, eventType: 'call.connected', aggregateType: 'call', aggregateId: callId, idempotencyKey: `call.connected:${callId}`, payload: { leadId: row.lead_id, sdrId, numberId: row.number_id } });
+    }
     if (resource.media?.readyState === WebSocket.OPEN) this.gateway.sendToSdr(sdrId, { type: 'media_open', callId });
   }
 
@@ -1562,6 +1586,7 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
       this.log(`Chamada encerrada: ${finalCallStatus} (${outcome})`, transientRateLimit || transientInfrastructureFailure ? 'warning' : finalCallStatus === 'failed' ? 'error' : 'info', callId, tenantId);
       await this.db.transaction(async (client) => {
         await client.query(`UPDATE calls SET status = $1, ended_at = now(), duration_seconds = CASE WHEN COALESCE(connected_at, started_at) IS NULL THEN 0 ELSE EXTRACT(EPOCH FROM (now() - COALESCE(connected_at, started_at)))::int END, ring_duration_seconds = CASE WHEN started_at IS NULL THEN NULL ELSE GREATEST(0, EXTRACT(EPOCH FROM (COALESCE(connected_at, now()) - started_at))::int) END, connected_duration_seconds = CASE WHEN connected_at IS NULL THEN NULL ELSE GREATEST(0, EXTRACT(EPOCH FROM (now() - connected_at))::int) END, outcome = $2, failure_reason = CASE WHEN $4 IN ('failed','no_answer') OR $2 = 'waxum_rate_limited' THEN $2 ELSE failure_reason END WHERE tenant_id = $5 AND id = $3 AND status NOT IN ('completed','no_answer','failed','cancelled')`, [finalCallStatus, outcome, callId, status, tenantId]);
+        await this.campaignEvents?.record({ tenantId, campaignId: row.campaign_id ?? null, campaignVersion: row.campaign_version ?? null, eventType: 'call.ended', aggregateType: 'call', aggregateId: callId, idempotencyKey: `call.ended:${callId}`, payload: { status: finalCallStatus, outcome, reason: reason ?? null } }, client as any);
         if (!isAutomatic) {
           // Manual calls must not alter the automatic queue or attempt budget.
         } else if (transientRateLimit || transientInfrastructureFailure) {

@@ -1,9 +1,10 @@
-import { BadRequestException, ConflictException, HttpException, HttpStatus, Injectable, Logger, NotFoundException, OnModuleDestroy, OnModuleInit, UnauthorizedException } from '@nestjs/common';
+import { BadRequestException, ConflictException, HttpException, HttpStatus, Injectable, Logger, NotFoundException, OnModuleDestroy, OnModuleInit, Optional, UnauthorizedException } from '@nestjs/common';
 import { connect, AckPolicy, DeliverPolicy, JetStreamClient, JetStreamManager, NatsConnection, StringCodec } from 'nats';
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { DatabaseService } from '../../database/database.service';
 import { RedisService } from '../../infrastructure/redis/redis.service';
 import { AuditService } from '../audit/audit.service';
+import { CampaignEventsService } from '../campaigns/campaign-events.service';
 import { decryptSecret, encryptSecret, hashCredential, safeEqual, webhookSignature } from './lead-ingestion.crypto';
 
 type IntegrationType = 'webhook' | 'api' | 'automation';
@@ -28,7 +29,12 @@ export class LeadIngestionService implements OnModuleInit, OnModuleDestroy {
   private publisherTimer?: NodeJS.Timeout;
   private consumerRunning = false;
 
-  constructor(private readonly db: DatabaseService, private readonly redis: RedisService, private readonly audit: AuditService) {}
+  constructor(
+    private readonly db: DatabaseService,
+    private readonly redis: RedisService,
+    private readonly audit: AuditService,
+    @Optional() private readonly campaignEvents?: CampaignEventsService,
+  ) {}
 
   onModuleInit() {
     this.publisherTimer = setInterval(() => void this.flushOutbox(), 1000);
@@ -59,7 +65,7 @@ export class LeadIngestionService implements OnModuleInit, OnModuleDestroy {
       status: row.status, default_folder_id: row.default_folder_id, duplicate_policy: row.duplicate_policy,
       default_priority: row.default_priority, field_mapping: row.field_mapping ?? {}, last_received_at: row.last_received_at,
       last_success_at: row.last_success_at, last_error_at: row.last_error_at, created_at: row.created_at, revoked_at: row.revoked_at,
-      api_key_prefix: row.api_key_prefix,
+      api_key_prefix: row.api_key_prefix, campaign_id: row.campaign_id ?? null,
     };
   }
 
@@ -72,35 +78,48 @@ export class LeadIngestionService implements OnModuleInit, OnModuleDestroy {
     return result.rows.map((row) => this.publicIntegration(row));
   }
 
-  async create(tenantId: string, userId: string, input: { name: string; integrationType?: IntegrationType; defaultFolderId: string; duplicatePolicy?: DuplicatePolicy; defaultPriority?: number; fieldMapping?: Record<string, string> }) {
+  private async validateCampaign(tenantId: string, campaignId?: string | null) {
+    if (!campaignId) return null;
+    const result = await this.db.query('SELECT id, status, current_version FROM campaigns WHERE tenant_id=$1 AND id=$2', [tenantId, campaignId]);
+    const campaign = result.rows[0];
+    if (!campaign || !['ready', 'running', 'paused'].includes(String(campaign.status)) || !campaign.current_version) throw new BadRequestException('Escolha uma campanha publicada, pausada ou em execução');
+    return campaign;
+  }
+
+  async create(tenantId: string, userId: string, input: { name: string; integrationType?: IntegrationType; defaultFolderId: string; duplicatePolicy?: DuplicatePolicy; defaultPriority?: number; fieldMapping?: Record<string, string>; campaignId?: string | null }) {
     const name = String(input.name ?? '').trim();
     if (name.length < 2 || name.length > 80) throw new BadRequestException('O nome da integração deve ter entre 2 e 80 caracteres');
     const folder = await this.db.query('SELECT id, is_active FROM lead_folders WHERE tenant_id = $1 AND id = $2', [tenantId, input.defaultFolderId]);
     if (!folder.rows[0]) throw new BadRequestException('A pasta padrão não pertence a esta empresa');
     if (!folder.rows[0].is_active) throw new BadRequestException('A pasta padrão precisa estar ativa');
+    await this.validateCampaign(tenantId, input.campaignId);
     const apiKey = `zpl_in_${randomBytes(30).toString('base64url')}`;
     const signingSecret = `zpl_sig_${randomBytes(30).toString('base64url')}`;
     const row = (await this.db.query(`INSERT INTO lead_integrations
-      (id, tenant_id, public_id, name, integration_type, default_folder_id, duplicate_policy, default_priority, field_mapping, api_key_prefix, api_key_hash, signing_secret_ciphertext, created_by)
-      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb,$10,$11,$12,$13) RETURNING *`, [
+      (id, tenant_id, public_id, name, integration_type, default_folder_id, duplicate_policy, default_priority, field_mapping, campaign_id, api_key_prefix, api_key_hash, signing_secret_ciphertext, created_by)
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb,$10,$11,$12,$13,$14) RETURNING *`, [
       randomUUID(), tenantId, `li_${randomBytes(12).toString('hex')}`, name, input.integrationType ?? 'webhook', input.defaultFolderId,
       input.duplicatePolicy ?? 'update_existing', Math.max(-100, Math.min(100, Number(input.defaultPriority ?? 0))), JSON.stringify(input.fieldMapping ?? {}),
-      apiKey.slice(0, 16), hashCredential(apiKey), encryptSecret(signingSecret), userId,
+      input.campaignId ?? null, apiKey.slice(0, 16), hashCredential(apiKey), encryptSecret(signingSecret), userId,
     ])).rows[0];
     await this.audit.record({ actorUserId: userId, tenantId, action: 'lead_integration.created', entityType: 'lead_integration', entityId: row.id });
+    if (row.campaign_id) await this.campaignEvents?.record({ tenantId, campaignId: row.campaign_id, eventType: 'campaign.integration_attached', aggregateType: 'lead_integration', aggregateId: row.id, idempotencyKey: `lead-integration-campaign:${row.id}:created`, payload: { integrationId: row.id, campaignId: row.campaign_id } });
     return { ...this.publicIntegration(row), api_key: apiKey, signing_secret: signingSecret, webhook_url: this.createWebhookUrl(row.public_id) };
   }
 
-  async update(tenantId: string, userId: string, id: string, input: { name?: string; defaultFolderId?: string; duplicatePolicy?: DuplicatePolicy; defaultPriority?: number; fieldMapping?: Record<string, string> }) {
+  async update(tenantId: string, userId: string, id: string, input: { name?: string; defaultFolderId?: string; duplicatePolicy?: DuplicatePolicy; defaultPriority?: number; fieldMapping?: Record<string, string>; campaignId?: string | null }) {
     const current = await this.findForTenant(tenantId, id);
     const folderId = input.defaultFolderId ?? current.default_folder_id;
     const folder = await this.db.query('SELECT id, is_active FROM lead_folders WHERE tenant_id = $1 AND id = $2', [tenantId, folderId]);
     if (!folder.rows[0] || !folder.rows[0].is_active) throw new BadRequestException('A pasta padrão precisa pertencer à empresa e estar ativa');
     const name = input.name === undefined ? current.name : String(input.name).trim();
     if (name.length < 2 || name.length > 80) throw new BadRequestException('O nome da integração deve ter entre 2 e 80 caracteres');
-    const row = (await this.db.query(`UPDATE lead_integrations SET name=$1, default_folder_id=$2, duplicate_policy=$3, default_priority=$4, field_mapping=$5::jsonb, updated_at=now()
-      WHERE tenant_id=$6 AND id=$7 RETURNING *`, [name, folderId, input.duplicatePolicy ?? current.duplicate_policy, Math.max(-100, Math.min(100, Number(input.defaultPriority ?? current.default_priority))), JSON.stringify(input.fieldMapping ?? current.field_mapping ?? {}), tenantId, id])).rows[0];
+    const campaignId = input.campaignId === undefined ? current.campaign_id ?? null : input.campaignId ?? null;
+    await this.validateCampaign(tenantId, campaignId);
+    const row = (await this.db.query(`UPDATE lead_integrations SET name=$1, default_folder_id=$2, duplicate_policy=$3, default_priority=$4, field_mapping=$5::jsonb, campaign_id=$6, updated_at=now()
+      WHERE tenant_id=$7 AND id=$8 RETURNING *`, [name, folderId, input.duplicatePolicy ?? current.duplicate_policy, Math.max(-100, Math.min(100, Number(input.defaultPriority ?? current.default_priority))), JSON.stringify(input.fieldMapping ?? current.field_mapping ?? {}), campaignId, tenantId, id])).rows[0];
     await this.audit.record({ actorUserId: userId, tenantId, action: 'lead_integration.updated', entityType: 'lead_integration', entityId: id });
+    if ((current.campaign_id ?? null) !== (row.campaign_id ?? null)) await this.campaignEvents?.record({ tenantId, campaignId: row.campaign_id ?? current.campaign_id ?? null, eventType: row.campaign_id ? 'campaign.integration_attached' : 'campaign.integration_detached', aggregateType: 'lead_integration', aggregateId: id, idempotencyKey: `lead-integration-campaign:${id}:${row.updated_at}`, payload: { integrationId: id, campaignId: row.campaign_id ?? null } });
     return this.publicIntegration(row);
   }
 
@@ -258,7 +277,7 @@ export class LeadIngestionService implements OnModuleInit, OnModuleDestroy {
   }
 
   async processEvent(eventId: string) {
-    const event = (await this.db.query(`SELECT e.*, i.default_folder_id, i.duplicate_policy, i.default_priority, i.field_mapping, i.status AS integration_status
+    const event = (await this.db.query(`SELECT e.*, i.default_folder_id, i.duplicate_policy, i.default_priority, i.field_mapping, i.campaign_id, i.status AS integration_status
       FROM lead_ingestion_events e JOIN lead_integrations i ON i.tenant_id=e.tenant_id AND i.id=e.integration_id WHERE e.id=$1`, [eventId])).rows[0];
     if (!event) return;
     if (['accepted', 'updated', 'duplicate', 'rejected'].includes(event.status)) return;
@@ -284,6 +303,11 @@ export class LeadIngestionService implements OnModuleInit, OnModuleDestroy {
   private async upsertLead(event: any, lead: CanonicalLead) {
     return this.db.transaction(async (client) => {
       await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [`lead-quota:${event.tenant_id}`]);
+      const assignedCampaign = event.campaign_id
+        ? (await client.query(`SELECT id, status, current_version FROM campaigns WHERE tenant_id=$1 AND id=$2`, [event.tenant_id, event.campaign_id])).rows[0]
+        : undefined;
+      const campaignId = assignedCampaign && ['ready', 'running', 'paused'].includes(String(assignedCampaign.status)) && assignedCampaign.current_version ? assignedCampaign.id : null;
+      const campaignVersion = campaignId ? Number(assignedCampaign.current_version) : null;
       const existingByExternal = lead.externalId ? await client.query('SELECT id, phone, do_not_call FROM leads WHERE tenant_id=$1 AND source_integration_id=$2 AND external_id=$3 LIMIT 1', [event.tenant_id, event.integration_id, lead.externalId]) : { rows: [] };
       const existingByPhone = await client.query('SELECT id, source_integration_id, external_id, do_not_call FROM leads WHERE tenant_id=$1 AND phone=$2 LIMIT 1', [event.tenant_id, lead.phone]);
       const existing = existingByExternal.rows[0] ?? existingByPhone.rows[0];
@@ -295,14 +319,16 @@ export class LeadIngestionService implements OnModuleInit, OnModuleDestroy {
       const folder = await client.query('SELECT id, is_active FROM lead_folders WHERE tenant_id=$1 AND id=$2', [event.tenant_id, event.default_folder_id]);
       if (!folder.rows[0] || !folder.rows[0].is_active) throw new Error('pasta_padrao_inativa');
       if (existing) {
-        const updated = await client.query(`UPDATE leads SET name=$1, email=COALESCE($2,email), source_integration_id=COALESCE(source_integration_id,$3), external_id=COALESCE(external_id,$4), queue_priority=$5, last_ingestion_event_id=$6, queued_at=CASE WHEN status IN ('completed','cancelled') THEN now() ELSE queued_at END, status=CASE WHEN status IN ('completed','cancelled') AND do_not_call=false THEN 'queued' ELSE status END, next_eligible_at=CASE WHEN status IN ('completed','cancelled') AND do_not_call=false THEN now() ELSE next_eligible_at END WHERE tenant_id=$7 AND id=$8 RETURNING id`, [lead.name, lead.email ?? null, event.integration_id, lead.externalId ?? null, lead.priority, event.id, event.tenant_id, existing.id]);
+        const updated = await client.query(`UPDATE leads SET name=$1, email=COALESCE($2,email), source_integration_id=COALESCE(source_integration_id,$3), external_id=COALESCE(external_id,$4), campaign_id=COALESCE(campaign_id,$5), campaign_version=COALESCE(campaign_version,$6), queue_priority=$7, last_ingestion_event_id=$8, queued_at=CASE WHEN status IN ('completed','cancelled') THEN now() ELSE queued_at END, status=CASE WHEN status IN ('completed','cancelled') AND do_not_call=false THEN 'queued' ELSE status END, next_eligible_at=CASE WHEN status IN ('completed','cancelled') AND do_not_call=false THEN now() ELSE next_eligible_at END WHERE tenant_id=$9 AND id=$10 RETURNING id`, [lead.name, lead.email ?? null, event.integration_id, lead.externalId ?? null, campaignId, campaignVersion, lead.priority, event.id, event.tenant_id, existing.id]);
+        await this.campaignEvents?.record({ tenantId: event.tenant_id, campaignId: campaignId ?? null, campaignVersion, eventType: 'lead.received', aggregateType: 'lead', aggregateId: updated.rows[0].id, idempotencyKey: `lead.received:${event.id}`, payload: { eventId: event.id, status: 'updated' } }, client as any);
         return { status: 'updated', leadId: updated.rows[0].id };
       }
       const quota = await client.query('SELECT t.max_leads, count(l.id)::int AS current FROM tenants t LEFT JOIN leads l ON l.tenant_id=t.id WHERE t.id=$1 GROUP BY t.max_leads', [event.tenant_id]);
       if (Number(quota.rows[0]?.current ?? 0) >= Number(quota.rows[0]?.max_leads ?? 100000)) throw new Error('limite_de_leads_atingido');
-      const inserted = await client.query(`INSERT INTO leads (id,tenant_id,folder_id,name,phone,email,source_integration_id,external_id,queue_priority,queued_at,queue_sequence,last_ingestion_event_id)
-        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,now(),nextval('lead_queue_sequence'),$10) RETURNING id`, [randomUUID(), event.tenant_id, event.default_folder_id, lead.name, lead.phone, lead.email ?? null, event.integration_id, lead.externalId ?? null, lead.priority, event.id]);
+      const inserted = await client.query(`INSERT INTO leads (id,tenant_id,folder_id,name,phone,email,source_integration_id,external_id,campaign_id,campaign_version,queue_priority,queued_at,queue_sequence,last_ingestion_event_id)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,now(),nextval('lead_queue_sequence'),$12) RETURNING id`, [randomUUID(), event.tenant_id, event.default_folder_id, lead.name, lead.phone, lead.email ?? null, event.integration_id, lead.externalId ?? null, campaignId, campaignVersion, lead.priority, event.id]);
       await client.query(`UPDATE leads SET do_not_call=EXISTS (SELECT 1 FROM contact_suppressions s WHERE s.tenant_id=$1 AND s.phone=leads.phone AND s.lifted_at IS NULL) WHERE tenant_id=$1 AND id=$2`, [event.tenant_id, inserted.rows[0].id]);
+      await this.campaignEvents?.record({ tenantId: event.tenant_id, campaignId: campaignId ?? null, campaignVersion, eventType: 'lead.received', aggregateType: 'lead', aggregateId: inserted.rows[0].id, idempotencyKey: `lead.received:${event.id}`, payload: { eventId: event.id, status: 'accepted' } }, client as any);
       return { status: 'accepted', leadId: inserted.rows[0].id };
     });
   }

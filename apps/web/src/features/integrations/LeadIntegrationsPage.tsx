@@ -34,6 +34,7 @@ const typeOptions = [
 
 export function LeadIntegrationsPage({ tenantId, folders }: LeadIntegrationsPageProps) {
   const [integrations, setIntegrations] = useState<AnyRow[]>([]);
+  const [campaigns, setCampaigns] = useState<AnyRow[]>([]);
   const [events, setEvents] = useState<AnyRow[]>([]);
   const [message, setMessage] = useState('');
   const [busy, setBusy] = useState(false);
@@ -43,7 +44,7 @@ export function LeadIntegrationsPage({ tenantId, folders }: LeadIntegrationsPage
   const [showTutorial, setShowTutorial] = useState(false);
   const [showIntegrations, setShowIntegrations] = useState(false);
   const [showEvents, setShowEvents] = useState(false);
-  const [form, setForm] = useState({ name: '', integrationType: 'webhook', defaultFolderId: '', duplicatePolicy: 'update_existing', defaultPriority: '0' });
+  const [form, setForm] = useState({ name: '', integrationType: 'webhook', defaultFolderId: '', campaignId: '', duplicatePolicy: 'update_existing', defaultPriority: '0' });
 
   const activeFolders = useMemo(() => folders.filter((folder) => folder.is_active), [folders]);
   const activeIntegrations = integrations.filter((item) => item.status === 'active');
@@ -56,7 +57,9 @@ export function LeadIntegrationsPage({ tenantId, folders }: LeadIntegrationsPage
         json('/api/tenants/' + tenantId + '/lead-integrations'),
         json('/api/tenants/' + tenantId + '/lead-ingestion/events?limit=20&offset=0'),
       ]);
+      const campaignPage = await json('/api/tenants/' + tenantId + '/campaigns?status=running&limit=100&offset=0').catch(() => ({ items: [] }));
       setIntegrations(nextIntegrations);
+      setCampaigns(campaignPage.items ?? []);
       setEvents(nextEvents.items ?? []);
       setForm((current) => ({ ...current, defaultFolderId: current.defaultFolderId || activeFolders[0]?.id || '' }));
     } catch (error) { setMessage(error instanceof Error ? error.message : String(error)); }
@@ -89,7 +92,7 @@ export function LeadIntegrationsPage({ tenantId, folders }: LeadIntegrationsPage
     setCredentials(null);
     setMessage('');
     setStep(1);
-    setForm({ name: '', integrationType: 'webhook', defaultFolderId: activeFolders[0]?.id || '', duplicatePolicy: 'update_existing', defaultPriority: '0' });
+    setForm({ name: '', integrationType: 'webhook', defaultFolderId: activeFolders[0]?.id || '', campaignId: '', duplicatePolicy: 'update_existing', defaultPriority: '0' });
   };
 
   const create = async (event: React.FormEvent) => {
@@ -97,7 +100,7 @@ export function LeadIntegrationsPage({ tenantId, folders }: LeadIntegrationsPage
     if (step < 4) { goNext(); return; }
     setBusy(true); setMessage('');
     try {
-      const result = await json('/api/tenants/' + tenantId + '/lead-integrations', { method: 'POST', body: JSON.stringify({ ...form, defaultPriority: Number(form.defaultPriority) }) });
+      const result = await json('/api/tenants/' + tenantId + '/lead-integrations', { method: 'POST', body: JSON.stringify({ ...form, campaignId: form.campaignId || null, defaultPriority: Number(form.defaultPriority) }) });
       setCredentials({ api_key: result.api_key, signing_secret: result.signing_secret, webhook_url: absoluteUrl(result.webhook_url) });
       setMessage('Integração criada. Salve as credenciais agora: elas não serão exibidas novamente.');
       await load();
@@ -133,6 +136,7 @@ export function LeadIntegrationsPage({ tenantId, folders }: LeadIntegrationsPage
       <div className="integration-stepper" aria-label="Progresso da configuração">{['Origem', 'Destino', 'Regras', 'Credenciais'].map((label, index) => { const itemStep = index + 1; return <div className={itemStep <= step ? 'is-active' : ''} key={label}><span>{itemStep < step ? <Icon name="check" size={12} /> : itemStep}</span><small>{label}</small></div>; })}</div>
 
       <form onSubmit={(event) => void create(event)}>
+        {step === 2 && <label className="integration-campaign-select"><span>Campanha de execução</span><small>Opcional · apenas campanhas publicadas e em operação.</small><select aria-label="Campanha de execução" value={form.campaignId} onChange={(event) => setForm({ ...form, campaignId: event.target.value })}><option value="">Usar fila legada</option>{campaigns.map((campaign) => <option key={campaign.id} value={campaign.id}>{campaign.name}</option>)}</select></label>}
         {step === 1 && <div className="integration-source-grid">{typeOptions.map((option) => <button className={'integration-source-card' + (form.integrationType === option.value ? ' is-selected' : '')} type="button" aria-pressed={form.integrationType === option.value} key={option.value} onClick={() => setForm({ ...form, integrationType: option.value })}><span className="integration-source-icon"><Icon name={option.icon} size={17} /></span><span><strong>{option.title}</strong><small>{option.description}</small></span><span className="integration-source-radio" /></button>)}</div>}
 
         {step === 2 && <div className="integration-create-form"><label><span>Nome da integração</span><small>Ex.: HubSpot comercial</small><input placeholder="Nome da integração" value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} minLength={2} required /></label><label><span>Pasta de destino</span><small>Novos leads entram nesta fila</small><select aria-label="Pasta padrão" value={form.defaultFolderId} onChange={(event) => setForm({ ...form, defaultFolderId: event.target.value })} required><option value="">Selecione uma pasta</option>{activeFolders.map((folder) => <option key={folder.id} value={folder.id}>{folder.name}</option>)}</select></label><div className="integration-destination-note"><Icon name="archive" size={15} /><span><strong>O destino pode ser alterado depois.</strong><small>A pasta define em qual fila o contato ficará aguardando discagem.</small></span></div></div>}

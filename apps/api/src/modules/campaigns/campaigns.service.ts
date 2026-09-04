@@ -1,4 +1,4 @@
-import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, Injectable, NotFoundException, Optional } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
 import type { PoolClient } from 'pg';
 import { DatabaseService } from '../../database/database.service';
@@ -7,6 +7,8 @@ import { CAMPAIGN_STATUSES } from '../roadmap-contracts/roadmap-contracts';
 import { CampaignTransitionDto, CreateCampaignDto, DuplicateCampaignDto, UpdateCampaignDto } from './campaigns.dto';
 import { CampaignConfig, CampaignDefinition, canonicalizeCampaignSnapshot, diffCampaignSnapshots, hashCampaignSnapshot, validateCampaignDefinition } from './campaigns.domain';
 import { CampaignsRepository } from './campaigns.repository';
+import { CampaignEventsService } from './campaign-events.service';
+import { CreateCampaignPlaybookDto, InstantiateCampaignPlaybookDto } from './campaign-playbooks.dto';
 
 type CampaignRow = Record<string, any>;
 
@@ -47,12 +49,24 @@ const snapshotFromDefinition = (definition: CampaignDefinition) => canonicalizeC
   number_ids: [...definition.numberIds].sort(),
 });
 
+const definitionFromSnapshot = (snapshot: any): CampaignDefinition => ({
+  name: String(snapshot?.campaign?.name ?? 'Campanha do playbook'),
+  description: snapshot?.campaign?.description ?? null,
+  folderId: String(snapshot?.campaign?.folder_id ?? ''),
+  primaryGoalMetric: snapshot?.campaign?.primary_goal_metric ?? null,
+  primaryGoalTarget: snapshot?.campaign?.primary_goal_target == null ? null : Number(snapshot.campaign.primary_goal_target),
+  sdrIds: Array.isArray(snapshot?.sdr_ids) ? snapshot.sdr_ids.map(String) : [],
+  numberIds: Array.isArray(snapshot?.number_ids) ? snapshot.number_ids.map(String) : [],
+  config: (snapshot?.rules ?? {}) as CampaignConfig,
+});
+
 @Injectable()
 export class CampaignsService {
   constructor(
     private readonly campaigns: CampaignsRepository,
     private readonly db: DatabaseService,
     private readonly audit: AuditService,
+    @Optional() private readonly events?: CampaignEventsService,
   ) {}
 
   async list(tenantId: string, query: { status?: string; limit?: string; offset?: string }) {
@@ -113,6 +127,7 @@ export class CampaignsService {
           primaryGoalTarget: definition.primaryGoalTarget, config: definition.config as Record<string, unknown> });
         await this.campaigns.replaceAssociations(client, tenantId, campaignId, definition.sdrIds, definition.numberIds);
         await this.audit.record({ actorUserId: userId, tenantId, action: 'campaign.created', entityType: 'campaign', entityId: campaignId }, client as any);
+        await this.events?.record({ tenantId, campaignId, eventType: 'campaign.created', aggregateType: 'campaign', aggregateId: campaignId, idempotencyKey: `campaign.created:${campaignId}`, payload: { name: definition.name } }, client as any);
       });
     } catch (error) {
       if ((error as { code?: string }).code === '23505') throw new ConflictException('Já existe uma campanha com este nome');
@@ -145,6 +160,7 @@ export class CampaignsService {
       await this.campaigns.replaceAssociations(client, tenantId, campaignId, definition.sdrIds, definition.numberIds);
       await this.audit.record({ actorUserId: userId, tenantId, action: 'campaign.updated', entityType: 'campaign', entityId: campaignId,
         metadata: { changed: Object.keys(input).filter((key) => key !== 'expectedLockVersion'), lockVersion: updated.lock_version } }, client as any);
+      await this.events?.record({ tenantId, campaignId, campaignVersion: row.current_version ?? null, eventType: 'campaign.updated', aggregateType: 'campaign', aggregateId: campaignId, idempotencyKey: `campaign.updated:${campaignId}:${updated.lock_version}`, payload: { lockVersion: updated.lock_version } }, client as any);
 
       if (row.status === 'running') {
         const version = Number(row.current_version ?? 0) + 1;
@@ -152,6 +168,7 @@ export class CampaignsService {
         await this.campaigns.insertVersion(client, { id: randomUUID(), tenantId, campaignId, version, snapshot,
           hash: hashCampaignSnapshot(snapshot), reason: input.changeReason ?? 'Edição durante execução', userId, lockVersion: Number(updated.lock_version) });
         await this.campaigns.publish(client, tenantId, campaignId, version, userId, false);
+        await this.events?.record({ tenantId, campaignId, campaignVersion: version, eventType: 'campaign.version_published', aggregateType: 'campaign', aggregateId: campaignId, idempotencyKey: `campaign.version_published:${campaignId}:${version}`, payload: { reason: 'running_campaign_edit' } }, client as any);
         await this.audit.record({ actorUserId: userId, tenantId, action: 'campaign.version_published', entityType: 'campaign', entityId: campaignId,
           metadata: { version, reason: input.changeReason ?? 'Edição durante execução' } }, client as any);
       }
@@ -175,6 +192,7 @@ export class CampaignsService {
       await this.campaigns.publish(client, tenantId, campaignId, version, userId, true);
       await this.audit.record({ actorUserId: userId, tenantId, action: 'campaign.version_published', entityType: 'campaign', entityId: campaignId,
         metadata: { version, reason: input.reason ?? null } }, client as any);
+      await this.events?.record({ tenantId, campaignId, campaignVersion: version, eventType: 'campaign.version_published', aggregateType: 'campaign', aggregateId: campaignId, idempotencyKey: `campaign.version_published:${campaignId}:${version}`, payload: { reason: input.reason ?? null } }, client as any);
     });
     return this.get(tenantId, campaignId);
   }
@@ -192,6 +210,7 @@ export class CampaignsService {
       await this.campaigns.transition(client, tenantId, campaignId, target, userId);
       await this.audit.record({ actorUserId: userId, tenantId, action, entityType: 'campaign', entityId: campaignId,
         metadata: { from: row.status, to: target, reason: input.reason ?? null } }, client as any);
+      await this.events?.record({ tenantId, campaignId, campaignVersion: row.current_version ?? null, eventType: action, aggregateType: 'campaign', aggregateId: campaignId, idempotencyKey: `${action}:${campaignId}:${Number(row.lock_version) + 1}`, payload: { from: row.status, to: target, reason: input.reason ?? null } }, client as any);
     });
     return this.get(tenantId, campaignId);
   }
@@ -218,6 +237,7 @@ export class CampaignsService {
         await this.campaigns.replaceAssociations(client, tenantId, duplicateId, definition.sdrIds, definition.numberIds);
         await this.audit.record({ actorUserId: userId, tenantId, action: 'campaign.created', entityType: 'campaign', entityId: duplicateId,
           metadata: { duplicatedFrom: campaignId } }, client as any);
+        await this.events?.record({ tenantId, campaignId: duplicateId, eventType: 'campaign.created', aggregateType: 'campaign', aggregateId: duplicateId, idempotencyKey: `campaign.created:${duplicateId}`, payload: { duplicatedFrom: campaignId } }, client as any);
       });
     } catch (error) {
       if ((error as { code?: string }).code === '23505') throw new ConflictException('Já existe uma campanha com este nome');
@@ -241,5 +261,54 @@ export class CampaignsService {
   async diff(tenantId: string, campaignId: string, from: number, to: number) {
     const [before, after] = await Promise.all([this.version(tenantId, campaignId, from), this.version(tenantId, campaignId, to)]);
     return { from, to, changes: diffCampaignSnapshots(before.config_snapshot, after.config_snapshot) };
+  }
+
+  async listPlaybooks(tenantId: string) {
+    return this.campaigns.listPlaybooks(tenantId);
+  }
+
+  async savePlaybook(tenantId: string, campaignId: string, userId: string, input: CreateCampaignPlaybookDto) {
+    const playbookId = randomUUID();
+    try {
+      await this.db.transaction(async (client) => {
+        const row = await this.campaigns.findForUpdate(client, tenantId, campaignId);
+        if (!row) throw new NotFoundException('Campanha nÃ£o encontrada');
+        const definition = definitionFromRow(await this.campaigns.definition(client, tenantId, campaignId));
+        this.validate(definition, false);
+        const snapshot = snapshotFromDefinition(definition);
+        await this.campaigns.createPlaybook(client, {
+          id: playbookId,
+          tenantId,
+          name: input.name?.trim() || `${definition.name} (playbook)`,
+          description: input.description?.trim() || definition.description,
+          sourceCampaignId: campaignId,
+          snapshot,
+          hash: hashCampaignSnapshot(snapshot),
+          userId,
+        });
+        await this.audit.record({ actorUserId: userId, tenantId, action: 'campaign.playbook_created', entityType: 'campaign_playbook', entityId: playbookId, metadata: { sourceCampaignId: campaignId } }, client as any);
+        await this.events?.record({ tenantId, campaignId, campaignVersion: row.current_version ?? null, eventType: 'campaign.playbook_created', aggregateType: 'campaign_playbook', aggregateId: playbookId, idempotencyKey: `campaign.playbook_created:${playbookId}`, payload: { sourceCampaignId: campaignId } }, client as any);
+      });
+    } catch (error) {
+      if ((error as { code?: string }).code === '23505') throw new ConflictException('JÃ¡ existe um playbook com este nome');
+      throw error;
+    }
+    return this.campaigns.findPlaybook(tenantId, playbookId);
+  }
+
+  async instantiatePlaybook(tenantId: string, playbookId: string, userId: string, input: InstantiateCampaignPlaybookDto) {
+    const playbook = await this.campaigns.findPlaybook(tenantId, playbookId);
+    if (!playbook) throw new NotFoundException('Playbook nÃ£o encontrado');
+    const definition = definitionFromSnapshot(playbook.config_snapshot);
+    return this.create(tenantId, userId, {
+      name: input.name?.trim() || `${definition.name} (nova)`,
+      description: definition.description ?? undefined,
+      folderId: definition.folderId,
+      primaryGoalMetric: definition.primaryGoalMetric ?? undefined,
+      primaryGoalTarget: definition.primaryGoalTarget ?? undefined,
+      sdrIds: definition.sdrIds,
+      numberIds: definition.numberIds,
+      config: definition.config as Record<string, unknown>,
+    });
   }
 }

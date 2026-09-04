@@ -7,4 +7,5 @@ export class CreateLeadIntegrationDto {
   @IsOptional() @IsIn(['update_existing', 'ignore_duplicate', 'reject_duplicate']) duplicatePolicy?: 'update_existing' | 'ignore_duplicate' | 'reject_duplicate';
   @IsOptional() @IsInt() @Min(-100) @Max(100) defaultPriority?: number;
   @IsOptional() @IsObject() fieldMapping?: Record<string, string>;
+  @IsOptional() @IsString() campaignId?: string;
 }
