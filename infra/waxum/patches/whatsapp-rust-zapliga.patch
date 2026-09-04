@@ -1,0 +1,771 @@
+diff -ruN '--exclude=target' '--exclude=.git' whatsapp-rust/src/client/voip.rs ../zapliga-waxum-encfix-v2/whatsapp-rust/src/client/voip.rs
+--- whatsapp-rust/src/client/voip.rs	2026-09-03 22:36:25.875350200 -0300
++++ ../zapliga-waxum-encfix-v2/whatsapp-rust/src/client/voip.rs	2026-09-03 18:11:52.547979600 -0300
+@@ -445,6 +445,8 @@
+     pub(crate) async fn relay_transport_factory(
+         &self,
+         relay: &wacore::voip::RelayEndpointParams,
++        extras: &[crate::voip::transport::ExtraRelayEndpoint],
++        alloc_ctx: &crate::voip::transport::RelayAllocateContext,
+     ) -> Result<Arc<dyn wacore::voip::RelayTransportFactory>, CallError> {
+         let addr = relay.addr;
+         let installed = self
+@@ -484,9 +486,20 @@
+         }
+         #[cfg(feature = "voip-relay-native")]
+         {
+-            Ok(Arc::new(
+-                crate::voip::transport::RelayMediaChannelFactory::new(addr, self.runtime.clone()),
+-            ))
++            if extras.is_empty() {
++                Ok(Arc::new(
++                    crate::voip::transport::RelayMediaChannelFactory::new(addr, self.runtime.clone()),
++                ))
++            } else {
++                Ok(Arc::new(
++                    crate::voip::transport::MultiRelayMediaChannelFactory::new(
++                        addr,
++                        extras.to_vec(),
++                        alloc_ctx.clone(),
++                        self.runtime.clone(),
++                    ),
++                ))
++            }
+         }
+         #[cfg(not(feature = "voip-relay-native"))]
+         {
+diff -ruN '--exclude=target' '--exclude=.git' whatsapp-rust/src/handlers/call.rs ../zapliga-waxum-encfix-v2/whatsapp-rust/src/handlers/call.rs
+--- whatsapp-rust/src/handlers/call.rs	2026-09-03 22:38:51.345638500 -0300
++++ ../zapliga-waxum-encfix-v2/whatsapp-rust/src/handlers/call.rs	2026-09-02 00:07:54.000000000 -0300
+@@ -8,7 +8,7 @@
+ use wacore::messages::MessageUtils;
+ #[cfg(feature = "voip-runtime")]
+ use wacore::stanza::call::{
+-    CAPABILITY_INDEX_MLOW_V1, CapabilityBit, REJECT_REASON_BUSY,
++    CAPABILITY_INDEX_MLOW_V1, CapabilityBit, REJECT_REASON_BUSY, REJECT_REASON_ENC,
+     TERMINATE_REASON_ACCEPTED_ELSEWHERE, TERMINATE_REASON_GROUP_CALL_ENDED,
+     TERMINATE_REASON_REJECTED_ELSEWHERE, TERMINATE_REASON_TIMEOUT, TerminateParams,
+     VideoStateParams, build_call_video_ack, build_terminate, build_video_state, capability_bit,
+@@ -1431,14 +1431,16 @@
+ /// handling here: the call ends, its registry entry (and the device set with it) goes away.
+ /// Whether a `<reject>` says the DEVICE is unavailable rather than that the callee declined.
+ ///
+-/// `busy` is a per-device statement (already in a call, or a companion with no voice support); the
+-/// callee's other devices go on ringing and may still answer. Any other reason - including none -
+-/// is the callee's own decision and ends the call.
++/// `busy` and `enc` are per-device statements (the device is already in a call,
++/// lacks voice support, or could not decrypt this offer); the callee's other
++/// devices go on ringing and may still answer. Any other reason - including
++/// none - is the callee's own decision and ends the call.
+ #[cfg(feature = "voip-runtime")]
+ fn reject_is_device_busy(action: &CallAction) -> bool {
+     matches!(
+         action,
+-        CallAction::Reject { reason, .. } if reason.as_deref() == Some(REJECT_REASON_BUSY)
++        CallAction::Reject { reason, .. }
++            if matches!(reason.as_deref(), Some(REJECT_REASON_BUSY | REJECT_REASON_ENC))
+     )
+ }
+ 
+diff -ruN '--exclude=target' '--exclude=.git' whatsapp-rust/src/voip/facade.rs ../zapliga-waxum-encfix-v2/whatsapp-rust/src/voip/facade.rs
+--- whatsapp-rust/src/voip/facade.rs	2026-09-03 22:38:59.436064200 -0300
++++ ../zapliga-waxum-encfix-v2/whatsapp-rust/src/voip/facade.rs	2026-09-03 18:28:08.676914800 -0300
+@@ -356,7 +356,7 @@
+             &preaccept_id,
+             &accept_id,
+         )?;
+-        let (mut engine, built_call_id, relay_endpoint) = send_preaccept_then_prepare(
++        let (mut engine, built_call_id, relay_endpoint, extras, alloc_ctx) = send_preaccept_then_prepare(
+             self.client,
+             &registration,
+             &mut teardown,
+@@ -383,7 +383,14 @@
+             return Err(CallError::Connect(ERR_DISCONNECTED_DURING_SETUP.into()));
+         }
+         registration.ensure_current()?;
+-        let factory = relay_factory_or_ended(self.client, &registration, &relay_endpoint).await?;
++        let factory = relay_factory_or_ended(
++            self.client,
++            &registration,
++            &relay_endpoint,
++            &extras,
++            &alloc_ctx,
++        )
++        .await?;
+         // Final acceptance waits until media setup succeeded and the registered generation is still
+         // current; only then may the caller apply the participant keys and enter the call.
+         send_answer_node(self.client, &registration, &mut teardown, accept).await?;
+@@ -423,7 +430,16 @@
+         enable_video: bool,
+         audio: AudioConfig,
+         group: Option<GroupCallUpdate>,
+-    ) -> Result<(CallEngine, String, wacore::voip::RelayEndpointParams), CallError> {
++    ) -> Result<
++        (
++            CallEngine,
++            String,
++            wacore::voip::RelayEndpointParams,
++            Vec<crate::voip::transport::ExtraRelayEndpoint>,
++            crate::voip::transport::RelayAllocateContext,
++        ),
++        CallError,
++    > {
+         let CallAction::Offer {
+             call_id,
+             call_creator,
+@@ -454,6 +470,15 @@
+             config.audio = audio;
+             config.enable_video = enable_video;
+             let relay_endpoint = relay_endpoint_from_config(&config)?;
++            // Group relays are per-participant, not redundant candidates for one peer, so binding
++            // every one of them the way a 1:1 call's extras do is a different feature; not done here.
++            let alloc_ctx = crate::voip::transport::RelayAllocateContext {
++                call_id: config.call_id.clone(),
++                self_participant_id: wacore::voip::ssrc::format_e2e_srtp_participant_id(
++                    &config.self_lid,
++                ),
++                integrity_key: config.integrity_key.clone(),
++            };
+             let mut engine = CallEngine::new(config, Box::new(RandTxIds))
+                 .map(with_platform_audio_codec)
+                 .map_err(|error| CallError::Setup(error.to_string()))?;
+@@ -465,7 +490,13 @@
+                     direct_peer: None,
+                 })
+                 .map_err(|error| CallError::Setup(error.to_string()))?;
+-            return Ok((engine, call_id.clone(), relay_endpoint));
++            return Ok((
++                engine,
++                call_id.clone(),
++                relay_endpoint,
++                Vec::new(),
++                alloc_ctx,
++            ));
+         }
+ 
+         let media = self
+@@ -507,12 +538,14 @@
+             .map_err(|e| CallError::Setup(e.to_string()))?;
+         config.audio = audio;
+         config.enable_video = enable_video;
+-        // Read the dial addr off the config before CallEngine::new consumes it (no second relay walk).
++        // Read the dial addr and the other bindable relays off the config before CallEngine::new
++        // consumes it (no second relay walk).
+         let relay_endpoint = relay_endpoint_from_config(&config)?;
++        let (extras, alloc_ctx) = relay_extras_from_data(&config, relay);
+         let engine = CallEngine::new(config, Box::new(RandTxIds))
+             .map(with_platform_audio_codec)
+             .map_err(|e| CallError::Setup(e.to_string()))?;
+-        Ok((engine, call_id.clone(), relay_endpoint))
++        Ok((engine, call_id.clone(), relay_endpoint, extras, alloc_ctx))
+     }
+ }
+ 
+@@ -963,7 +996,21 @@
+         if !self.client.is_connected() {
+             return Err(CallError::Connect(ERR_DISCONNECTED_DURING_SETUP.into()));
+         }
+-        let factory = relay_factory_or_ended(self.client, &registration, &relay_endpoint).await?;
++        // Group relays are per-participant, not redundant candidates for one peer, so this path
++        // (unlike the 1:1 paths) never binds extras.
++        let no_extras = crate::voip::transport::RelayAllocateContext {
++            call_id: call_id.clone(),
++            self_participant_id: String::new(),
++            integrity_key: Vec::new(),
++        };
++        let factory = relay_factory_or_ended(
++            self.client,
++            &registration,
++            &relay_endpoint,
++            &[],
++            &no_extras,
++        )
++        .await?;
+         let handle =
+             spawn_registered_call(self.client, &registration, engine, &*factory, audio, video)
+                 .await?;
+@@ -1158,7 +1205,21 @@
+         if !self.client.is_connected() {
+             return Err(CallError::Connect(ERR_DISCONNECTED_DURING_SETUP.into()));
+         }
+-        let factory = relay_factory_or_ended(self.client, &registration, &relay_endpoint).await?;
++        // Group relays are per-participant, not redundant candidates for one peer, so this path
++        // (unlike the 1:1 paths) never binds extras.
++        let no_extras = crate::voip::transport::RelayAllocateContext {
++            call_id: join.call_id.clone(),
++            self_participant_id: String::new(),
++            integrity_key: Vec::new(),
++        };
++        let factory = relay_factory_or_ended(
++            self.client,
++            &registration,
++            &relay_endpoint,
++            &[],
++            &no_extras,
++        )
++        .await?;
+         let handle =
+             spawn_registered_call(self.client, &registration, engine, &*factory, audio, video)
+                 .await?;
+@@ -2261,9 +2322,11 @@
+     client: &Client,
+     registration: &RegisteredCall,
+     endpoint: &wacore::voip::RelayEndpointParams,
++    extras: &[crate::voip::transport::ExtraRelayEndpoint],
++    alloc_ctx: &crate::voip::transport::RelayAllocateContext,
+ ) -> Result<Arc<dyn RelayTransportFactory>, CallError> {
+     match futures::future::select(
+-        std::pin::pin!(client.relay_transport_factory(endpoint)),
++        std::pin::pin!(client.relay_transport_factory(endpoint, extras, alloc_ctx)),
+         std::pin::pin!(registration.ended.wait()),
+     )
+     .await
+@@ -2398,6 +2461,46 @@
+     })
+ }
+ 
++/// Every other usable relay besides the one `config` selected, plus what an extra endpoint's own
++/// STUN allocate needs to share with the primary's.
++///
++/// The answering device elects its own relay independently of ours and may migrate its media to
++/// one of these instead of the endpoint we picked -- binding only the primary can leave a call
++/// connected but permanently deaf on our side while it looks healthy from every counter that only
++/// watches the primary. See `MultiRelayMediaChannelFactory`'s docs for the full account and the
++/// production report this mirrors.
++fn relay_extras_from_data(
++    config: &CallConfig,
++    relay: &RelayData,
++) -> (
++    Vec<crate::voip::transport::ExtraRelayEndpoint>,
++    crate::voip::transport::RelayAllocateContext,
++) {
++    let extras = wacore::voip::relay_parse::get_usable_relay_endpoints(relay)
++        .into_iter()
++        .filter_map(|ep| {
++            let (ip, port) = wacore::voip::relay_parse::get_primary_ipv4_address(ep)?;
++            // Already the primary: RelayMediaChannelFactory dials it directly, so it must not also
++            // be bound a second time as an "extra".
++            if ip == config.relay_ip && port == config.relay_port {
++                return None;
++            }
++            let addr: SocketAddr = format!("{ip}:{port}").parse().ok()?;
++            let relay_token = relay.relay_tokens.get(ep.token_id as usize)?.clone();
++            (!relay_token.is_empty()).then_some(crate::voip::transport::ExtraRelayEndpoint {
++                addr,
++                relay_token,
++            })
++        })
++        .collect();
++    let alloc_ctx = crate::voip::transport::RelayAllocateContext {
++        call_id: config.call_id.clone(),
++        self_participant_id: wacore::voip::ssrc::format_e2e_srtp_participant_id(&config.self_lid),
++        integrity_key: config.integrity_key.clone(),
++    };
++    (extras, alloc_ctx)
++}
++
+ /// Build the engine from a relay that arrived for a pending OUTGOING call and start the driver,
+ /// reusing the dormant handle's shared state. Returns `Ok(false)` when no pending outgoing call
+ /// matches `call_id` (so the caller can fall through to normal handling).
+@@ -2423,6 +2526,13 @@
+         return Ok(false);
+     };
+ 
++    // Endpoint metadata is safe to log (RelayData's keys and tokens remain redacted). Keep this at
++    // info level while the caller-side one-way relay regression is being verified in production.
++    log::info!(
++        "voip: outgoing relay candidates for {call_id}: {:?}",
++        relay.endpoints
++    );
++
+     // Hung up / superseded during the ack race: the registry entry is gone, so don't resurrect the
+     // call. No engine will attach, and hangup raced us for the pending entry so it couldn't notify;
+     // wake any wait_ended() here.
+@@ -2447,9 +2557,10 @@
+         .map_err(|e| SetupStop::Failed(CallError::Setup(e.to_string())))?;
+         config.audio = pending.audio.config();
+         config.enable_video = pending.video.is_some();
+-        // Read the dial endpoint off the config before CallEngine::new consumes it (no second relay
+-        // walk).
++        // Read the dial endpoint and the other bindable relays off the config before
++        // CallEngine::new consumes it (no second relay walk).
+         let relay_endpoint = relay_endpoint_from_config(&config).map_err(SetupStop::Failed)?;
++        let (extras, alloc_ctx) = relay_extras_from_data(&config, relay);
+         let engine = CallEngine::new(config, Box::new(RandTxIds))
+             .map(with_platform_audio_codec)
+             .map_err(|e| SetupStop::Failed(CallError::Setup(e.to_string())))?;
+@@ -2463,7 +2574,7 @@
+         // flag, three functions along; the provider await was the one step in front of it that
+         // did not.
+         let factory = match futures::future::select(
+-            std::pin::pin!(client.relay_transport_factory(&relay_endpoint)),
++            std::pin::pin!(client.relay_transport_factory(&relay_endpoint, &extras, &alloc_ctx)),
+             std::pin::pin!(pending.ended.wait()),
+         )
+         .await
+@@ -6271,8 +6382,13 @@
+             ice_ufrag: "UFRAG".to_string(),
+             ice_pwd: "PWD".to_string(),
+         };
++        let no_extras = crate::voip::transport::RelayAllocateContext {
++            call_id: String::new(),
++            self_participant_id: String::new(),
++            integrity_key: Vec::new(),
++        };
+         client
+-            .relay_transport_factory(&endpoint)
++            .relay_transport_factory(&endpoint, &[], &no_extras)
+             .await
+             .expect("the installed provider answers");
+ 
+@@ -6599,7 +6715,12 @@
+             ice_pwd: String::new(),
+         };
+ 
+-        let awaiting = relay_factory_or_ended(&client, &registration, &endpoint);
++        let no_extras = crate::voip::transport::RelayAllocateContext {
++            call_id: String::new(),
++            self_participant_id: String::new(),
++            integrity_key: Vec::new(),
++        };
++        let awaiting = relay_factory_or_ended(&client, &registration, &endpoint, &[], &no_extras);
+         let end_peer = async {
+             tokio::task::yield_now().await;
+             terminate_call(&client, incoming.action.call_id());
+@@ -6650,7 +6771,15 @@
+             ice_pwd: String::new(),
+         };
+ 
+-        let error = match client.relay_transport_factory(&endpoint).await {
++        let no_extras = crate::voip::transport::RelayAllocateContext {
++            call_id: String::new(),
++            self_participant_id: String::new(),
++            integrity_key: Vec::new(),
++        };
++        let error = match client
++            .relay_transport_factory(&endpoint, &[], &no_extras)
++            .await
++        {
+             Ok(_) => panic!("a provider that never answers must not resolve"),
+             Err(error) => error,
+         };
+@@ -6684,7 +6813,15 @@
+             ice_pwd: String::new(),
+         };
+         // `expect_err` wants the Ok side to be Debug, and `dyn RelayTransportFactory` is not.
+-        let error = match client.relay_transport_factory(&endpoint).await {
++        let no_extras = crate::voip::transport::RelayAllocateContext {
++            call_id: String::new(),
++            self_participant_id: String::new(),
++            integrity_key: Vec::new(),
++        };
++        let error = match client
++            .relay_transport_factory(&endpoint, &[], &no_extras)
++            .await
++        {
+             Ok(_) => panic!("a refusing provider must not fall through to the native dialer"),
+             Err(error) => error,
+         };
+diff -ruN '--exclude=target' '--exclude=.git' whatsapp-rust/src/voip/transport/mod.rs ../zapliga-waxum-encfix-v2/whatsapp-rust/src/voip/transport/mod.rs
+--- whatsapp-rust/src/voip/transport/mod.rs	2026-09-03 22:36:25.993858100 -0300
++++ ../zapliga-waxum-encfix-v2/whatsapp-rust/src/voip/transport/mod.rs	2026-09-03 18:11:17.218861200 -0300
+@@ -24,3 +24,25 @@
+ // `whatsapp_rust::voip::transport::{classify_relay_packet, RelayPacketKind}` paths stay stable on
+ // every build that has ever had them.
+ pub use wacore::voip::demux::{RelayPacketKind, classify_relay_packet};
++
++/// One relay endpoint a call could also receive media on, beyond the primary the engine binds.
++/// Ungated (unlike the native dialer that connects it): `Client::relay_transport_factory` takes
++/// this on every build so its signature does not change under `voip-relay-native`, even though only
++/// that feature's `MultiRelayMediaChannelFactory` does anything with a non-empty list.
++#[derive(Clone)]
++pub struct ExtraRelayEndpoint {
++    pub addr: std::net::SocketAddr,
++    /// This endpoint's own STUN `RELAY-TOKEN` (`relay_tokens[token_id]`). Allocates are
++    /// relay-specific; building one with another endpoint's token gets it rejected.
++    pub relay_token: Vec<u8>,
++}
++
++/// What every endpoint in a `<relay>` block shares, needed to build an extra relay's own STUN
++/// allocate. Everything else about the allocate (the token, the XOR-encoded endpoint) is specific
++/// to that one endpoint and travels with it in [`ExtraRelayEndpoint`] instead.
++#[derive(Clone)]
++pub struct RelayAllocateContext {
++    pub call_id: String,
++    pub self_participant_id: String,
++    pub integrity_key: Vec<u8>,
++}
+diff -ruN '--exclude=target' '--exclude=.git' whatsapp-rust/src/voip/transport/native.rs ../zapliga-waxum-encfix-v2/whatsapp-rust/src/voip/transport/native.rs
+--- whatsapp-rust/src/voip/transport/native.rs	2026-09-03 22:36:25.995869900 -0300
++++ ../zapliga-waxum-encfix-v2/whatsapp-rust/src/voip/transport/native.rs	2026-09-03 18:28:18.040187200 -0300
+@@ -63,6 +63,8 @@
+ 
+ use wacore::voip::demux::{RelayPacketKind, classify_relay_packet};
+ 
++use super::{ExtraRelayEndpoint, RelayAllocateContext};
++
+ /// Why the media stack stopped. The driver branches on the variant: a peer close ends the call the
+ /// way hanging up does, anything else is a transport failure the call surfaces as a read error.
+ #[derive(Debug, thiserror::Error)]
+@@ -928,6 +930,236 @@
+     }
+ }
+ 
++/// How often an extra relay's allocate is re-sent to keep its consent fresh. The engine drives the
++/// primary relay's own consent on its usual schedule; this is this module's equivalent for the
++/// endpoints the engine never learns about.
++const EXTRA_RELAY_KEEPALIVE: std::time::Duration = std::time::Duration::from_secs(1);
++
++/// A [`RelayTransportFactory`] that binds the primary relay endpoint the engine selected plus every
++/// other usable relay the offer carried, and presents the lot to the engine as one
++/// [`RelayTransport`].
++///
++/// # Why binding one relay is not enough
++///
++/// The engine picks one endpoint (`get_media_relay_endpoint`) and [`dial_candidates`] only races
++/// that HOST's advertised port against the web-client one -- both are about which port of the SAME
++/// host to use. Neither says anything about the device that answers: it runs its own relay
++/// election after accepting and may migrate its media to a DIFFERENT host in the offer than the one
++/// we picked. When it does, our single-relay socket never sees that media again -- the STUN
++/// allocate still succeeds and consent pings still answer, so nothing looks wrong, but inbound RTP
++/// simply never arrives. This is the live, packet-captured signature of ZapCall's one-way-audio
++/// incidents (see `docs/audio-call-fix.md`) and matches the independently-diagnosed and
++/// production-validated root cause of the same symptom in a sibling WhatsApp-calling
++/// implementation: <https://github.com/purpshell/meowcaller/pull/26>.
++///
++/// The official client never bets on one relay for exactly this reason (`ConfigureRelays`/
++/// `Broadcast` in the WaCalls reference): it allocates on every offered relay and merges whatever
++/// each one delivers. This factory is the same fix, scoped to this codebase's transport seam.
++///
++/// # What stays single-relay
++///
++/// The engine's own STUN allocate/consent state machine is untouched and still drives the primary
++/// relay exactly as before [`RelayMediaChannelFactory`] alone did -- this factory only ADDS
++/// independent, best-effort allocate/consent loops for the other endpoints, run entirely in this
++/// module ([`drive_extra_relay`]). Their allocate responses are never forwarded to the engine (it
++/// did not send them and would not recognise the transaction id); only RTP/RTCP arriving on them
++/// is. A frame that reaches the engine by more than one relay is rejected by the SRTP replay window
++/// exactly like a retransmission would be, so no deduplication happens here.
++pub struct MultiRelayMediaChannelFactory {
++    primary_addr: SocketAddr,
++    extras: Vec<ExtraRelayEndpoint>,
++    alloc_ctx: RelayAllocateContext,
++    runtime: Arc<dyn Runtime>,
++}
++
++impl MultiRelayMediaChannelFactory {
++    pub fn new(
++        primary_addr: SocketAddr,
++        extras: Vec<ExtraRelayEndpoint>,
++        alloc_ctx: RelayAllocateContext,
++        runtime: Arc<dyn Runtime>,
++    ) -> Self {
++        Self {
++            primary_addr,
++            extras,
++            alloc_ctx,
++            runtime,
++        }
++    }
++}
++
++#[async_trait]
++impl RelayTransportFactory for MultiRelayMediaChannelFactory {
++    async fn connect(
++        &self,
++    ) -> Result<(
++        Arc<dyn RelayTransport>,
++        async_channel::Receiver<RelayTransportEvent>,
++    )> {
++        // The primary is the one connect() must succeed or fail on -- same contract
++        // RelayMediaChannelFactory alone had, so a caller waiting on this still gets the same
++        // timeout/error behaviour when the offer names only one usable relay (extras: []).
++        let (primary, primary_events) =
++            RelayMediaChannelFactory::new(self.primary_addr, self.runtime.clone())
++                .connect()
++                .await?;
++
++        let (merged_tx, merged_rx) = async_channel::bounded(RELAY_EVENT_CAP);
++        let mut tasks = Vec::with_capacity(1 + self.extras.len());
++
++        // Pass the primary's own events straight through -- it stays the stream the call's
++        // Connected/Disconnected state and its media come from.
++        {
++            let merged_tx = merged_tx.clone();
++            tasks.push(self.runtime.spawn(Box::pin(async move {
++                while let Ok(event) = primary_events.recv().await {
++                    if merged_tx.send(event).await.is_err() {
++                        return;
++                    }
++                }
++            })));
++        }
++
++        let mut extra_outbound = Vec::with_capacity(self.extras.len());
++        for extra in &self.extras {
++            let (outbound_tx, outbound_rx) = async_channel::bounded(RELAY_SEND_CAP);
++            extra_outbound.push(outbound_tx);
++            tasks.push(self.runtime.spawn(Box::pin(drive_extra_relay(
++                extra.clone(),
++                self.alloc_ctx.clone(),
++                self.runtime.clone(),
++                outbound_rx,
++                merged_tx.clone(),
++            ))));
++        }
++
++        Ok((
++            Arc::new(MultiRelayTransport {
++                primary,
++                extra_outbound,
++                _tasks: tasks,
++            }),
++            merged_rx,
++        ))
++    }
++}
++
++/// Connect one extra relay, allocate on it with its own token, keep that allocate's consent fresh,
++/// forward whatever it sends us, and drain `outbound` onto it. Ends quietly -- never propagating a
++/// failure to the call -- on connect failure, a closed `outbound` (the transport disconnecting), or
++/// a lost channel: an extra relay is a bonus path, and losing one must cost the call nothing more
++/// than the media it would have carried.
++async fn drive_extra_relay(
++    extra: ExtraRelayEndpoint,
++    ctx: RelayAllocateContext,
++    runtime: Arc<dyn Runtime>,
++    outbound: async_channel::Receiver<Bytes>,
++    merged_tx: async_channel::Sender<RelayTransportEvent>,
++) {
++    let Ok((channel, events)) = connect_relay_media(extra.addr, runtime).await else {
++        return;
++    };
++    let Some(endpoint_xor) =
++        wacore::voip::stun::encode_xor_relay_endpoint(&extra.addr.ip().to_string(), extra.addr.port())
++    else {
++        return;
++    };
++    let allocate = Bytes::from(wacore::voip::stun::build_wasm_stun_allocate_request(
++        &rand::random(),
++        &extra.relay_token,
++        &endpoint_xor,
++        &ctx.integrity_key,
++        &ctx.call_id,
++        &ctx.self_participant_id,
++    ));
++    if channel.send(allocate.clone()).await.is_err() {
++        return;
++    }
++    let mut keepalive = tokio::time::interval(EXTRA_RELAY_KEEPALIVE);
++    keepalive.tick().await; // first tick fires immediately; the allocate above already went out
++    loop {
++        tokio::select! {
++            _ = keepalive.tick() => {
++                if channel.send(allocate.clone()).await.is_err() {
++                    return;
++                }
++            }
++            queued = outbound.recv() => {
++                match queued {
++                    Ok(data) => {
++                        if channel.send(data).await.is_err() {
++                            return;
++                        }
++                    }
++                    // MultiRelayTransport::disconnect closed our outbound queue: say goodbye on
++                    // this relay too, rather than just abandoning the socket.
++                    Err(_) => {
++                        channel.disconnect().await;
++                        return;
++                    }
++                }
++            }
++            event = events.recv() => {
++                match event {
++                    Ok(RelayTransportEvent::PacketReceived(bytes)) => {
++                        if matches!(
++                            classify_relay_packet(&bytes),
++                            RelayPacketKind::Rtp | RelayPacketKind::Rtcp
++                        ) && merged_tx
++                            .send(RelayTransportEvent::PacketReceived(bytes))
++                            .await
++                            .is_err()
++                        {
++                            return;
++                        }
++                        // A Stun/Other packet here is this relay's own allocate-success or consent
++                        // reply -- our bookkeeping, not the call's; the engine never sent the
++                        // request and would not recognise the transaction id.
++                    }
++                    Ok(RelayTransportEvent::Disconnected(_)) | Err(_) => return,
++                    Ok(_) => {}
++                }
++            }
++        }
++    }
++}
++
++/// Broadcasts RTP/RTCP to the primary relay and every bound extra; everything else -- the engine's
++/// own STUN allocate/consent for the primary -- goes only to the primary, the one relay that state
++/// machine actually tracks.
++struct MultiRelayTransport {
++    primary: Arc<dyn RelayTransport>,
++    extra_outbound: Vec<async_channel::Sender<Bytes>>,
++    /// Keeps the primary-event-forwarder and extra-relay driver tasks alive: each aborts on its own
++    /// `Drop` (see `Runtime::spawn`'s contract) once this transport itself is dropped, mirroring how
++    /// `RelayMediaChannel` holds its own driver's handle.
++    _tasks: Vec<AbortHandle>,
++}
++
++#[async_trait]
++impl RelayTransport for MultiRelayTransport {
++    async fn send(&self, data: Bytes) -> Result<()> {
++        if matches!(
++            classify_relay_packet(&data),
++            RelayPacketKind::Rtp | RelayPacketKind::Rtcp
++        ) {
++            for tx in &self.extra_outbound {
++                // Best-effort and non-blocking: one slow or gone extra relay must never hold up the
++                // call's own send, which still has to reach the primary below.
++                let _ = tx.try_send(data.clone());
++            }
++        }
++        self.primary.send(data).await
++    }
++
++    async fn disconnect(&self) {
++        for tx in &self.extra_outbound {
++            tx.close();
++        }
++        self.primary.disconnect().await;
++    }
++}
++
+ #[cfg(test)]
+ mod tests {
+     use super::*;
+diff -ruN '--exclude=target' '--exclude=.git' whatsapp-rust/wacore/src/stanza/call.rs ../zapliga-waxum-encfix-v2/whatsapp-rust/wacore/src/stanza/call.rs
+--- whatsapp-rust/wacore/src/stanza/call.rs	2026-09-03 22:36:26.270833600 -0300
++++ ../zapliga-waxum-encfix-v2/whatsapp-rust/wacore/src/stanza/call.rs	2026-09-02 00:07:54.000000000 -0300
+@@ -652,7 +652,10 @@
+ /// `<reject reason>` wire token for a device that cannot take the call - already in a call, or a
+ /// companion that does not do voice at all. It is a statement about ONE DEVICE, not the callee's
+ /// decision: the peer's remaining devices go on ringing and may still answer.
+-pub const REJECT_REASON_BUSY: &str = "busy";
++pub const REJECT_REASON_BUSY: &str = "busy";
++/// The device could not decrypt the offer. This is a per-device transport/key
++/// failure, not a user decline; companion devices may still accept the call.
++pub const REJECT_REASON_ENC: &str = "enc";
+ 
+ /// Relay latency wire encoding: `0x2000000 + rtt_ms`.
+ pub fn encode_latency(rtt_ms: u32) -> String {
+diff -ruN '--exclude=target' '--exclude=.git' whatsapp-rust/wacore/src/voip/relay_parse.rs ../zapliga-waxum-encfix-v2/whatsapp-rust/wacore/src/voip/relay_parse.rs
+--- whatsapp-rust/wacore/src/voip/relay_parse.rs	2026-09-03 22:36:26.460122700 -0300
++++ ../zapliga-waxum-encfix-v2/whatsapp-rust/wacore/src/voip/relay_parse.rs	2026-09-03 21:00:58.830956800 -0300
+@@ -340,6 +340,28 @@
+     !endpoint.is_fna && endpoint.auth_token_id != 0
+ }
+ 
++/// Every endpoint we could actually dial and allocate on: has an IPv4 address to connect to and a
++/// token we hold (`relay_tokens[token_id]` non-empty), deduped by name. Unlike
++/// [`get_outbound_relay_endpoints`] this does not exclude FNA endpoints or require
++/// `auth_token_id != 0` -- those filters pick relaylatency-probe candidates, a different question
++/// from which endpoints are worth binding for media (see [`get_media_relay_endpoint`]'s docs on the
++/// answering device electing its own relay independently of ours).
++pub fn get_usable_relay_endpoints(relay_data: &RelayData) -> Vec<&RelayEndpoint> {
++    let mut seen = std::collections::HashSet::new();
++    relay_data
++        .endpoints
++        .iter()
++        .filter(|ep| seen.insert(ep.relay_name.clone()))
++        .filter(|ep| {
++            get_primary_ipv4_address(ep).is_some()
++                && relay_data
++                    .relay_tokens
++                    .get(ep.token_id as usize)
++                    .is_some_and(|t| !t.is_empty())
++        })
++        .collect()
++}
++
+ /// Outbound relay endpoints, deduped by name and sorted by relay_id.
+ pub fn get_outbound_relay_endpoints(relay_data: &RelayData) -> Vec<RelayEndpoint> {
+     let mut seen = std::collections::HashSet::new();
+@@ -389,6 +411,17 @@
+             .endpoints
+             .iter()
+             .find(|e| on_web_client_port(e) && (!usable_only || usable(e)))
++            // WA Web dials every offered host on the web-client port. Some relay blocks advertise
++            // every host as 3478 even though the FNA host only serves the web-client transport on
++            // 3480. Our native transport races both ports, so prefer that FNA host before falling
++            // back to an outbound/3478 endpoint that can accept uplink while never returning peer
++            // media (issue #1098).
++            .or_else(|| {
++                relay_data
++                    .endpoints
++                    .iter()
++                    .find(|e| e.is_fna && (!usable_only || usable(e)))
++            })
+             .or_else(|| {
+                 relay_data
+                     .endpoints
+@@ -706,14 +739,15 @@
+         assert_eq!(selected.relay_name, "for2c01");
+     }
+ 
+-    /// No endpoint on the web client port (some blocks carry none): selection must fall back to the
+-    /// previous behavior rather than failing the call.
++    /// Some blocks advertise every endpoint on 3478 even though the FNA host serves the hidden web
++    /// client port. The transport races 3478/3480, so keep the web-capable host rather than selecting
++    /// a non-FNA 3478 relay that accepts uplink but returns no peer media.
+     #[test]
+-    fn falls_back_when_no_endpoint_uses_the_web_client_port() {
++    fn falls_back_to_fna_when_no_endpoint_advertises_the_web_client_port() {
+         let mut rd = live_outgoing_relay();
+-        rd.endpoints.remove(0);
++        rd.endpoints[0].addresses[0].port = 3478;
+         let selected = get_media_relay_endpoint(&rd).expect("an endpoint must still be selectable");
+-        assert_eq!(selected.relay_name, "for2c01");
++        assert_eq!(selected.relay_name, "fimp3c01");
+     }
+ 
+     /// An endpoint is only "on the web client port" if the address we would actually dial (IPv4) uses
+@@ -727,6 +761,38 @@
+         assert_eq!(selected.relay_name, "for2c01");
+     }
+ 
++    /// The answering device elects its own relay independently of ours (see
++    /// `get_media_relay_endpoint`'s docs): binding only the one we pick can leave a call connected
++    /// but permanently deaf on our side. `get_usable_relay_endpoints` is what a caller walks to bind
++    /// every dialable, tokened endpoint the offer carried, not just the preferred one.
++    #[test]
++    fn usable_relay_endpoints_include_every_dialable_tokened_endpoint() {
++        let rd = live_outgoing_relay();
++        let usable = get_usable_relay_endpoints(&rd);
++        let names: Vec<&str> = usable.iter().map(|e| e.relay_name.as_str()).collect();
++        assert_eq!(
++            names,
++            vec!["fimp3c01", "for2c01", "bsb1c01"],
++            "every endpoint in the block has an IPv4 address and a non-empty token, so all three \
++             are candidates to bind -- not just the one get_media_relay_endpoint would prefer"
++        );
++    }
++
++    #[test]
++    fn usable_relay_endpoints_exclude_one_with_no_token() {
++        let mut rd = live_outgoing_relay();
++        // for2c01 references relay_tokens[1]; blank it out the same way a sparse token block would.
++        rd.relay_tokens[1] = Vec::new();
++        let usable = get_usable_relay_endpoints(&rd);
++        let names: Vec<&str> = usable.iter().map(|e| e.relay_name.as_str()).collect();
++        assert_eq!(
++            names,
++            vec!["fimp3c01", "bsb1c01"],
++            "an endpoint whose token slot is empty cannot be allocated on, so it is not a usable \
++             extra even though it otherwise has a dialable address"
++        );
++    }
++
+     #[test]
+     fn ipv4_bytes_and_ufrag_and_pwd() {
+         let node = sample_relay();

@@ -44,6 +44,14 @@ jobs:
           docker compose -f docker-compose.yml -f docker-compose.e2e.yml config --quiet
           sh -n infra/waxum/entrypoint-guard.sh
           sh -n infra/waxum/healthcheck.sh
+          # The Waxum service must run our locally built image (it carries the
+          # multi-relay audio fix; see docs/postmortem-audio-unidirecional.md).
+          # A compose that points back at the stock fdciabdul/waxum image would
+          # reintroduce one-way audio on the next deploy, so refuse it here.
+          grep -Eq '^\s+image:\s+zapliga-waxum:' docker-compose.yml \
+            || { echo 'docker-compose.yml: o servico waxum precisa usar a imagem local zapliga-waxum:<tag> (ver infra/waxum/README.md)' >&2; exit 1; }
+          test -s infra/waxum/patches/whatsapp-rust-zapliga.patch \
+            || { echo 'infra/waxum/patches/whatsapp-rust-zapliga.patch ausente: o patch do Waxum precisa estar versionado' >&2; exit 1; }
 
       - name: Build
         run: npm run build

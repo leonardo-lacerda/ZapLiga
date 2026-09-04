@@ -1,5 +1,12 @@
 # Correção do áudio bidirecional
 
+> **Leia primeiro:** o incidente de setembro/2026 em que o **SDR não ouvia o
+> cliente** (sentido oposto ao descrito abaixo) tem causa, correção e guia de
+> diagnóstico em [`postmortem-audio-unidirecional.md`](postmortem-audio-unidirecional.md).
+> Este documento cobre a correção anterior (voz do SDR não chegava ao telefone)
+> e a proteção de transporte na API; a imagem do Waxum em produção é a descrita
+> em [`../infra/waxum/README.md`](../infra/waxum/README.md).
+
 ## Sintoma
 
 A chamada WhatsApp era estabelecida e o áudio do telefone chegava ao navegador,

@@ -211,3 +211,5 @@ As migrations são de ida e rodam no boot da API. Se uma migration causar proble
 - [Runbook de lançamento, rollout, incidente e LGPD](docs/launch-runbook.md)
 - [Catálogo de eventos de auditoria](docs/audit-events.md)
 - [Roadmap de vantagens defensáveis](docs/roadmap-diferenciais/README.md)
+- [Postmortem — áudio unidirecional nas chamadas (causas, correções e como diagnosticar)](docs/postmortem-audio-unidirecional.md)
+- [Imagem do Waxum: patch, build reproduzível e troca de versão](infra/waxum/README.md)

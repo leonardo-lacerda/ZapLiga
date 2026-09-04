@@ -1,0 +1,9 @@
+# The Waxum patches must be byte-exact: they carry mixed CRLF/LF hunks (the
+# upstream docker-entrypoint.sh ships with CRLF) and `patch` matches context
+# literally. Any EOL normalization on checkout would make them fail to apply.
+infra/waxum/patches/*.patch -text
+
+# Scripts that run inside Linux containers or on the VPS must stay LF even when
+# checked out on Windows; a CRLF shebang is "exec: not found" at runtime.
+infra/waxum/*.sh text eol=lf
+infra/**/*.sh text eol=lf
