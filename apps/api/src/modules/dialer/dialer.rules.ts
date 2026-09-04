@@ -12,6 +12,16 @@ export function leadIsEligible(input: {
     && new Date(input.nextEligibleAt).getTime() <= now.getTime();
 }
 
+// A manual call is a human deciding to dial now, so it skips the automatic
+// dialer's pacing (the per-line cooldown between calls). What it must still
+// respect is a line under PROTECTION: rapid-failure quarantine and Waxum 429
+// backoff are both expressed by future-dating `last_call_ended_at`, so a
+// timestamp in the future is the one signal a manual call does not override.
+export function lineIsProtected(lastCallEndedAt: Date | string | null, now = new Date()) {
+  if (!lastCallEndedAt) return false;
+  return new Date(lastCallEndedAt).getTime() > now.getTime();
+}
+
 export function cooldownIsReady(lastCallEndedAt: Date | string | null, cooldownSeconds: number, now = new Date()) {
   if (!lastCallEndedAt) return true;
   return new Date(lastCallEndedAt).getTime() + cooldownSeconds * 1000 <= now.getTime();

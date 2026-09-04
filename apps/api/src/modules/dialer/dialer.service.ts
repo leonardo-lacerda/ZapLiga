@@ -18,10 +18,10 @@ import {
   computeCallOutcome,
   computeRateLimitBackoffSeconds,
   computeRateLimitCooldownWindowSeconds,
-  cooldownIsReady,
   isInboundAudioStalled,
   isInstantFailure,
   isSelfCallNumber,
+  lineIsProtected,
   normalizePhone,
   shouldQuarantineLine,
 } from './dialer.rules';
@@ -108,6 +108,18 @@ const numberRateConfig = (number: any) => ({
 const dialerPacingConfig = (settings: any) => ({
   maxCallsPerMinute: Math.max(1, Number(settings.max_calls_per_minute ?? 6) || 6),
   minSecondsBetweenCalls: Math.max(0, Number(settings.min_seconds_between_calls ?? 10) || 0),
+});
+// Manual calls are paced by the person clicking, not by the dialer: no
+// per-line call window, no per-tenant calls-per-minute, no minimum gap. The
+// window limits stay astronomically high rather than 0 so the reservation
+// still RECORDS the call in the per-number window -- the automatic dialer
+// must keep seeing the line's real volume when it paces its own calls.
+const MANUAL_UNPACED = 1_000_000;
+const manualPacingConfig = (number: any) => ({
+  maxCallsPerWindow: MANUAL_UNPACED,
+  callWindowSeconds: numberRateConfig(number).callWindowSeconds,
+  maxCallsPerMinute: MANUAL_UNPACED,
+  minSecondsBetweenCalls: 0,
 });
 
 @Injectable()
@@ -423,8 +435,9 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
           )
         ORDER BY s.last_assigned_at NULLS FIRST, s.last_assigned_at ASC
       `, [tenantId]),
-      // Manual and automatic calls share the same line protections. An
-      // explicit click cannot bypass the WhatsApp cooldown/rate window.
+      // Manual calls keep the line PROTECTIONS (quarantine after instant
+      // failures, Waxum 429 backoff -- both future-date last_call_ended_at) but
+      // not the automatic dialer's pacing: a person may dial again right away.
       this.db.query(`SELECT * FROM whatsapp_numbers WHERE tenant_id = $1 AND status IN ('connected', 'online', 'ready', 'authenticated') AND (flagged_until IS NULL OR flagged_until <= now()) ORDER BY last_call_ended_at NULLS FIRST, last_call_ended_at ASC`, [tenantId]),
       this.db.query(`SELECT l.* FROM leads l JOIN lead_folders f ON f.tenant_id = l.tenant_id AND f.id = l.folder_id WHERE l.tenant_id = $1 AND l.id = $2 AND f.is_active = true AND l.do_not_call = false AND l.status IN ('queued', 'retry_wait') AND l.attempts < $3`, [tenantId, leadId, settings.max_attempts_per_lead]),
     ]);
@@ -433,7 +446,7 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
     if (!lead) throw new Error('Este lead não está elegível para uma chamada manual');
     if (!sdr) throw new Error('Nenhum SDR conectado e disponível');
     if (!numbers.rows.length) throw new Error('Nenhum número WhatsApp conectado');
-    const readyNumbers = numbers.rows.filter((row: any) => cooldownIsReady(row.last_call_ended_at, Number(row.cooldown_seconds ?? settings.default_number_cooldown_seconds ?? 60)));
+    const readyNumbers = numbers.rows.filter((row: any) => !lineIsProtected(row.last_call_ended_at));
     if (!readyNumbers.length) throw new Error('A linha WhatsApp está temporariamente protegida por limite de chamadas. Aguarde alguns minutos e tente novamente.');
     const number = readyNumbers.find((row: any) => !isSelfCallNumber(row.phone, lead.phone));
     if (!number) throw new Error('O número de destino é a própria linha de WhatsApp conectada. Ligue para um número diferente.');
@@ -442,8 +455,7 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
     const reserved = await this.redis.reserve({
       tenantId, token, globalMax: settings.global_max_concurrent_calls,
       numberMax: number.max_concurrent_calls, numberId: number.id, waxumSessionId: numberSessionId(number),
-      ...numberRateConfig(number),
-      ...dialerPacingConfig(settings),
+      ...manualPacingConfig(number),
       leadId: lead.id, sdrId: sdr.id,
       ttlMs: (Number(settings.ring_timeout_seconds) + 60) * 1000,
     });
@@ -508,7 +520,8 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
     const sdr = sdrs.rows.find((row: any) => this.gateway.isConnected(row.id));
     if (!sdr) throw new Error('Nenhum SDR conectado e disponivel');
     if (!numbers.rows.length) throw new Error('Nenhum numero WhatsApp conectado');
-    const readyNumbers = numbers.rows.filter((row: any) => cooldownIsReady(row.last_call_ended_at, Number(row.cooldown_seconds ?? settings.default_number_cooldown_seconds ?? 60)));
+    // Protections only (see manualCall): a manual call is not paced by the cooldown.
+    const readyNumbers = numbers.rows.filter((row: any) => !lineIsProtected(row.last_call_ended_at));
     if (!readyNumbers.length) throw new Error('A linha WhatsApp esta temporariamente protegida por limite de chamadas. Aguarde alguns minutos e tente novamente.');
     // WhatsApp cannot place a call to the line's own number (self-call closes
     // the media socket immediately), so never pair a lead with its own line.
@@ -519,8 +532,7 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
     const reserved = await this.redis.reserve({
       tenantId, token, globalMax: settings.global_max_concurrent_calls,
       numberMax: number.max_concurrent_calls, numberId: number.id, waxumSessionId: numberSessionId(number),
-      ...numberRateConfig(number),
-      ...dialerPacingConfig(settings),
+      ...manualPacingConfig(number),
       leadId: lead.id, sdrId: sdr.id,
       ttlMs: (Number(settings.ring_timeout_seconds) + 60) * 1000,
     });
