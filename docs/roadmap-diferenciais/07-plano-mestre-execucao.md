@@ -608,8 +608,8 @@ Atualizar esta tabela ao final de cada lote. Estados válidos: `pendente`,
 | 03 | concluído | Execução por campanha, integração versionada, playbooks, outbox, testes unitários e verificadores HTTP aprovados em `evidencias/lote-03-execucao-integracoes-playbooks.md`. |
 | 04 | concluído | Elegibilidade unificada do discador, reason codes, preview/simulação, revalidação transacional e paridade testada em `evidencias/lote-04-elegibilidade-unificada.md`. |
 | 05 | concluído | Score determinístico, políticas versionadas, simulação, explicação visual, registro sombra, comparação FIFO/score e gates Q1–Q6 aprovados em `evidencias/lote-05-score-simulacao-sombra.md`. |
-| 06 | em andamento | Ativação controlada da fila inteligente: modo ativo, ordenação segura, fairness, starvation, kill switch e métricas. |
-| 07 | pendente | — |
+| 06 | concluído | Ativação controlada, ordenação segura, fairness, starvation, kill switch, métricas e gates Q1–Q7 aprovados em `evidencias/lote-06-ativacao-fila-inteligente.md`. |
+| 07 | em andamento | Catálogo tenant-scoped e central de recomendações, com flag, evidência e eventos, em `evidencias/lote-07-central-recomendacoes.md`. |
 | 08 | pendente | — |
 | 09 | pendente | — |
 | 10 | pendente | — |
@@ -639,6 +639,5 @@ O conjunto está pronto somente quando:
 
 ## Próxima ação de execução
 
-O Lote 05 está concluído. A próxima frente em execução é o Lote 06: ativação
-controlada, com fallback imediato para a ordem anterior e sem sinais históricos
-antes da amostra mínima prevista.
+O Lote 06 está concluído. A frente em execução é o Lote 07: catálogo e central de
+recomendações, mantendo a compatibilidade legada enquanto a flag estiver desligada.

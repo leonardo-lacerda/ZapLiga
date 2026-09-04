@@ -99,6 +99,11 @@ try {
     return result.rows[0];
   }, 'registro sombra do tick');
   assert(shadowDecision.policy_version >= 1 && shadowDecision.final_decision === 'fifo' && !shadowDecision.feature_snapshot.includes('Lead de execu'), 'registro sombra nao preservou a decisao FIFO sem PII');
+  const activeMode = await expectOk(await request(`/api/tenants/${tenantId}/campaigns/${created.id}/decision-mode`, { method: 'POST', headers: auth, body: JSON.stringify({ mode: 'active' }) }), 'ativa fila inteligente');
+  assert(activeMode.mode === 'active', 'modo ativo nao foi persistido');
+  const killSwitch = await expectOk(await request(`/api/tenants/${tenantId}/campaigns/${created.id}/decision-mode`, { method: 'POST', headers: auth, body: JSON.stringify({ mode: 'disabled' }) }), 'desliga fila inteligente');
+  assert(killSwitch.mode === 'disabled', 'kill switch da campanha nao retornou disabled');
+  await expectOk(await request(`/api/tenants/${tenantId}/campaigns/${created.id}/decision-mode`, { method: 'POST', headers: auth, body: JSON.stringify({ mode: 'shadow' }) }), 'restaura modo sombra');
   await executionPool.query('UPDATE leads SET do_not_call = true WHERE tenant_id=$1 AND id=$2', [tenantId, linkedLead.id]);
   const blocked = await expectOk(await request(`/api/tenants/${tenantId}/leads/${linkedLead.id}/eligibility?mode=preview`, { headers: auth }), 'explica bloqueio de supressao');
   assert(blocked.eligible === false && blocked.blockedBy.includes('contact_suppressed'), 'contrato de elegibilidade nao explicou a supressao');

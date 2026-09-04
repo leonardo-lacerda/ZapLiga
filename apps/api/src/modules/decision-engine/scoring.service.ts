@@ -120,8 +120,9 @@ export function scoreLead(input: ScoreLeadInput): ScoreResult {
   };
 }
 
-export function compareScoredLeads<T extends { id?: string; queueSequence?: number | string | null; queuePriority?: number | string | null; nextEligibleAt?: Date | string | null }>(items: Array<T & { score: number }>) {
-  return [...items].sort((left, right) => right.score - left.score
+export function compareScoredLeads<T extends { id?: string; queueSequence?: number | string | null; queuePriority?: number | string | null; nextEligibleAt?: Date | string | null; starvationProtected?: boolean }>(items: Array<T & { score: number }>) {
+  return [...items].sort((left, right) => Number(Boolean(right.starvationProtected)) - Number(Boolean(left.starvationProtected))
+    || right.score - left.score
     || Number(right.queuePriority ?? 0) - Number(left.queuePriority ?? 0)
     || new Date(String(left.nextEligibleAt ?? 0)).getTime() - new Date(String(right.nextEligibleAt ?? 0)).getTime()
     || Number(left.queueSequence ?? 0) - Number(right.queueSequence ?? 0)

@@ -57,11 +57,14 @@ it('exposes the explainable decision simulator only when the feature is enabled'
     http.get('http://localhost:3000/api/tenants/tenant-a/campaigns/campaign-a/versions', () => HttpResponse.json([])),
     http.get('http://localhost:3000/api/tenants/tenant-a/campaigns/campaign-a/decision-policy', () => HttpResponse.json({ version: 1, mode: 'shadow', weights: {} })),
     http.get('http://localhost:3000/api/tenants/tenant-a/campaigns/campaign-a/decision-comparison', () => HttpResponse.json({ summary: { count: 2, average_position_delta: 0 } })),
+    http.post('http://localhost:3000/api/tenants/tenant-a/campaigns/campaign-a/decision-mode', async ({ request }) => HttpResponse.json({ mode: (await request.json() as any).mode })),
     http.post('http://localhost:3000/api/tenants/tenant-a/campaigns/campaign-a/decision-policy/simulate', () => HttpResponse.json({ candidates: [{ id: 'lead-a', score: 730, suggested_position: 1, eligibility: { eligible: true, blockedBy: [] }, reasons: [{ code: 'callback_due', effect: 300 }] }] })),
   );
   render(<CampaignsPage tenantId="tenant-a" folders={folders} sdrs={sdrs} numbers={numbers} decisionFeatureEnabled />);
   await user.click(await screen.findByRole('button', { name: /Enterprise/ }));
   expect(await screen.findByText('Fila inteligente')).toBeInTheDocument();
+  await user.selectOptions(screen.getByRole('combobox', { name: 'Modo da fila inteligente' }), 'active');
+  expect(await screen.findByText('Fila inteligente ativada para esta campanha.')).toBeInTheDocument();
   await user.click(screen.getByRole('button', { name: 'Simular ordem' }));
   expect(await screen.findByText(/score 730/)).toBeInTheDocument();
   expect(await screen.findByText(/callback_due/)).toBeInTheDocument();

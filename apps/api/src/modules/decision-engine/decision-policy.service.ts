@@ -1,6 +1,7 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable, NotFoundException, Optional } from '@nestjs/common';
 import { createHash, randomUUID } from 'node:crypto';
 import { DatabaseService } from '../../database/database.service';
+import { RedisService } from '../../infrastructure/redis/redis.service';
 import { EligibilityService } from './eligibility.service';
 import { DecisionRepository } from './decision.repository';
 import { compareScoredLeads, DEFAULT_SCORE_POLICY, normalizeScorePolicy, scoreLead, ScorePolicyWeights } from './scoring.service';
@@ -20,7 +21,10 @@ const publicPolicy = (row: any) => ({
 
 @Injectable()
 export class DecisionPolicyService {
-  constructor(private readonly db: DatabaseService, private readonly decisions: DecisionRepository, private readonly eligibility: EligibilityService) {}
+  constructor(private readonly db: DatabaseService, private readonly decisions: DecisionRepository, private readonly eligibility: EligibilityService, @Optional() private readonly redis?: RedisService) {}
+
+  private incrementMetric(name: string, amount = 1) { void this.redis?.incrementMetric(`decision_${name}`, amount); }
+  private observeMetric(name: string, durationMs: number) { void this.redis?.observeMetric(`decision_${name}`, durationMs); }
 
   private async assertCampaign(tenantId: string, campaignId: string, executor = this.db) {
     const row = (await executor.query(`SELECT c.id, c.status, c.current_version, c.folder_id, cv.config_snapshot AS config_snapshot
@@ -65,6 +69,64 @@ export class DecisionPolicyService {
   async setMode(tenantId: string, campaignId: string, userId: string, mode: 'disabled' | 'shadow' | 'active') {
     await this.assertCampaign(tenantId, campaignId);
     return this.decisions.saveMode(tenantId, campaignId, mode, userId);
+  }
+
+  async prioritizeCandidates(tenantId: string, candidates: any[]) {
+    const started = Date.now();
+    const now = new Date();
+    const ranked = [...candidates];
+    const contexts = new Map<string, { campaignId: string; policyId: string; policyVersion: number; score: number; reasons: any[]; featureSnapshot: Record<string, unknown>; fifoPosition: number; suggestedPosition: number; starvationProtected: boolean; latencyMs: number }>();
+    const groups = new Map<string, Array<{ row: any; sourceIndex: number }>>();
+    for (const [sourceIndex, row] of candidates.entries()) {
+      if (!row.campaign_id) continue;
+      const group = groups.get(String(row.campaign_id)) ?? [];
+      group.push({ row, sourceIndex });
+      groups.set(String(row.campaign_id), group);
+    }
+    for (const [campaignId, group] of groups) {
+      const campaignStarted = Date.now();
+      try {
+        const policy = await this.getPolicy(tenantId, campaignId);
+        if (policy.mode !== 'active') continue;
+        const scored = group.map((item, fifoIndex) => {
+          const queuedAt = new Date(String(item.row.queued_at ?? item.row.created_at ?? now.toISOString()));
+          const ageHours = Number.isFinite(queuedAt.getTime()) ? Math.max(0, (now.getTime() - queuedAt.getTime()) / 3_600_000) : 0;
+          const provisional = scoreLead({
+            lead: { id: item.row.id, queuePriority: item.row.queue_priority, attempts: item.row.attempts, createdAt: item.row.created_at, queuedAt: item.row.queued_at, sourceIntegrationId: item.row.source_integration_id },
+            now, policy: policy.weights, policyVersion: policy.version,
+            fairnessBoost: Math.min(1, Math.max(0, ageHours / 12)),
+          });
+          return { ...item, score: provisional, fifoIndex, starvationProtected: ageHours >= 24 };
+        });
+        const sorted = compareScoredLeads(scored.map((item) => ({ ...item, id: item.row.id, score: item.score.score, queuePriority: item.row.queue_priority, queueSequence: item.row.queue_sequence, nextEligibleAt: item.row.next_eligible_at, starvationProtected: item.starvationProtected })));
+        const sortedById = new Map(sorted.map((item, suggestedIndex) => [item.id, { ...item, suggestedIndex }]));
+        for (const [destinationIndex, item] of sorted.entries()) ranked[group[destinationIndex].sourceIndex] = item.row;
+        for (const item of scored) {
+          const selected = sortedById.get(item.row.id);
+          if (!selected) continue;
+          contexts.set(String(item.row.id), { campaignId, policyId: policy.id, policyVersion: policy.version, score: item.score.score, reasons: item.score.reasons, featureSnapshot: item.score.featureSnapshot, fifoPosition: item.fifoIndex + 1, suggestedPosition: selected.suggestedIndex + 1, starvationProtected: item.starvationProtected, latencyMs: Math.max(0, Date.now() - campaignStarted) });
+          if (item.starvationProtected) this.incrementMetric('active_starvation_guard_total');
+        }
+        this.incrementMetric('active_evaluations_total', scored.length);
+      } catch {
+        this.incrementMetric('active_fallback_total');
+      }
+    }
+    const elapsed = Math.max(0, Date.now() - started);
+    this.incrementMetric('active_ranked_total', contexts.size);
+    this.observeMetric('evaluation_latency', elapsed);
+    return { rows: ranked, contexts, latencyMs: elapsed };
+  }
+
+  async recordActiveDecision(context: { tenantId: string; campaignId: string; leadId: string; callId: string; policyId: string; policyVersion: number; score: number; reasons: any[]; featureSnapshot: Record<string, unknown>; fifoPosition: number; suggestedPosition: number; starvationProtected: boolean; latencyMs: number; eligibility?: { reasonCodes?: string[]; blockedBy?: string[] } }) {
+    const decision = await this.decisions.recordDecision({
+      id: randomUUID(), tenantId: context.tenantId, campaignId: context.campaignId, leadId: context.leadId, callId: context.callId,
+      policyId: context.policyId, policyVersion: context.policyVersion, mode: 'active', score: context.score,
+      reasonCodes: [...(context.eligibility?.reasonCodes ?? []), ...context.reasons.map((reason) => reason.code)], featureSnapshot: { ...context.featureSnapshot, starvationProtected: context.starvationProtected, eligibility: context.eligibility?.blockedBy ?? [] },
+      fifoPosition: context.fifoPosition, suggestedPosition: context.suggestedPosition, finalDecision: 'score', latencyMs: context.latencyMs, dedupeKey: `active:${context.callId}`,
+    });
+    this.incrementMetric('active_decisions_recorded_total');
+    return decision;
   }
 
   async simulate(tenantId: string, campaignId: string, input: { leadId?: string; limit?: number }) {
@@ -125,9 +187,11 @@ export class DecisionPolicyService {
     await this.assertCampaign(tenantId, campaignId);
     const decisions = await this.decisions.listDecisions(tenantId, campaignId, limit);
     const deltas = decisions.filter((row) => row.fifo_position != null && row.suggested_position != null).map((row) => Number(row.fifo_position) - Number(row.suggested_position));
+    const latencies = decisions.map((row) => Number(row.evaluation_latency_ms ?? 0)).sort((left, right) => left - right);
+    const percentile = (ratio: number) => latencies.length ? latencies[Math.min(latencies.length - 1, Math.ceil(latencies.length * ratio) - 1)] : 0;
     const byDecision = decisions.reduce<Record<string, number>>((counts, row) => ({ ...counts, [row.final_decision]: (counts[row.final_decision] ?? 0) + 1 }), {});
     const byLead = decisions.reduce<Record<string, number>>((counts, row) => ({ ...counts, [row.lead_id]: (counts[row.lead_id] ?? 0) + 1 }), {});
-    return { campaign_id: campaignId, mode: await this.decisions.mode(tenantId, campaignId), decisions, summary: { count: decisions.length, average_position_delta: deltas.length ? Math.round((deltas.reduce((sum, value) => sum + value, 0) / deltas.length) * 100) / 100 : 0, fallback_count: decisions.filter((row) => row.final_decision === 'fallback').length, distribution: { by_decision: byDecision, distinct_leads: Object.keys(byLead).length } } };
+    return { campaign_id: campaignId, mode: await this.decisions.mode(tenantId, campaignId), decisions, summary: { count: decisions.length, average_position_delta: deltas.length ? Math.round((deltas.reduce((sum, value) => sum + value, 0) / deltas.length) * 100) / 100 : 0, fallback_count: decisions.filter((row) => row.final_decision === 'fallback').length, distribution: { by_decision: byDecision, distinct_leads: Object.keys(byLead).length }, latency_ms: { p50: percentile(0.5), p95: percentile(0.95), p99: percentile(0.99) } } };
   }
 
   async leadDecision(tenantId: string, leadId: string) {

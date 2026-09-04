@@ -171,9 +171,17 @@ fairness ativo e sinais históricos permanecem no Lote 06 em diante.
 - Habilitar por campanha.
 - Kill switch imediato para retornar a `priority_fifo` ou `fifo`.
 
+Status: concluída no Lote 06. O modo ativo é selecionável por campanha, a ordem é
+determinística dentro dos slots da campanha, o fallback preserva a estratégia
+configurada e o kill switch retorna a `disabled` sem migration reversa.
+
 ### Fase 5 — sinais históricos
 
 - Usar desempenho por horário e origem apenas após os critérios do Plano 05.
+
+Status: pendente. O Lote 06 usa somente sinais determinísticos de prioridade, idade
+e fairness; sinais históricos continuam bloqueados até haver amostra mínima,
+agregados versionados e validação do Plano 05.
 
 ## Critérios de aceite
 

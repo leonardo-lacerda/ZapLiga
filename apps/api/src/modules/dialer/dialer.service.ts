@@ -17,6 +17,7 @@ import { CampaignExecutionService } from '../campaigns/campaign-execution.servic
 import { CampaignEventsService } from '../campaigns/campaign-events.service';
 import { EligibilityService, eligibilityErrorMessage, evaluateLeadEligibility } from '../decision-engine/eligibility.service';
 import { DecisionShadowService } from '../decision-engine/decision-shadow.service';
+import { DecisionPolicyService } from '../decision-engine/decision-policy.service';
 import {
   analyzePcm16Le,
   computeCallOutcome,
@@ -161,6 +162,7 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
     @Optional() private readonly campaignEvents?: CampaignEventsService,
     @Optional() private readonly eligibility?: EligibilityService,
     @Optional() private readonly decisionShadow?: DecisionShadowService,
+    @Optional() private readonly decisionPolicies?: DecisionPolicyService,
   ) {}
 
   onModuleInit() {
@@ -1053,8 +1055,20 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
         this.db.query(`SELECT count(*)::int AS count FROM lead_folders WHERE tenant_id = $1 AND is_active = true`, [tenantId]),
       ]);
 
+      let rankedLeads = leads.rows;
+      let activeDecisionContexts = new Map<string, any>();
+      if (decisionEngineEnabled && this.decisionPolicies) {
+        try {
+          const prioritized = await this.decisionPolicies.prioritizeCandidates(tenantId, leads.rows);
+          rankedLeads = prioritized.rows;
+          activeDecisionContexts = prioritized.contexts;
+        } catch (error) {
+          this.logger.warn(`Decision engine fallback to configured queue: ${safeOperationalError(error)}`);
+          await this.redis.incrementMetric('decision_active_fallback_total').catch(() => undefined);
+        }
+      }
       const shadowCandidates = new Map<string, Array<{ lead: any; fifoPosition: number; eligibility: any }>>();
-      for (const lead of leads.rows) {
+      for (const lead of rankedLeads) {
         const eligibility = this.evaluateEligibility({
           mode: 'automatic',
           lead: { id: lead.id, phone: lead.phone, status: lead.status, attempts: lead.attempts, nextEligibleAt: lead.next_eligible_at, doNotCall: lead.do_not_call },
@@ -1123,9 +1137,16 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
           });
           if (!reserved) continue;
           try {
-            await this.startReservedCall(sdr, number, lead, settings, token, 'automatico', tenantId);
+            const reservation = await this.startReservedCall(sdr, number, lead, settings, token, 'automatico', tenantId);
+            const decisionContext = activeDecisionContexts.get(String(lead.id));
+            if (reservation?.callId && decisionContext && this.decisionPolicies) {
+              void this.decisionPolicies.recordActiveDecision({ ...decisionContext, tenantId, leadId: lead.id, callId: reservation.callId, eligibility }).catch((error) => {
+                this.logger.warn(`Active decision recording failed: ${safeOperationalError(error)}`);
+              });
+            }
           } catch (error) {
             this.logger.error(`Could not reserve call: ${safeOperationalError(error)}`);
+            if (activeDecisionContexts.has(String(lead.id))) void this.redis.incrementMetric('decision_active_fallback_total');
             Sentry.captureException(error);
           }
           break;
