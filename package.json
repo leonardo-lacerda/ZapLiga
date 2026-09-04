@@ -20,7 +20,8 @@
     "verify:multitenant": "node scripts/verify-multitenant.mjs",
     "verify:campaign-migration": "node scripts/verify-campaign-migration.mjs",
     "verify:campaign-lifecycle": "node scripts/verify-campaign-lifecycle.mjs",
-    "verify:campaign-execution": "node scripts/verify-campaign-execution.mjs"
+    "verify:campaign-execution": "node scripts/verify-campaign-execution.mjs",
+    "verify:recommendations": "node scripts/verify-recommendations.mjs"
   },
   "devDependencies": {
     "concurrently": "^9.1.2"

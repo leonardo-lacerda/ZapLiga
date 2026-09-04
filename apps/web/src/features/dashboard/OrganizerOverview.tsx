@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import type { AnyRow, TabKey } from '../../types';
 import { Badge, Button, Icon, Panel, SectionHeader } from '../../components/ui';
 import { formatDateRangeLabel } from '../../components/DateRangePopover';
@@ -6,6 +6,7 @@ import { formatNumber } from '../../shared/format';
 import { navigateToTab } from '../../app/routes';
 import { OnboardingChecklist } from '../onboarding/OnboardingChecklist';
 import { OperationsNowPanel } from './OperationsNowPanel';
+import { json } from '../../services/api';
 
 const requiredDialerSettings = ['global_max_concurrent_calls', 'max_attempts_per_lead', 'retry_delay_minutes', 'ring_timeout_seconds', 'default_number_cooldown_seconds'];
 
@@ -94,6 +95,48 @@ function AttentionSection({ status, connectedNumbers, toggleDialer, sdrs }: AnyR
   </section>;
 }
 
+const recommendationTone: Record<string, 'warning' | 'info' | 'neutral'> = { critical: 'warning', warning: 'warning', info: 'info' };
+const recommendationIcon: Record<string, string> = { critical: 'alert', warning: 'alert', info: 'sparkles' };
+
+function RecommendationCenter({ tenantId, enabled }: { tenantId: string; enabled: boolean }) {
+  const [items, setItems] = useState<AnyRow[]>([]);
+  const [loading, setLoading] = useState(enabled);
+  const [message, setMessage] = useState('');
+
+  useEffect(() => {
+    if (!enabled || !tenantId) { setItems([]); setLoading(false); return; }
+    let cancelled = false;
+    setLoading(true);
+    setMessage('');
+    void json(`/api/tenants/${tenantId}/recommendations?limit=3`)
+      .then((result) => {
+        if (cancelled) return;
+        const nextItems = Array.isArray(result.items) ? result.items : [];
+        setItems(nextItems);
+        void Promise.all(nextItems.map((item: AnyRow) => json(`/api/tenants/${tenantId}/recommendations/${item.id}/events`, { method: 'POST', body: JSON.stringify({ eventType: 'impression' }) }).catch(() => undefined)));
+      })
+      .catch(() => { if (!cancelled) setMessage('Não foi possível atualizar as recomendações agora.'); })
+      .finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
+  }, [enabled, tenantId]);
+
+  const track = async (item: AnyRow, eventType: 'opened' | 'snoozed' | 'dismissed') => {
+    try {
+      const suffix = eventType === 'snoozed' ? 'snooze' : eventType === 'dismissed' ? 'dismiss' : 'events';
+      await json(`/api/tenants/${tenantId}/recommendations/${item.id}/${suffix}`, { method: 'POST', body: eventType === 'opened' ? JSON.stringify({ eventType }) : undefined });
+      if (eventType !== 'opened') setItems((current) => current.filter((candidate) => candidate.id !== item.id));
+      if (eventType === 'opened' && item.recommendedAction?.payload?.tab) navigateToTab(item.recommendedAction.payload.tab as TabKey);
+    } catch (error) { setMessage(error instanceof Error ? error.message : 'A ação não pôde ser registrada.'); }
+  };
+
+  if (!enabled) return null;
+  return <section className="recommendation-center" aria-label="Central de recomendações">
+    <div className="overview-section-heading"><div><span className="eyebrow">CENTRAL DE COMANDO</span><h2>{items.length ? 'O que merece atenção agora' : 'Operação em ordem'}</h2></div><span className="overview-section-caption">{loading ? 'Atualizando evidências…' : items.length ? `${items.length} recomendação${items.length > 1 ? 'ões' : ''}` : 'Nenhuma prioridade pendente'}</span></div>
+    {message && <div className="recommendation-message" role="status">{message}</div>}
+    {loading ? <div className="recommendation-loading">Consultando evidências da operação…</div> : items.length ? <div className="recommendation-grid">{items.map((item) => <article className={`recommendation-card recommendation-${recommendationTone[item.severity] ?? 'info'}`} key={item.id}><span className="recommendation-icon"><Icon name={recommendationIcon[item.severity] ?? 'sparkles'} size={16} /></span><div className="recommendation-card-body"><div className="recommendation-card-top"><strong>{item.title}</strong><Badge tone={item.severity === 'critical' ? 'danger' : item.severity === 'warning' ? 'warning' : 'info'}>{item.severity === 'critical' ? 'Crítico' : item.severity === 'warning' ? 'Atenção' : 'Informativo'}</Badge></div><p className="recommendation-evidence">{item.evidence?.summary ?? 'Evidência indisponível.'}</p><small>Atualizado {item.evidence?.observedAt ? new Date(item.evidence.observedAt).toLocaleTimeString('pt-BR') : 'agora'} · Regra v{item.ruleVersion ?? 1}</small><div className="recommendation-actions"><Button variant="secondary" onClick={() => void track(item, 'opened')}>{item.recommendedAction?.label ?? 'Ver detalhes'}</Button><Button variant="ghost" onClick={() => void track(item, 'snoozed')}>Lembrar depois</Button><Button variant="ghost" onClick={() => void track(item, 'dismissed')}>Dispensar</Button></div></div></article>)}</div> : <div className="overview-health-state"><span className="overview-health-icon"><Icon name="check" size={17} /></span><div><strong>Nenhuma recomendação ativa</strong><p>As prioridades são recalculadas com evidências atuais e desaparecem quando a condição é resolvida.</p></div></div>}
+  </section>;
+}
+
 function PerformancePanel({ status, dateRange }: AnyRow) {
   const completed = Number(status.call_counts?.completed ?? 0);
   const answered = Number(status.answered ?? 0);
@@ -126,7 +169,7 @@ export function OrganizerOverview(props: AnyRow) {
   const { status, dateRange, logs, connectedNumbers, toggleDialer } = props;
   return <div className="organizer-overview">
     <OverviewHero status={status} dateRange={dateRange} toggleDialer={toggleDialer} />
-    <AttentionSection status={status} connectedNumbers={connectedNumbers} sdrs={props.sdrs} toggleDialer={toggleDialer} />
+    {props.featureFlags?.recommendations ? <RecommendationCenter tenantId={String(props.tenantId ?? '')} enabled /> : <AttentionSection status={status} connectedNumbers={connectedNumbers} sdrs={props.sdrs} toggleDialer={toggleDialer} />}
     <OnboardingChecklist enabled={Boolean(props.featureFlags?.onboarding)} />
     <OperationsNowPanel tenantId={String(props.tenantId ?? '')} fallbackStatus={status} />
     <div className="overview-lower-grid">

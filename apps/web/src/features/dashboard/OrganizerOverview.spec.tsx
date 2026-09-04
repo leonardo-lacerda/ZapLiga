@@ -72,3 +72,18 @@ it('organiza a visão geral em decisão, atenção, operação e desempenho', as
   expect(screen.getByText('Resultado da operação')).toBeInTheDocument();
   expect(screen.getByText('Últimos eventos')).toBeInTheDocument();
 });
+
+it('mostra a central de recomendações quando a flag está ativa e registra impressão', async () => {
+  server.use(
+    http.get('http://localhost:3000/api/tenants/tenant-1/recommendations', () => HttpResponse.json({ items: [{ id: 'recommendation-1', severity: 'warning', title: 'Fila parada', code: 'queue_stalled', ruleVersion: 1, evidence: { summary: '2 leads prontos', observedAt: new Date().toISOString() }, recommendedAction: { label: 'Ver operação', payload: { tab: 'dashboard' } } }] })),
+    http.post('http://localhost:3000/api/tenants/tenant-1/recommendations/recommendation-1/events', () => HttpResponse.json({ ok: true })),
+    http.get('http://localhost:3000/api/onboarding', () => HttpResponse.json({ completed: 6, total: 6, steps: [] })),
+    http.get('http://localhost:3000/api/dialer/operations', () => HttpResponse.json({ generated_at: new Date().toISOString(), queue: { total: 0 }, numbers: [], sdrs: [] })),
+  );
+
+  render(<OrganizerOverview tenantId="tenant-1" featureFlags={{ recommendations: true }} status={{ running: false, settings: {}, schedule: {} }} sdrs={[]} logs={[]} connectedNumbers={0} />);
+
+  expect(await screen.findByText('Fila parada')).toBeInTheDocument();
+  expect(screen.getByText('2 leads prontos')).toBeInTheDocument();
+  expect(screen.queryByText('Resolva os próximos bloqueios')).not.toBeInTheDocument();
+});
