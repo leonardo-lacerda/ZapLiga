@@ -6,6 +6,8 @@ const wsBase = apiBase.replace(/^http/, 'ws');
 const suffix = `${Date.now()}-${Math.floor(Math.random() * 10000)}`;
 const initialPassword = 'Launch!23456';
 const changedPassword = 'Changed!23456';
+const e2eAdminEmail = process.env.E2E_ADMIN_EMAIL ?? 'admin@zapcall.local';
+const e2eAdminPassword = process.env.E2E_ADMIN_PASSWORD ?? 'ZapCall-Smoke-2026!';
 
 let leaderToken = '';
 let adminToken = '';
@@ -98,7 +100,7 @@ test.describe.serial('Gate B - jornadas criticas', () => {
     await expect(page).toHaveURL(/\/app\/?/);
     const api = await context();
     leaderToken = (await expectOk(await api.post('/api/auth/login', { data: { email: leaderEmail, password: initialPassword } }))).accessToken;
-    adminToken = (await expectOk(await api.post('/api/auth/login', { data: { email: 'admin@zapcall.local', password: 'ZapCall-Smoke-2026!' } }))).accessToken;
+    adminToken = (await expectOk(await api.post('/api/auth/login', { data: { email: e2eAdminEmail, password: e2eAdminPassword } }))).accessToken;
     const launchFeatures = ['schedule_enforcement', 'callbacks', 'privacy_requests', 'onboarding'];
     const roadmapFeatures = ['campaigns', 'decision_engine', 'recommendations', 'operation_health', 'analytics_learning', 'experiments', 'benchmarks'];
     const initialFlags = await expectOk(await api.get(`/api/tenants/${tenantA}/feature-flags`, { headers: headers(adminToken, tenantA) }));
@@ -203,7 +205,52 @@ test.describe.serial('Gate B - jornadas criticas', () => {
     await api.dispose();
   });
 
-  test('7. importacao preserva supressao depois de excluir e reimportar', async () => {
+  test('7. ciclo de campanha publica, versiona edicoes concorrentes e encerra com seguranca', async () => {
+    const api = await context();
+    const folderPage = await expectOk(await api.get(`/api/tenants/${tenantA}/lead-folders`, { headers: headers(leaderToken, tenantA) }));
+    const folderItems = Array.isArray(folderPage) ? folderPage : (folderPage.items ?? []);
+    const sdrPage = await expectOk(await api.get(`/api/tenants/${tenantA}/sdrs`, { headers: headers(leaderToken, tenantA) }));
+    const campaignFolder = folderItems.find((item: any) => item.is_active) ?? folderItems[0];
+    const campaignSdr = (sdrPage.items ?? []).find((item: any) => item.user_id) ?? sdrPage.items?.[0];
+    expect(campaignFolder?.id).toBeTruthy();
+    expect(campaignSdr?.id).toBeTruthy();
+
+    const config = { queueStrategy: 'priority_fifo', maxAttemptsPerLead: 3, retryDelayMinutes: 60, maxCallsPerMinute: 20, minSecondsBetweenCalls: 10, timezone: 'America/Sao_Paulo', scheduleWindows: [] };
+    const created = await expectOk(await api.post(`/api/tenants/${tenantA}/campaigns`, { headers: headers(leaderToken, tenantA), data: {
+      name: `Campanha versionada ${suffix}`, description: 'Fixture de ciclo completo', folderId: campaignFolder.id,
+      primaryGoalMetric: 'qualified_leads', primaryGoalTarget: 10, sdrIds: [campaignSdr.id], numberIds: [numberId], config,
+    } }));
+    expect(created).toMatchObject({ status: 'draft', current_version: null, lock_version: 0 });
+    const campaignId = created.id;
+
+    const published = await expectOk(await api.post(`/api/tenants/${tenantA}/campaigns/${campaignId}/publish`, { headers: headers(leaderToken, tenantA), data: { expectedLockVersion: 0, reason: 'Primeira publicação E2E' } }));
+    expect(published).toMatchObject({ status: 'ready', current_version: 1, lock_version: 1 });
+    const stale = await api.patch(`/api/tenants/${tenantA}/campaigns/${campaignId}`, { headers: headers(leaderToken, tenantA), data: { expectedLockVersion: 0, description: 'edição atrasada', config } });
+    expect(stale.status()).toBe(409);
+
+    const running = await expectOk(await api.post(`/api/tenants/${tenantA}/campaigns/${campaignId}/start`, { headers: headers(leaderToken, tenantA), data: { expectedLockVersion: 1 } }));
+    expect(running).toMatchObject({ status: 'running', current_version: 1, lock_version: 2 });
+    const edited = await expectOk(await api.patch(`/api/tenants/${tenantA}/campaigns/${campaignId}`, { headers: headers(leaderToken, tenantA), data: { expectedLockVersion: 2, changeReason: 'Ajuste controlado de ritmo', config: { ...config, maxCallsPerMinute: 30 } } }));
+    expect(edited).toMatchObject({ status: 'running', current_version: 2, lock_version: 3 });
+    const versions = await expectOk(await api.get(`/api/tenants/${tenantA}/campaigns/${campaignId}/versions`, { headers: headers(leaderToken, tenantA) }));
+    expect(versions.map((item: any) => item.version)).toEqual([2, 1]);
+    const versionOne = await expectOk(await api.get(`/api/tenants/${tenantA}/campaigns/${campaignId}/versions/1`, { headers: headers(leaderToken, tenantA) }));
+    expect(versionOne.config_snapshot.rules.maxCallsPerMinute).toBe(20);
+    const versionDiff = await expectOk(await api.get(`/api/tenants/${tenantA}/campaigns/${campaignId}/diff?from=1&to=2`, { headers: headers(leaderToken, tenantA) }));
+    expect(versionDiff.changes).toEqual(expect.arrayContaining([expect.objectContaining({ path: 'rules.maxCallsPerMinute', before: 20, after: 30 })]));
+
+    const paused = await expectOk(await api.post(`/api/tenants/${tenantA}/campaigns/${campaignId}/pause`, { headers: headers(leaderToken, tenantA), data: { expectedLockVersion: 3 } }));
+    expect(paused).toMatchObject({ status: 'paused', lock_version: 4 });
+    const completed = await expectOk(await api.post(`/api/tenants/${tenantA}/campaigns/${campaignId}/complete`, { headers: headers(leaderToken, tenantA), data: { expectedLockVersion: 4 } }));
+    expect(completed).toMatchObject({ status: 'completed', lock_version: 5 });
+    const archived = await expectOk(await api.post(`/api/tenants/${tenantA}/campaigns/${campaignId}/archive`, { headers: headers(leaderToken, tenantA), data: { expectedLockVersion: 5 } }));
+    expect(archived).toMatchObject({ status: 'archived', lock_version: 6 });
+    const invalid = await api.post(`/api/tenants/${tenantA}/campaigns/${campaignId}/start`, { headers: headers(leaderToken, tenantA), data: { expectedLockVersion: 6 } });
+    expect(invalid.status()).toBe(409);
+    await api.dispose();
+  });
+
+  test('8. importacao preserva supressao depois de excluir e reimportar', async () => {
     const api = await context();
     await expectOk(await api.post(`/api/tenants/${tenantA}/leads/import`, { headers: headers(leaderToken, tenantA), multipart: { file: { name: 'leads.csv', mimeType: 'text/csv', buffer: Buffer.from(`name,phone\nTitular E2E,${suppressedPhone}\n`) } } }));
     const leads = await expectOk(await api.get(`/api/tenants/${tenantA}/leads`, { headers: headers(leaderToken, tenantA) }));

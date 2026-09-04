@@ -47,8 +47,10 @@ try {
   const migrationsDir = join(process.cwd(), 'apps/api/src/database/migrations');
   const files = (await readdir(migrationsDir)).filter((file) => file.endsWith('.sql')).sort();
   const campaignMigration = '043_campaigns_read_model.sql';
+  const lifecycleMigration = '044_campaign_lifecycle.sql';
   const legacyMigrations = files.filter((file) => file < campaignMigration);
   assert(files.includes(campaignMigration), `Migration ausente: ${campaignMigration}`);
+  assert(files.includes(lifecycleMigration), `Migration ausente: ${lifecycleMigration}`);
 
   for (const file of legacyMigrations) await applyMigration(database, migrationsDir, file);
 
@@ -76,6 +78,19 @@ try {
     (SELECT count(*)::int FROM campaign_numbers WHERE tenant_id = 'tenant-legado' AND campaign_id = $1) AS numbers`, [campaign.id])).rows[0];
   assert(links.sdrs === 1 && links.numbers === 1, 'Backfill não vinculou recursos legados');
 
+  await applyMigration(database, migrationsDir, lifecycleMigration);
+  const lifecycleCampaign = (await database.query('SELECT lock_version, draft_config, current_version FROM campaigns WHERE id = $1', [campaign.id])).rows[0];
+  assert(lifecycleCampaign.lock_version === 0 && lifecycleCampaign.current_version === 1, 'Migration de ciclo de vida alterou a versão legada');
+  assert(lifecycleCampaign.draft_config.source === 'legacy_operation', 'Migration de ciclo de vida não preservou a configuração legada');
+  await database.query("INSERT INTO campaigns (id, tenant_id, name, status, folder_id, current_version, is_legacy, draft_config) VALUES ('draft-test', 'tenant-legado', 'Rascunho de teste', 'draft', 'folder-default-tenant-legado', NULL, false, '{}'::jsonb)");
+  let immutableVersionRejected = false;
+  try {
+    await database.query("UPDATE campaign_versions SET change_reason = 'mutação indevida' WHERE id = $1", [version.id]);
+  } catch (error) {
+    immutableVersionRejected = error?.code === '55000';
+  }
+  assert(immutableVersionRejected, 'Versão publicada aceitou mutação');
+
   await database.query("INSERT INTO tenants (id, name, slug, status) VALUES ('tenant-other', 'Outro tenant', 'outro-tenant', 'active')");
   await database.query("INSERT INTO sdrs (id, tenant_id, name) VALUES ('other-sdr', 'tenant-other', 'SDR externo')");
   let crossTenantRejected = false;
@@ -93,7 +108,7 @@ try {
     (SELECT count(*)::int FROM campaign_numbers WHERE tenant_id = 'tenant-other' AND campaign_id = $1) AS numbers`, [otherCampaign.id])).rows[0];
   assert(liveLinks.sdrs === 1 && liveLinks.numbers === 1, 'Campanha legada nova não acompanhou recursos conectados depois do tenant');
 
-  console.log('Campaign migration OK: legado preservado, read model sincronizado e vínculo cross-tenant bloqueado.');
+  console.log('Campaign migration OK: legado preservado, versões imutáveis, read model sincronizado e vínculo cross-tenant bloqueado.');
 } finally {
   if (database) await database.end().catch(() => undefined);
   if (adminConnected) {

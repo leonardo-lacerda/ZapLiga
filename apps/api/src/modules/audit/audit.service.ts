@@ -13,12 +13,14 @@ export type AuditInput = {
   userAgent?: string | null;
 };
 
+type AuditExecutor = { query: (text: string, params?: unknown[]) => Promise<unknown> };
+
 @Injectable()
 export class AuditService {
   constructor(private readonly db: DatabaseService) {}
 
-  async record(input: AuditInput) {
-    await this.db.query(`
+  async record(input: AuditInput, executor: AuditExecutor = this.db) {
+    await executor.query(`
       INSERT INTO audit_logs (id, actor_user_id, tenant_id, action, entity_type, entity_id, metadata, ip_address, user_agent)
       VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9)
     `, [randomUUID(), input.actorUserId ?? null, input.tenantId ?? null, input.action, input.entityType ?? null, input.entityId ?? null, JSON.stringify(input.metadata ?? {}), input.ipAddress ?? null, input.userAgent?.slice(0, 500) ?? null]);

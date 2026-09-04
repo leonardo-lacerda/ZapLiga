@@ -18,7 +18,8 @@
     "test:concurrent-calls": "node scripts/test-concurrent-calls.mjs",
     "test:all": "npm test && npm run test:web",
     "verify:multitenant": "node scripts/verify-multitenant.mjs",
-    "verify:campaign-migration": "node scripts/verify-campaign-migration.mjs"
+    "verify:campaign-migration": "node scripts/verify-campaign-migration.mjs",
+    "verify:campaign-lifecycle": "node scripts/verify-campaign-lifecycle.mjs"
   },
   "devDependencies": {
     "concurrently": "^9.1.2"

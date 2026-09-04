@@ -6,6 +6,7 @@ export const tabPaths: Record<TabKey, string> = {
   metrics: '/app/metricas',
   numbers: '/app/numeros',
   leads: '/app/leads',
+  campaigns: '/app/campanhas',
   callbacks: '/app/retornos',
   compliance: '/app/nao-contato',
   privacy: '/app/privacidade',

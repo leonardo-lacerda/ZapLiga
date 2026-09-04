@@ -18,6 +18,7 @@ import { AdminPage } from '../features/access/AdminPage';
 import { CompliancePage } from '../features/compliance/CompliancePage';
 import { OperationSettingsPage } from '../features/settings/OperationSettingsPage';
 import { LeadIntegrationsPage } from '../features/integrations/LeadIntegrationsPage';
+import { CampaignsPage } from '../features/campaigns/CampaignsPage';
 import { ProfilePage } from '../features/account/ProfilePage';
 import { CallbacksPage } from '../features/callbacks/CallbacksPage';
 import { PrivacyPage } from '../features/privacy/PrivacyPage';
@@ -355,7 +356,9 @@ function AuthenticatedApp() {
     { key: 'profile', label: 'Meu perfil', icon: 'user', group: 'Conta' },
   ];
   if (isSuperAdmin) navItems.push({ key: 'admin', label: 'Admin', icon: 'settings', group: 'Administração' });
+  navItems.splice(3, 0, { key: 'campaigns', label: 'Campanhas', icon: 'sparkles', group: navItems[0].group });
   const gatedTabs: Partial<Record<TabKey, boolean>> = {
+    campaigns: Boolean(featureFlags?.campaigns),
     callbacks: !featureFlags || Boolean(featureFlags.callbacks),
     privacy: !featureFlags || Boolean(featureFlags.privacy_requests),
   };
@@ -375,6 +378,7 @@ function AuthenticatedApp() {
         {tab === 'sdrMetrics' && isSdr && <div className="page-content"><SdrMetricsPage /></div>}
         {tab === 'settings' && <div className="page-content"><OperationSettingsPage status={status} onChanged={load} /></div>}
         {tab === 'integrations' && <div className="page-content"><LeadIntegrationsPage tenantId={activeTenantId} folders={leadFolders} /></div>}
+        {tab === 'campaigns' && !isSdr && featureFlags && <div className="page-content"><CampaignsPage tenantId={activeTenantId} folders={leadFolders} sdrs={sdrs} numbers={numbers} featureEnabled={Boolean(featureFlags.campaigns)} /></div>}
         {tab === 'profile' && session && <div className="page-content"><ProfilePage session={session} reload={reload} logout={logout} /></div>}
         {tab === 'callbacks' && <div className="page-content"><CallbacksPage sdrs={sdrs} isSdr={isSdr} featureEnabled={!featureFlags || Boolean(featureFlags.callbacks)} /></div>}
         {tab === 'privacy' && <div className="page-content"><PrivacyPage /></div>}

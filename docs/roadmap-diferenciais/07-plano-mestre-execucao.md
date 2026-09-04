@@ -604,7 +604,7 @@ Atualizar esta tabela ao final de cada lote. Estados válidos: `pendente`,
 | ---: | --- | --- |
 | 00 | concluído | Baseline, flags, contratos, fixtures, compatibilidade e gates Q1/Q2/Q4 aprovados em `evidencias/lote-00-baseline.md`. |
 | 01 | concluído | Domínio/read model, backfill legado, APIs tenant-scoped e gates Q1–Q4 aprovados em `evidencias/lote-01-campanhas-leitura.md`. |
-| 02 | pendente | — |
+| 02 | concluído | Ciclo de vida, lock otimista, snapshots imutáveis, hash/diff, wizard, testes direcionados e verificação HTTP completa em `evidencias/lote-02-ciclo-versionamento.md`. |
 | 03 | pendente | — |
 | 04 | pendente | — |
 | 05 | pendente | — |
