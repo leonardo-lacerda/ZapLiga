@@ -397,7 +397,7 @@ diff -ruN '--exclude=target' '--exclude=.git' whatsapp-rust/src/voip/transport/m
 +}
 diff -ruN '--exclude=target' '--exclude=.git' whatsapp-rust/src/voip/transport/native.rs ../zapliga-waxum-encfix-v2/whatsapp-rust/src/voip/transport/native.rs
 --- whatsapp-rust/src/voip/transport/native.rs	2026-09-03 22:36:25.995869900 -0300
-+++ ../zapliga-waxum-encfix-v2/whatsapp-rust/src/voip/transport/native.rs	2026-09-03 18:28:18.040187200 -0300
++++ ../zapliga-waxum-encfix-v2/whatsapp-rust/src/voip/transport/native.rs	2026-09-04 10:25:31.756797500 -0300
 @@ -63,6 +63,8 @@
  
  use wacore::voip::demux::{RelayPacketKind, classify_relay_packet};
@@ -407,7 +407,19 @@ diff -ruN '--exclude=target' '--exclude=.git' whatsapp-rust/src/voip/transport/n
  /// Why the media stack stopped. The driver branches on the variant: a peer close ends the call the
  /// way hanging up does, anything else is a transport failure the call surfaces as a read error.
  #[derive(Debug, thiserror::Error)]
-@@ -928,6 +930,236 @@
+@@ -744,8 +746,9 @@
+         .map_err(|e| anyhow!("relay connect: {e}; tried {tried}"))?
+         .0;
+         // The advertised port and the port that answered diverge per host and per session, so this
+-        // is the only place that fact is observable in production.
+-        debug!(
++        // is the only place that fact is observable in production. Info-level on purpose: one line
++        // per relay per call, and it is the first thing to read when a call is deaf.
++        log::info!(
+             "voip: relay media connected on {winner} (advertised {}){}",
+             self.addr,
+             if winner == self.addr {
+@@ -928,6 +931,291 @@
      }
  }
  
@@ -501,6 +513,14 @@ diff -ruN '--exclude=target' '--exclude=.git' whatsapp-rust/src/voip/transport/n
 +            })));
 +        }
 +
++        if !self.extras.is_empty() {
++            log::info!(
++                "voip: binding {} extra relay(s) besides {}: {:?}",
++                self.extras.len(),
++                self.primary_addr,
++                self.extras.iter().map(|e| e.addr).collect::<Vec<_>>()
++            );
++        }
 +        let mut extra_outbound = Vec::with_capacity(self.extras.len());
 +        for extra in &self.extras {
 +            let (outbound_tx, outbound_rx) = async_channel::bounded(RELAY_SEND_CAP);
@@ -537,14 +557,28 @@ diff -ruN '--exclude=target' '--exclude=.git' whatsapp-rust/src/voip/transport/n
 +    outbound: async_channel::Receiver<Bytes>,
 +    merged_tx: async_channel::Sender<RelayTransportEvent>,
 +) {
-+    let Ok((channel, events)) = connect_relay_media(extra.addr, runtime).await else {
-+        return;
++    // Same dial as the primary (advertised port raced against the web-client port): a host that
++    // only answers on 3480 would otherwise never be bound as an extra, and if the answering
++    // device elected exactly that host the call would stay deaf despite multi-relay binding.
++    let (channel, events) = match RelayMediaChannelFactory::new(extra.addr, runtime).connect().await
++    {
++        Ok(pair) => pair,
++        Err(e) => {
++            log::warn!("voip: extra relay {} NOT bound: {e}", extra.addr);
++            return;
++        }
 +    };
++    log::info!("voip: extra relay {} bound", extra.addr);
 +    let Some(endpoint_xor) =
 +        wacore::voip::stun::encode_xor_relay_endpoint(&extra.addr.ip().to_string(), extra.addr.port())
 +    else {
++        log::warn!("voip: extra relay {} has no IPv4 endpoint encoding; dropped", extra.addr);
 +        return;
 +    };
++    // Per-relay tallies, logged when the flow ends, so a deaf call can say which relay carried what.
++    let (mut stun_in, mut media_in, mut other_in, mut media_out) = (0u64, 0u64, 0u64, 0u64);
++    let mut first_stun_logged = false;
++    let mut first_media_logged = false;
 +    let allocate = Bytes::from(wacore::voip::stun::build_wasm_stun_allocate_request(
 +        &rand::random(),
 +        &extra.relay_token,
@@ -554,14 +588,22 @@ diff -ruN '--exclude=target' '--exclude=.git' whatsapp-rust/src/voip/transport/n
 +        &ctx.self_participant_id,
 +    ));
 +    if channel.send(allocate.clone()).await.is_err() {
++        log::warn!("voip: extra relay {}: could not send allocate", extra.addr);
 +        return;
 +    }
++    let addr = extra.addr;
++    let summary = |stun_in: u64, media_in: u64, other_in: u64, media_out: u64, why: &str| {
++        log::info!(
++            "voip: extra relay {addr} ended ({why}): stun_in={stun_in} media_in={media_in} other_in={other_in} media_out={media_out}"
++        );
++    };
 +    let mut keepalive = tokio::time::interval(EXTRA_RELAY_KEEPALIVE);
 +    keepalive.tick().await; // first tick fires immediately; the allocate above already went out
 +    loop {
 +        tokio::select! {
 +            _ = keepalive.tick() => {
 +                if channel.send(allocate.clone()).await.is_err() {
++                    summary(stun_in, media_in, other_in, media_out, "keepalive send failed");
 +                    return;
 +                }
 +            }
@@ -569,13 +611,16 @@ diff -ruN '--exclude=target' '--exclude=.git' whatsapp-rust/src/voip/transport/n
 +                match queued {
 +                    Ok(data) => {
 +                        if channel.send(data).await.is_err() {
++                            summary(stun_in, media_in, other_in, media_out, "media send failed");
 +                            return;
 +                        }
++                        media_out += 1;
 +                    }
 +                    // MultiRelayTransport::disconnect closed our outbound queue: say goodbye on
 +                    // this relay too, rather than just abandoning the socket.
 +                    Err(_) => {
 +                        channel.disconnect().await;
++                        summary(stun_in, media_in, other_in, media_out, "call ended");
 +                        return;
 +                    }
 +                }
@@ -583,21 +628,43 @@ diff -ruN '--exclude=target' '--exclude=.git' whatsapp-rust/src/voip/transport/n
 +            event = events.recv() => {
 +                match event {
 +                    Ok(RelayTransportEvent::PacketReceived(bytes)) => {
-+                        if matches!(
-+                            classify_relay_packet(&bytes),
-+                            RelayPacketKind::Rtp | RelayPacketKind::Rtcp
-+                        ) && merged_tx
-+                            .send(RelayTransportEvent::PacketReceived(bytes))
-+                            .await
-+                            .is_err()
-+                        {
-+                            return;
++                        match classify_relay_packet(&bytes) {
++                            RelayPacketKind::Rtp | RelayPacketKind::Rtcp => {
++                                media_in += 1;
++                                if !first_media_logged {
++                                    first_media_logged = true;
++                                    log::info!("voip: extra relay {addr}: first inbound media packet");
++                                }
++                                if merged_tx
++                                    .send(RelayTransportEvent::PacketReceived(bytes))
++                                    .await
++                                    .is_err()
++                                {
++                                    summary(stun_in, media_in, other_in, media_out, "call receiver gone");
++                                    return;
++                                }
++                            }
++                            // This relay's own allocate-success or consent reply -- our bookkeeping,
++                            // not the call's; the engine never sent the request and would not
++                            // recognise the transaction id.
++                            RelayPacketKind::Stun => {
++                                stun_in += 1;
++                                if !first_stun_logged {
++                                    first_stun_logged = true;
++                                    log::info!("voip: extra relay {addr}: allocate answered");
++                                }
++                            }
++                            RelayPacketKind::Other => other_in += 1,
 +                        }
-+                        // A Stun/Other packet here is this relay's own allocate-success or consent
-+                        // reply -- our bookkeeping, not the call's; the engine never sent the
-+                        // request and would not recognise the transaction id.
 +                    }
-+                    Ok(RelayTransportEvent::Disconnected(_)) | Err(_) => return,
++                    Ok(RelayTransportEvent::Disconnected(reason)) => {
++                        summary(stun_in, media_in, other_in, media_out, &format!("relay disconnected: {reason}"));
++                        return;
++                    }
++                    Err(_) => {
++                        summary(stun_in, media_in, other_in, media_out, "event stream closed");
++                        return;
++                    }
 +                    Ok(_) => {}
 +                }
 +            }

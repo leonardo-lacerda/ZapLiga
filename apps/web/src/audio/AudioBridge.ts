@@ -42,6 +42,15 @@ const INBOUND_SIGNAL_THRESHOLD = 200;
 /** How long after the last audible frame the customer still counts as "being heard". */
 const INBOUND_RECEIVING_WINDOW_MS = 2500;
 const INBOUND_REPORT_INTERVAL_MS = 400;
+/**
+ * Playout backlog bounds. Frames are scheduled back-to-back from the moment they arrive, so any
+ * clock drift between the server's 16 kHz pacing and the output device (or a jitter burst that is
+ * never repaid) accumulates as delay for the rest of the call -- 1.45 s was measured after four
+ * minutes. Above the high mark, frames are dropped until the backlog is back under the low mark:
+ * a brief skip once, instead of a conversation that lags more every minute.
+ */
+const PLAYBACK_BACKLOG_HIGH_S = 0.45;
+const PLAYBACK_BACKLOG_LOW_S = 0.2;
 
 function detectSinkMode(): SinkMode {
   if (typeof AudioContext !== 'undefined' && typeof (AudioContext.prototype as SinkableAudioContext).setSinkId === 'function') return 'context';
@@ -74,7 +83,10 @@ export class AudioBridge {
   private playbackFramesReceived = 0;
   private playbackFramesScheduled = 0;
   private playbackFramesEnded = 0;
+  private playbackFramesDropped = 0;
   private playbackPeak = 0;
+  /** True while the backlog is being drained by dropping frames (see PLAYBACK_BACKLOG_*). */
+  private shedding = false;
 
   private readonly sinkMode: SinkMode = detectSinkMode();
   private deviceState: AudioDeviceState = {
@@ -473,6 +485,13 @@ export class AudioBridge {
     this.playbackFramesReceived += 1;
     this.playbackPeak = Math.max(this.playbackPeak, peak);
     this.noteInbound(peak);
+    const backlog = this.nextPlayTime - this.context.currentTime;
+    if (backlog > PLAYBACK_BACKLOG_HIGH_S) this.shedding = true;
+    else if (backlog < PLAYBACK_BACKLOG_LOW_S) this.shedding = false;
+    if (this.shedding) {
+      this.playbackFramesDropped += 1;
+      return;
+    }
     const buffer = this.context.createBuffer(1, sampleCount, 16000);
     const channel = buffer.getChannelData(0);
     for (let i = 0; i < pcm.length; i++) channel[i] = pcm[i] / 0x7fff;
@@ -524,6 +543,7 @@ export class AudioBridge {
         framesReceived: this.playbackFramesReceived,
         framesScheduled: this.playbackFramesScheduled,
         framesEnded: this.playbackFramesEnded,
+        framesDropped: this.playbackFramesDropped,
         peak: this.playbackPeak,
         queuedSeconds: this.context ? Math.max(0, this.nextPlayTime - this.context.currentTime) : 0,
         outputDevice: this.deviceState.activeOutputLabel,
@@ -562,7 +582,9 @@ export class AudioBridge {
     this.playbackFramesReceived = 0;
     this.playbackFramesScheduled = 0;
     this.playbackFramesEnded = 0;
+    this.playbackFramesDropped = 0;
     this.playbackPeak = 0;
+    this.shedding = false;
     this.patchDeviceState({ activeOutputId: '', activeOutputLabel: '' });
   }
 
