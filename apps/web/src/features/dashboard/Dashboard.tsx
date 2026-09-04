@@ -60,36 +60,22 @@ function SdrWorkspace({ status, available, connected, connecting, sdrReady, sdrs
         </>}
       </div>
       <div className="sdr-presence-progress" aria-label={`Etapa ${presenceStep} de 4`}><span className={presenceStep >= 1 ? 'active' : ''}>Conexão</span><span className={presenceStep >= 2 ? 'active' : ''}>Pronto</span><span className={presenceStep >= 3 ? 'active' : ''}>Chamada</span><span className={presenceStep >= 4 ? 'active' : ''}>Registro</span></div>
+      {connected && devices && <div className="sdr-audio-bar">
+        <label><Icon name="mic" size={13} /><select value={devices.selectedInputId} onChange={(event) => void selectInputDevice(event.target.value)} aria-label="Microfone" title="Microfone">
+          <option value="">{devices.activeInputLabel && !devices.selectedInputId ? devices.activeInputLabel : 'Microfone padrão'}</option>
+          {devices.inputs.filter((device) => !isPseudoDevice(device.deviceId)).map((device, index) => <option key={device.deviceId} value={device.deviceId}>{describeDevice(device, index, 'input')}</option>)}
+        </select></label>
+        {devices.outputSelectionSupported && <label><Icon name="headset" size={13} /><select value={devices.selectedOutputId} onChange={(event) => void selectOutputDevice(event.target.value)} aria-label="Saída de áudio" title="Saída de áudio. Fone Bluetooth sem som? Escolha a saída Hands-Free do mesmo fone.">
+          <option value="">{!devices.selectedOutputId && devices.activeOutputLabel ? `Auto · ${devices.activeOutputLabel}` : 'Saída automática'}</option>
+          {devices.outputs.filter((device) => !isPseudoDevice(device.deviceId)).map((device, index) => <option key={device.deviceId} value={device.deviceId}>{describeDevice(device, index, 'output')}</option>)}
+        </select></label>}
+        <Button variant="ghost" icon="play" onClick={() => void testSpeaker()} title="Toca um bip pelo mesmo caminho da chamada">Testar som</Button>
+      </div>}
     </Panel>
 
     {activeCall?.lead && <Panel className={`sdr-call-console${answered ? ' is-active' : ' is-ringing'}`}>
-      <div className="sdr-call-person"><span className="sdr-call-icon"><Icon name="phone" size={23} /></span><div><span className="eyebrow">{answered ? 'CONVERSA EM ANDAMENTO' : 'CHAMANDO'}</span><h2>{activeCall.lead.name || 'Contato da fila'}</h2><p>{activeCall.lead.phone} · {answered ? <><LiveTimer startedAt={activeCall.connectedAt ?? activeCall.connected_at ?? activeCall.callStartedAt} /> · {activeCall.mediaActive ? 'áudio conectado' : 'conectando áudio…'}</> : 'aguardando atendimento…'}</p></div></div>
+      <div className="sdr-call-person"><span className="sdr-call-icon"><Icon name="phone" size={23} /></span><div><span className="eyebrow">{answered ? 'CONVERSA EM ANDAMENTO' : 'CHAMANDO'}</span><h2>{activeCall.lead.name || 'Contato da fila'}</h2><p>{activeCall.lead.phone} · {answered ? <><LiveTimer startedAt={activeCall.connectedAt ?? activeCall.connected_at ?? activeCall.callStartedAt} /> · {activeCall.mediaActive ? <span className={`sdr-audio-live ${hearingCustomer ? 'on' : 'off'}`} title={hearingCustomer ? 'A voz do cliente está chegando' : 'Nenhuma voz do cliente nos últimos segundos'}><i></i>{hearingCustomer ? 'ouvindo o cliente' : 'sem voz do cliente'}</span> : 'conectando áudio…'}</> : 'aguardando atendimento…'}</p></div></div>
       <div className="sdr-call-actions"><Button variant={micMuted ? 'danger' : 'secondary'} icon={micMuted ? 'mic-off' : 'mic'} onClick={toggleMicMute} aria-pressed={Boolean(micMuted)}>{micMuted ? 'Ativar microfone' : 'Mutar'}</Button><Button variant="danger" icon="close" onClick={hangup}>{answered ? 'Encerrar conversa' : 'Cancelar chamada'}</Button></div>
-      {answered && <div className="sdr-call-audio-status">
-        <Badge tone={hearingCustomer ? 'success' : activeCall.mediaActive ? 'warning' : 'neutral'}><Icon name={hearingCustomer ? 'check' : 'alert'} size={13} />{hearingCustomer ? 'Recebendo a voz do cliente' : activeCall.mediaActive ? 'Sem voz do cliente agora' : 'Aguardando áudio…'}</Badge>
-        <span className="text-muted">Saída: {devices?.activeOutputLabel || 'padrão do sistema'}{devices?.activeInputLabel ? ` · Microfone: ${devices.activeInputLabel}` : ''}</span>
-        {activeCall.mediaActive && inbound?.receiving && <span className="form-hint">Se o indicador está verde e você não ouve, o som está saindo em outro dispositivo: troque a saída no painel Áudio abaixo.</span>}
-      </div>}
-    </Panel>}
-
-    {connected && devices && <Panel className="sdr-audio-panel">
-      <SectionHeader eyebrow="ÁUDIO" title="Microfone e saída" description={devices.outputSelectionSupported ? 'A saída segue automaticamente o aparelho do microfone em uso. Ajuste aqui se o som estiver saindo no lugar errado.' : 'Este navegador não permite escolher a saída de áudio; o som vai para o dispositivo padrão do sistema.'} action={<Button variant="secondary" icon="play" onClick={() => void testSpeaker()}>Testar som</Button>} />
-      <div className="form-row">
-        <label className="sdr-audio-field"><span>Microfone</span>
-          <select value={devices.selectedInputId} onChange={(event) => void selectInputDevice(event.target.value)} aria-label="Microfone">
-            <option value="">Padrão do sistema{!devices.selectedInputId && devices.activeInputLabel ? ` · ${devices.activeInputLabel}` : ''}</option>
-            {devices.inputs.filter((device) => !isPseudoDevice(device.deviceId)).map((device, index) => <option key={device.deviceId} value={device.deviceId}>{describeDevice(device, index, 'input')}</option>)}
-          </select>
-        </label>
-        <label className="sdr-audio-field"><span>Saída (fone / alto-falante)</span>
-          <select value={devices.selectedOutputId} onChange={(event) => void selectOutputDevice(event.target.value)} aria-label="Saída de áudio" disabled={!devices.outputSelectionSupported}>
-            <option value="">Automática{!devices.selectedOutputId ? ` · ${devices.activeOutputLabel || 'padrão do sistema'}` : ''}</option>
-            {devices.outputs.filter((device) => !isPseudoDevice(device.deviceId)).map((device, index) => <option key={device.deviceId} value={device.deviceId}>{describeDevice(device, index, 'output')}</option>)}
-          </select>
-        </label>
-      </div>
-      {!devices.permissionGranted && <span className="form-hint">Os nomes dos dispositivos aparecem depois de você permitir o microfone.</span>}
-      <span className="form-hint">Fone Bluetooth sem som durante a chamada? Ao abrir o microfone, o Windows troca o fone para o perfil Hands-Free e a saída "Stereo" fica muda. A opção Automática já escolhe a saída do mesmo fone; se ainda assim não ouvir, selecione a saída "Hands-Free" do fone ou use um fone com fio, e confirme com Testar som.</span>
     </Panel>}
 
     {postCall && <PostCallPanel pause={postCall} onFinish={finishPostCall} submitting={Boolean(finishingPause)} canContinue={Boolean(connected && sdrReady)} />}

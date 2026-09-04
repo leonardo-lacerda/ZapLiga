@@ -911,12 +911,15 @@ input, select { min-height: 35px; min-width: 0; padding: 8px 10px; border: 1px s
 @media (max-width: 480px) { .integration-setup-panel { padding: 15px; }.integration-setup-count { align-self: flex-start; }.integration-form-footer { align-items: stretch; flex-direction: column; }.integration-form-footer > span { width: 100%; }.integration-form-footer > span .button, .integration-form-footer > .button { width: 100%; }.integration-collapsible-header { padding: 15px 14px; }.integration-reveal-content { padding: 0 14px 13px; }.integration-credentials .credential-row { flex-direction: column; }.integration-credentials .credential-row .button { width: 100%; } }
 @media (max-width: 640px) { .account-switcher { margin: 0 0 8px; }.account-switcher .workspace-switcher { display: flex; }.account-switcher-menu { width: min(286px, calc(100vw - 20px)); } }
 
-/* SDR audio devices: microphone/output pickers, speaker test and the in-call "hearing the customer" indicator. */
-.sdr-audio-panel .form-row { align-items: flex-end; }
-.sdr-audio-field { flex: 1 1 240px; min-width: 0; display: flex; flex-direction: column; gap: 5px; color: var(--muted); font-size: 10px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; }
-.sdr-audio-field select { width: 100%; color: var(--text); font-weight: 400; letter-spacing: 0; text-transform: none; }
-.sdr-audio-field select:disabled { opacity: .6; cursor: not-allowed; }
-.sdr-audio-panel .form-hint + .form-hint { margin-top: 6px; }
-.sdr-call-audio-status { grid-column: 1 / -1; display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--border-subtle); font-size: 11px; }
-.sdr-call-audio-status .badge { display: inline-flex; align-items: center; gap: 5px; }
-.sdr-call-audio-status .form-hint { flex-basis: 100%; margin-top: 0; }
+/* SDR audio: one quiet row at the foot of the command panel (mic, output, speaker test) and an
+   inline dot in the call console saying whether the customer's voice is arriving. */
+.sdr-audio-bar { grid-column: 1 / -1; display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; padding-top: 11px; border-top: 1px solid var(--border-subtle); }
+.sdr-audio-bar label { min-width: 0; display: inline-flex; align-items: center; gap: 6px; color: var(--muted); }
+.sdr-audio-bar select { min-height: 28px; max-width: 230px; padding: 4px 26px 4px 8px; border-color: var(--border-subtle); background: var(--surface); color: var(--muted); font-size: 11px; text-overflow: ellipsis; }
+.sdr-audio-bar select:hover, .sdr-audio-bar select:focus { color: var(--text); border-color: var(--border); }
+.sdr-audio-bar .button { min-height: 28px; margin-left: auto; padding: 4px 10px; font-size: 11px; }
+.sdr-audio-live { display: inline-flex; align-items: center; gap: 5px; }
+.sdr-audio-live i { width: 7px; height: 7px; display: inline-block; border-radius: 50%; background: var(--subtle); }
+.sdr-audio-live.on i { background: var(--success); }
+.sdr-audio-live.off i { background: var(--warning); }
+@media (max-width: 640px) { .sdr-audio-bar label { flex: 1 1 100%; }.sdr-audio-bar select { flex: 1; max-width: none; }.sdr-audio-bar .button { margin-left: 0; } }
