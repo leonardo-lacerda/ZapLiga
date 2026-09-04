@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type React from 'react';
-import { AudioBridge } from '../audio/AudioBridge';
+import { AudioBridge, type AudioDeviceState, type InboundAudioLevel } from '../audio/AudioBridge';
 import { json, wsUrl } from '../services/api';
 import type { AnyRow, TabKey } from '../types';
 import { Badge, Button, Icon } from '../components/ui';
@@ -80,6 +80,17 @@ function AuthenticatedApp() {
   const qrBusy = useRef(false);
   const control = useRef<WebSocket>();
   const audio = useRef(new AudioBridge());
+  const [audioDevices, setAudioDevices] = useState<AudioDeviceState>(() => audio.current.getDeviceState());
+  const [inboundAudio, setInboundAudio] = useState<InboundAudioLevel>({ receiving: false, peak: 0, updatedAt: 0 });
+  useEffect(() => {
+    const bridge = audio.current;
+    bridge.onDeviceState(setAudioDevices);
+    // Only transitions re-render: the bridge reports every 400ms during a call, and the indicator
+    // needs "started hearing" / "stopped hearing", not a level meter.
+    bridge.onInboundLevel((level) => setInboundAudio((current) => current.receiving === level.receiving ? current : level));
+    void bridge.refreshDevices();
+    return () => { bridge.onDeviceState(undefined); bridge.onInboundLevel(undefined); };
+  }, []);
   const audioCall = useRef('');
   const reconnectTimer = useRef<number>();
   const reconnectAttempt = useRef(0);
@@ -260,6 +271,9 @@ function AuthenticatedApp() {
     control.current?.send(JSON.stringify({ type: 'availability', available: value }));
   };
   const toggleMicMute = () => { const next = !micMuted; audio.current.setMuted(next); setMicMuted(next); };
+  const selectInputDevice = async (deviceId: string) => { setError(''); try { await audio.current.setInputDevice(deviceId); } catch (e) { setError(e instanceof Error ? e.message : String(e)); } };
+  const selectOutputDevice = async (deviceId: string) => { setError(''); try { await audio.current.setOutputDevice(deviceId); } catch (e) { setError(e instanceof Error ? e.message : String(e)); } };
+  const testSpeaker = async () => { setError(''); try { await audio.current.playTestTone(); } catch (e) { setError(e instanceof Error ? e.message : String(e)); } };
   const finishPostCall = async (input: AnyRow) => {
     if (!sdrId || !postCall?.id) return;
     if (input.continueAvailable && (!connected || !sdrReady)) { setError('Conecte e verifique o áudio antes de salvar como disponível.'); return; }
@@ -336,7 +350,7 @@ function AuthenticatedApp() {
         {tab === 'profile' && session && <div className="page-content"><ProfilePage session={session} reload={reload} logout={logout} /></div>}
         {tab === 'callbacks' && <div className="page-content"><CallbacksPage sdrs={sdrs} isSdr={isSdr} /></div>}
         {tab === 'privacy' && <div className="page-content"><PrivacyPage /></div>}
-        <div className="page-content">{tab === 'dashboard' && <Dashboard tenantId={activeTenantId} isSdr={isSdr} status={status} available={available} connected={connected} connecting={connecting} sdrReady={sdrReady} sdrs={sdrs} connectSdr={connectSdr} disconnectSdr={disconnect} setAvailability={setAvailability} manualDial={manualDial} manualPhone={manualPhone} setManualPhone={setManualPhone} manualName={manualName} setManualName={setManualName} manualCalling={manualCalling} logs={logs} activeCall={activeCall} hangup={hangup} micMuted={micMuted} toggleMicMute={toggleMicMute} connectedNumbers={connectedNumbers} postCall={postCall} finishPostCall={finishPostCall} finishingPause={finishingPause} audioReady={audioReady} connectionNotice={connectionNotice} dateRange={dateRange} toggleDialer={toggleDialer} />}{tab === 'metrics' && activeTenantId && <MetricsPage tenantId={activeTenantId} leadFolders={leadFolders} sdrs={sdrs} numbers={numbers} />}{tab === 'numbers' && <NumbersPage numbers={numbers} numbersTotal={numbersTotal} numbersOffset={numbersOffset} onNumbersPageChange={setNumbersOffset} numberForm={numberForm} setNumberForm={setNumberForm} createNumber={createNumber} showQr={showQr} reconnectNumber={reconnectNumber} removeNumber={removeNumber} qrLoading={qrLoading} qr={qr} closeQr={closeQr} canManageNumbers={!isSdr} />}{tab === 'leads' && <LeadsPage leads={leads} leadsTotal={leadsTotal} leadsOffset={leadsOffset} onLeadsPageChange={setLeadsOffset} folders={leadFolders} selectedFolderId={selectedFolderId} selectedFolder={leadFolders.find((folder) => folder.id === selectedFolderId)} metrics={folderMetrics} setSelectedFolderId={setSelectedFolderId} createFolder={createFolder} updateFolder={updateFolder} removeFolder={removeFolder} leadForm={leadForm} setLeadForm={setLeadForm} createLead={createLead} importCsv={importCsv} importResult={importResult} clearFolder={clearFolder} manualCall={manualCall} resetLead={resetLead} removeLead={removeLead} suppressLead={suppressLead} />}{tab === 'compliance' && activeTenantId && <CompliancePage tenantId={activeTenantId} />}{tab === 'sdrs' && <SdrsPage tenantId={activeTenantId} sdrs={sdrs} />}{tab === 'calls' && <CallsPage calls={calls} callsTotal={callsTotal} callsOffset={callsOffset} onCallsPageChange={setCallsOffset} search={callsSearch} onSearchChange={setCallsSearch} status={callsStatus} onStatusChange={setCallsStatus} result={callsResult} onResultChange={setCallsResult} />}{tab === 'access' && activeTenantId && <AccessPage tenantId={activeTenantId} role={isSuperAdmin ? 'super_admin' : activeTenant?.role ?? ''} />}{tab === 'admin' && isSuperAdmin && <AdminPage onChanged={reload} onOpenTenant={(tenantId) => { selectTenant(tenantId); setTab('dashboard'); }} />}</div>
+        <div className="page-content">{tab === 'dashboard' && <Dashboard tenantId={activeTenantId} isSdr={isSdr} status={status} available={available} connected={connected} connecting={connecting} sdrReady={sdrReady} sdrs={sdrs} connectSdr={connectSdr} disconnectSdr={disconnect} setAvailability={setAvailability} manualDial={manualDial} manualPhone={manualPhone} setManualPhone={setManualPhone} manualName={manualName} setManualName={setManualName} manualCalling={manualCalling} logs={logs} activeCall={activeCall} hangup={hangup} micMuted={micMuted} toggleMicMute={toggleMicMute} connectedNumbers={connectedNumbers} postCall={postCall} finishPostCall={finishPostCall} finishingPause={finishingPause} audioReady={audioReady} connectionNotice={connectionNotice} dateRange={dateRange} toggleDialer={toggleDialer} audioDevices={audioDevices} selectInputDevice={selectInputDevice} selectOutputDevice={selectOutputDevice} testSpeaker={testSpeaker} inboundAudio={inboundAudio} />}{tab === 'metrics' && activeTenantId && <MetricsPage tenantId={activeTenantId} leadFolders={leadFolders} sdrs={sdrs} numbers={numbers} />}{tab === 'numbers' && <NumbersPage numbers={numbers} numbersTotal={numbersTotal} numbersOffset={numbersOffset} onNumbersPageChange={setNumbersOffset} numberForm={numberForm} setNumberForm={setNumberForm} createNumber={createNumber} showQr={showQr} reconnectNumber={reconnectNumber} removeNumber={removeNumber} qrLoading={qrLoading} qr={qr} closeQr={closeQr} canManageNumbers={!isSdr} />}{tab === 'leads' && <LeadsPage leads={leads} leadsTotal={leadsTotal} leadsOffset={leadsOffset} onLeadsPageChange={setLeadsOffset} folders={leadFolders} selectedFolderId={selectedFolderId} selectedFolder={leadFolders.find((folder) => folder.id === selectedFolderId)} metrics={folderMetrics} setSelectedFolderId={setSelectedFolderId} createFolder={createFolder} updateFolder={updateFolder} removeFolder={removeFolder} leadForm={leadForm} setLeadForm={setLeadForm} createLead={createLead} importCsv={importCsv} importResult={importResult} clearFolder={clearFolder} manualCall={manualCall} resetLead={resetLead} removeLead={removeLead} suppressLead={suppressLead} />}{tab === 'compliance' && activeTenantId && <CompliancePage tenantId={activeTenantId} />}{tab === 'sdrs' && <SdrsPage tenantId={activeTenantId} sdrs={sdrs} />}{tab === 'calls' && <CallsPage calls={calls} callsTotal={callsTotal} callsOffset={callsOffset} onCallsPageChange={setCallsOffset} search={callsSearch} onSearchChange={setCallsSearch} status={callsStatus} onStatusChange={setCallsStatus} result={callsResult} onResultChange={setCallsResult} />}{tab === 'access' && activeTenantId && <AccessPage tenantId={activeTenantId} role={isSuperAdmin ? 'super_admin' : activeTenant?.role ?? ''} />}{tab === 'admin' && isSuperAdmin && <AdminPage onChanged={reload} onOpenTenant={(tenantId) => { selectTenant(tenantId); setTab('dashboard'); }} />}</div>
       </main></div>
   </div></>;
 }

@@ -78,6 +78,11 @@ type CallResource = {
     framesEnded?: number;
     peak?: number;
     queuedSeconds?: number;
+    /** The output endpoint the browser is actually playing on ('' = system default). */
+    outputDevice?: string;
+    /** How the sink was applied: 'context' (AudioContext.setSinkId), 'element' (<audio>.setSinkId) or 'default'. */
+    sinkMode?: string;
+    inputDevice?: string;
   };
   previousSdrAvailable: boolean;
   previousSdrState: string;
@@ -1375,6 +1380,9 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
                 framesEnded: Number(message.framesEnded) || 0,
                 peak: Number(message.peak) || 0,
                 queuedSeconds: Number(message.queuedSeconds) || 0,
+                outputDevice: String(message.outputDevice ?? '').slice(0, 120),
+                sinkMode: String(message.sinkMode ?? '').slice(0, 20),
+                inputDevice: String(message.inputDevice ?? '').slice(0, 120),
               };
             }
           } catch { /* unrelated control message */ }
@@ -1512,7 +1520,7 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
         if (resource.browser && resource.browserErrorHandler) resource.browser.off('error', resource.browserErrorHandler);
         this.log(`Áudio da chamada: entrada repassada=${resource.inboundRelayed ?? 0}, entrada descartada(pré-atendimento)=${resource.inboundDroppedPreAnswer ?? 0}, microfone repassado=${resource.micFramesRelayed ?? 0}, atendimento sinalizado=${Boolean(resource.answerSignalReceived)}, mediaAtiva=${resource.mediaActive}`, 'info', callId, tenantId);
         const playback = resource.browserPlayback;
-        this.log(`Diagnóstico de reprodução: cliente→servidor pico=${resource.inboundPcmPeak ?? 0}, amostras não-zero=${resource.inboundPcmNonZeroSamples ?? 0}/${resource.inboundPcmSamples ?? 0}; SDR→cliente pico=${resource.micPcmPeak ?? 0}, amostras não-zero=${resource.micPcmNonZeroSamples ?? 0}/${resource.micPcmSamples ?? 0}; navegador=${playback ? `${playback.contextState}@${playback.outputSampleRate}Hz recebidos=${playback.framesReceived} agendados=${playback.framesScheduled} concluídos=${playback.framesEnded} pico=${playback.peak} fila=${playback.queuedSeconds?.toFixed(2)}s` : 'sem telemetria'}`, 'info', callId, tenantId);
+        this.log(`Diagnóstico de reprodução: cliente→servidor pico=${resource.inboundPcmPeak ?? 0}, amostras não-zero=${resource.inboundPcmNonZeroSamples ?? 0}/${resource.inboundPcmSamples ?? 0}; SDR→cliente pico=${resource.micPcmPeak ?? 0}, amostras não-zero=${resource.micPcmNonZeroSamples ?? 0}/${resource.micPcmSamples ?? 0}; navegador=${playback ? `${playback.contextState}@${playback.outputSampleRate}Hz recebidos=${playback.framesReceived} agendados=${playback.framesScheduled} concluídos=${playback.framesEnded} pico=${playback.peak} fila=${playback.queuedSeconds?.toFixed(2)}s saída=${playback.outputDevice || 'padrão do sistema'} (${playback.sinkMode || 'default'}) microfone=${playback.inputDevice || 'padrão do sistema'}` : 'sem telemetria'}`, 'info', callId, tenantId);
         // Explicitly hang up the WhatsApp call. Closing the media WS alone can
         // leave the lead's phone stuck on "Reconnecting…"; terminating by
         // call_id makes Waxum send the `<terminate>` stanza reliably.

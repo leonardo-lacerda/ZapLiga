@@ -910,3 +910,13 @@ input, select { min-height: 35px; min-width: 0; padding: 8px 10px; border: 1px s
 @media (max-width: 760px) { .integration-page-heading { flex-direction: column; gap: 10px; }.integration-heading-side { width: 100%; justify-content: space-between; }.integration-source-grid, .integration-rules-form { grid-template-columns: 1fr; }.integration-stepper > div > small { display: none; }.integration-stepper > div { gap: 0; }.integration-stepper > div:not(:last-child)::after { margin: 0 7px; }.integration-create-form { grid-template-columns: 1fr; }.integration-destination-note, .integration-advanced-hint { grid-column: auto; }.integration-tutorial-compact { grid-template-columns: 1fr; }.integration-tutorial-compact > div { grid-template-columns: 21px minmax(0, 1fr); }.integration-tutorial-compact small { grid-column: 2; }.integration-setup-header { flex-direction: column; gap: 8px; } }
 @media (max-width: 480px) { .integration-setup-panel { padding: 15px; }.integration-setup-count { align-self: flex-start; }.integration-form-footer { align-items: stretch; flex-direction: column; }.integration-form-footer > span { width: 100%; }.integration-form-footer > span .button, .integration-form-footer > .button { width: 100%; }.integration-collapsible-header { padding: 15px 14px; }.integration-reveal-content { padding: 0 14px 13px; }.integration-credentials .credential-row { flex-direction: column; }.integration-credentials .credential-row .button { width: 100%; } }
 @media (max-width: 640px) { .account-switcher { margin: 0 0 8px; }.account-switcher .workspace-switcher { display: flex; }.account-switcher-menu { width: min(286px, calc(100vw - 20px)); } }
+
+/* SDR audio devices: microphone/output pickers, speaker test and the in-call "hearing the customer" indicator. */
+.sdr-audio-panel .form-row { align-items: flex-end; }
+.sdr-audio-field { flex: 1 1 240px; min-width: 0; display: flex; flex-direction: column; gap: 5px; color: var(--muted); font-size: 10px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; }
+.sdr-audio-field select { width: 100%; color: var(--text); font-weight: 400; letter-spacing: 0; text-transform: none; }
+.sdr-audio-field select:disabled { opacity: .6; cursor: not-allowed; }
+.sdr-audio-panel .form-hint + .form-hint { margin-top: 6px; }
+.sdr-call-audio-status { grid-column: 1 / -1; display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--border-subtle); font-size: 11px; }
+.sdr-call-audio-status .badge { display: inline-flex; align-items: center; gap: 5px; }
+.sdr-call-audio-status .form-hint { flex-basis: 100%; margin-top: 0; }
