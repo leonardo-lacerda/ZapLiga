@@ -107,6 +107,30 @@ jornada E2E 8 omite propositalmente o evento `Accept`, envia PCM não silencioso
 e exige que esse áudio chegue ao WebSocket do SDR; remover o fallback volta a
 bloquear o CI antes do deploy.
 
+## Imagem do Waxum
+
+O servico `waxum` roda uma imagem **construida localmente** (`zapliga-waxum:<tag>`),
+nao a `fdciabdul/waxum` publicada: ela carrega correcoes no `whatsapp-rust`
+vendorizado que a imagem stock nao tem (ver comentario no `docker-compose.yml`).
+A tag em uso e definida **somente** em `docker-compose.yml`, e a imagem precisa
+existir no host antes do deploy (`docker save` na maquina de build →
+`docker load` na VPS; o compose usa a imagem local e nao tenta pull).
+
+Para trocar a versao do Waxum:
+
+1. Buildar a imagem fora da VPS e carregar com `docker load`.
+2. `docker tag <imagem atual> zapliga-waxum:0.12.6-rollback` para ter retorno rapido.
+3. Alterar `image:` do `waxum` no `docker-compose.yml`, commitar e fazer deploy
+   (ou `docker compose up -d --no-deps --no-build waxum` para uma troca manual —
+   e commitar em seguida, senao o proximo push reverte).
+4. Validar com uma chamada real olhando o "Diagnostico de reproducao" no log do
+   discador: `cliente→servidor pico` precisa ser > 0.
+
+**Nao criar `*.override.yml` no host para pinar a imagem.** Em 2026-09-04 um
+`waxum-encfix.override.yml` remanescente do hotfix anterior fez o deploy
+automatico recriar o Waxum com a imagem antiga por cima da correcao ja validada;
+o `deploy.yml` agora falha explicitamente se esse arquivo existir.
+
 ## Regra operacional: nao compilar em producao
 
 Builds pesados (especialmente Rust/Waxum) devem rodar no GitHub Actions ou em

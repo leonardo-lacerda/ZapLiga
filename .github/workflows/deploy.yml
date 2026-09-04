@@ -153,11 +153,17 @@ jobs:
           fi
 
           COMPOSE=(docker compose -f docker-compose.yml)
-          # Production currently uses the SRTP/audio-fixed Waxum image. Keep
-          # that host-owned override active during CI/CD so a normal push does
-          # not silently replace it with the upstream image.
+          # The Waxum image is pinned in docker-compose.yml itself (a locally
+          # built zapliga-waxum:<tag> that must already exist on the host --
+          # see docs/deploy-runbook.md, "Imagem do Waxum"). There is
+          # deliberately no host-side override file any more: the one that
+          # used to live here (waxum-encfix.override.yml) silently reverted a
+          # validated fix on 2026-09-04 by pinning an older image over the
+          # committed one. If a host still carries that file, refuse to deploy
+          # rather than let two sources of truth disagree.
           if [ -f waxum-encfix.override.yml ]; then
-            COMPOSE+=(-f waxum-encfix.override.yml)
+            echo "waxum-encfix.override.yml encontrado em $APP_DIR: remova-o; a imagem do Waxum e definida em docker-compose.yml" >&2
+            exit 1
           fi
 
           "${COMPOSE[@]}" up -d postgres postgres-backup redis nats waxum
