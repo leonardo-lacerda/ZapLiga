@@ -26,6 +26,18 @@ describe('pickOutputForInput', () => {
     expect(pickOutputForInput(bluetoothOutputs, bluetoothInputs, 'mic-hfp')).not.toBe('communications');
   });
 
+  it('picks the Hands-Free output when Windows gives the whole headset one groupId', () => {
+    // Seen in production: Stereo and Hands-Free endpoints of the same headset share a groupId,
+    // and the Stereo one enumerates first. Only the Hands-Free endpoint plays while its mic is open.
+    const inputs = [{ deviceId: 'mic-hfp', label: 'Comunicações - Headset (FAM A068N Hands-Free AG Audio)', groupId: 'bt' }];
+    const outputs = [
+      { deviceId: 'default', label: 'Padrão - Headphones (FAM A068N Stereo)', groupId: 'bt' },
+      { deviceId: 'out-a2dp', label: 'Headphones (FAM A068N Stereo)', groupId: 'bt' },
+      { deviceId: 'out-hfp', label: 'Headset (FAM A068N Hands-Free AG Audio)', groupId: 'bt' },
+    ];
+    expect(pickOutputForInput(outputs, inputs, 'mic-hfp')).toBe('out-hfp');
+  });
+
   it('pairs a wired USB headset with its own speakers', () => {
     expect(pickOutputForInput(bluetoothOutputs, bluetoothInputs, 'mic-usb')).toBe('out-usb');
   });

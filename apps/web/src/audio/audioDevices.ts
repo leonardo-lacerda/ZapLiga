@@ -37,8 +37,23 @@ export function pickOutputForInput(outputs: AudioDeviceOption[], inputs: AudioDe
   if (!input?.groupId) return '';
   const siblings = outputs.filter((device) => device.groupId === input.groupId);
   if (!siblings.length) return '';
-  const real = siblings.find((device) => !isPseudoDevice(device.deviceId));
-  return (real ?? siblings[0]).deviceId;
+  const real = siblings.filter((device) => !isPseudoDevice(device.deviceId));
+  if (!real.length) return siblings[0].deviceId;
+  // Windows may give every endpoint of one Bluetooth headset the same groupId, Stereo and
+  // Hands-Free alike. The one that actually plays while the headset microphone is open is the
+  // Hands-Free endpoint, so tie-break on the label: exact match with the microphone's own label
+  // first, then any Hands-Free/Headset endpoint, then whatever is left.
+  const inputLabel = normalizeDeviceLabel(input.label);
+  const exact = inputLabel ? real.find((device) => normalizeDeviceLabel(device.label) === inputLabel) : undefined;
+  const handsFree = HANDS_FREE_PATTERN.test(inputLabel) ? real.find((device) => HANDS_FREE_PATTERN.test(normalizeDeviceLabel(device.label))) : undefined;
+  return (exact ?? handsFree ?? real[0]).deviceId;
+}
+
+const HANDS_FREE_PATTERN = /hands-?free|headset|hfp/i;
+
+/** Strip the "Default - " / "Communications - " (and pt-BR) prefixes Chrome prepends to alias devices. */
+export function normalizeDeviceLabel(label: string) {
+  return label.replace(/^(default|communications|padr[aã]o|comunica[cç][oõ]es)\s*[-–]\s*/i, '').trim().toLowerCase();
 }
 
 /** A stored selection is only worth applying while that device is still plugged in. */
