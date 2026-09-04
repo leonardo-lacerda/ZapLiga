@@ -19,10 +19,12 @@ export const TENANT_FEATURES = [
 export type TenantFeature = typeof TENANT_FEATURES[number];
 export type TenantFeatureFlags = Record<TenantFeature, boolean>;
 export const defaultTenantFeatureFlags = (): TenantFeatureFlags => ({
-  schedule_enforcement: false,
-  callbacks: false,
-  privacy_requests: false,
-  onboarding: false,
+  // Launch features stay on by default; super admin can still disable per tenant.
+  schedule_enforcement: true,
+  callbacks: true,
+  privacy_requests: true,
+  onboarding: true,
+  // Roadmap capabilities remain opt-in until each rollout gate.
   campaigns: false,
   decision_engine: false,
   recommendations: false,

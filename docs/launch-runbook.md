@@ -17,8 +17,8 @@ Use apenas número corporativo e destinatário autorizados. Conecte a linha, con
 ## Rollout
 
 1. Migrations são aplicadas antes da interface e nunca revertidas.
-2. Habilitar flags em uma empresa interna, observar 24 h; depois duas pilotos, observar 48 h; então todas.
-3. Rollback: um super admin desliga `onboarding`, `callbacks`, `privacy_requests` ou `schedule_enforcement` via `PATCH /api/tenants/:tenantId/feature-flags`. Supressão não possui bypass e líderes não controlam flags.
+2. Flags de lançamento (`onboarding`, `callbacks`, `privacy_requests`, `schedule_enforcement`) nascem ligadas para toda empresa. Caps do roadmap (`campaigns`, etc.) continuam opt-in.
+3. Rollback: um super admin desliga `onboarding`, `callbacks`, `privacy_requests` ou `schedule_enforcement` via `PATCH /api/tenants/:tenantId/feature-flags` (ou Admin → Recursos da empresa). Supressão não possui bypass e líderes não controlam flags.
 4. Cadastro público só é ligado após aprovação formal do Gate B.
 
 ## Incidente

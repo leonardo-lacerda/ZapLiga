@@ -1,21 +1,33 @@
 import { defaultTenantFeatureFlags, FeatureFlagsService, TENANT_FEATURES } from './feature-flags.service';
 
 describe('FeatureFlagsService', () => {
-  it('defaults safely to disabled before rollout and supports audited enablement', async () => {
-    const db = { query: jest.fn().mockResolvedValueOnce({ rows: [] }).mockResolvedValueOnce({ rows: [] }) };
+  it('defaults launch features to enabled and supports audited disablement', async () => {
+    const db = { query: jest.fn()
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [] }) };
     const redis = { client: { get: jest.fn().mockResolvedValue(null), set: jest.fn().mockResolvedValue('OK'), del: jest.fn().mockResolvedValue(1) } };
     const audit = { record: jest.fn().mockResolvedValue(undefined) };
     const service = new FeatureFlagsService(db as any, redis as any, audit as any);
 
     expect(await service.get('tenant-1')).toEqual(defaultTenantFeatureFlags());
-    const updated = await service.update('tenant-1', { callbacks: true }, 'leader-1');
+    expect(defaultTenantFeatureFlags()).toMatchObject({
+      callbacks: true,
+      onboarding: true,
+      privacy_requests: true,
+      schedule_enforcement: true,
+      campaigns: false,
+    });
 
-    expect(updated.callbacks).toBe(true);
+    const updated = await service.update('tenant-1', { callbacks: false }, 'leader-1');
+
+    expect(updated.callbacks).toBe(false);
+    expect(updated.onboarding).toBe(true);
     expect(updated.campaigns).toBe(false);
     expect(db.query.mock.calls[2][0]).toContain('campaigns=EXCLUDED.campaigns');
     expect(db.query.mock.calls[2][1]).toEqual([
       'tenant-1',
-      ...TENANT_FEATURES.map((feature) => feature === 'callbacks'),
+      ...TENANT_FEATURES.map((feature) => feature === 'callbacks' ? false : defaultTenantFeatureFlags()[feature]),
       'leader-1',
     ]);
     expect(audit.record).toHaveBeenCalledWith(expect.objectContaining({ action: 'tenant.feature_flags_updated', metadata: { changed: ['callbacks'] } }));
@@ -43,13 +55,14 @@ describe('FeatureFlagsService', () => {
     const audit = { record: jest.fn().mockResolvedValue(undefined) };
     const service = new FeatureFlagsService(db as any, redis as any, audit as any);
     const dtoLikeUpdate = Object.fromEntries(TENANT_FEATURES.map((feature) => [feature, undefined])) as Partial<Record<(typeof TENANT_FEATURES)[number], boolean>>;
-    dtoLikeUpdate.schedule_enforcement = true;
+    dtoLikeUpdate.callbacks = false;
 
     const updated = await service.update('tenant-1', dtoLikeUpdate, 'leader-1');
 
+    expect(updated.callbacks).toBe(false);
     expect(updated.schedule_enforcement).toBe(true);
     expect(updated.campaigns).toBe(false);
     expect(db.query.mock.calls[1][1]).not.toContain(undefined);
-    expect(audit.record).toHaveBeenCalledWith(expect.objectContaining({ metadata: { changed: ['schedule_enforcement'] } }));
+    expect(audit.record).toHaveBeenCalledWith(expect.objectContaining({ metadata: { changed: ['callbacks'] } }));
   });
 });

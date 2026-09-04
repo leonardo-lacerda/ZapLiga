@@ -1,8 +1,24 @@
 import { vi } from 'vitest';
-import { apiFetch, clearAccessToken, clearActiveTenantId, json, runAuthTransition, setAccessToken, setActiveTenantId } from './api';
+import { ApiError, apiFetch, clearAccessToken, clearActiveTenantId, json, runAuthTransition, setAccessToken, setActiveTenantId } from './api';
 
 describe('tenant request lifecycle', () => {
   afterEach(() => { clearAccessToken(); clearActiveTenantId(); vi.unstubAllGlobals(); });
+
+  it('extracts nested Nest conflict payloads into ApiError', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({
+      statusCode: 409,
+      message: { code: 'feature_disabled', feature: 'callbacks', message: 'Recurso temporariamente indisponivel para esta empresa' },
+    }), { status: 409, headers: { 'content-type': 'application/json' } })));
+    setAccessToken(`x.${btoa(JSON.stringify({ exp: Math.floor(Date.now() / 1000) + 900 }))}.y`);
+    await expect(json('/api/callbacks')).rejects.toMatchObject({
+      name: 'ApiError',
+      message: 'Recurso temporariamente indisponivel para esta empresa',
+      code: 'feature_disabled',
+      feature: 'callbacks',
+      status: 409,
+    });
+    expect(ApiError).toBeDefined();
+  });
 
   it('rewrites new feature aliases and aborts the old tenant request on switch', async () => {
     let capturedUrl = ''; let capturedSignal: AbortSignal | undefined;

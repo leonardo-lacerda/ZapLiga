@@ -58,6 +58,7 @@ function AuthenticatedApp() {
   const [error, setError] = useState('');
   const [statusError, setStatusError] = useState('');
   const [importResult, setImportResult] = useState('');
+  const [featureFlags, setFeatureFlags] = useState<AnyRow | null>(null);
   const [qr, setQr] = useState<any>(null);
   const [qrNumberId, setQrNumberId] = useState('');
   const [numberForm, setNumberForm] = useState({ label: '', phone: '', maxConcurrentCalls: 1, cooldownSeconds: 60, maxCallsPerWindow: 3, callWindowSeconds: 180 });
@@ -136,7 +137,16 @@ function AuthenticatedApp() {
     setStatus({}); setNumbers([]); setLeads([]); setLeadFolders([]); setSelectedFolderId('');
     setSdrs([]); setCalls([]); setLogs([]); setNumbersOffset(0); setLeadsOffset(0); setCallsOffset(0);
     setManualPhone(''); setManualName(''); setError(''); setImportResult('');
+    setFeatureFlags(null);
     const socket = control.current; control.current = undefined; if (socket) { socket.onclose = null; socket.close(); }
+  }, [activeTenantId]);
+  useEffect(() => {
+    if (!activeTenantId) return;
+    let cancelled = false;
+    void json(`/api/tenants/${activeTenantId}/feature-flags`)
+      .then((flags) => { if (!cancelled) setFeatureFlags(flags); })
+      .catch(() => { if (!cancelled) setFeatureFlags({ callbacks: true, onboarding: true, privacy_requests: true, schedule_enforcement: true }); });
+    return () => { cancelled = true; };
   }, [activeTenantId]);
   useEffect(() => {
     const onPopState = () => setTab(tabFromPath(window.location.pathname));
@@ -345,9 +355,14 @@ function AuthenticatedApp() {
     { key: 'profile', label: 'Meu perfil', icon: 'user', group: 'Conta' },
   ];
   if (isSuperAdmin) navItems.push({ key: 'admin', label: 'Admin', icon: 'settings', group: 'Administração' });
+  const gatedTabs: Partial<Record<TabKey, boolean>> = {
+    callbacks: !featureFlags || Boolean(featureFlags.callbacks),
+    privacy: !featureFlags || Boolean(featureFlags.privacy_requests),
+  };
+  const visibleNavItems = navItems.filter((item) => gatedTabs[item.key] !== false);
   const connectedNumbers = (status.numbers ?? []).filter((number: AnyRow) => ['connected', 'online', 'ready', 'authenticated'].includes(String(number.status).toLowerCase())).length;
-  const navigationGroups = (['Operação', 'Configuração', 'Conta', 'Administração'] as const).map((group) => ({ label: group, items: navItems.filter((item) => item.group === group && (!isSdr || ['dashboard', 'sdrMetrics', 'callbacks', 'profile'].includes(item.key))) })).filter((group) => group.items.length > 0);
-  const moduleTitle = navItems.find((item) => item.key === tab)?.label ?? 'Visão geral';
+  const navigationGroups = (['Operação', 'Configuração', 'Conta', 'Administração'] as const).map((group) => ({ label: group, items: visibleNavItems.filter((item) => item.group === group && (!isSdr || ['dashboard', 'sdrMetrics', 'callbacks', 'profile'].includes(item.key))) })).filter((group) => group.items.length > 0);
+  const moduleTitle = visibleNavItems.find((item) => item.key === tab)?.label ?? navItems.find((item) => item.key === tab)?.label ?? 'Visão geral';
   const queuedLeads = isSdr ? (status.queue?.total ?? 0) : (status.lead_counts?.queued ?? 0);
   const availableSdrs = isSdr ? (status.sdr?.available ? 1 : 0) : (status.available_sdrs ?? 0);
 
@@ -361,9 +376,9 @@ function AuthenticatedApp() {
         {tab === 'settings' && <div className="page-content"><OperationSettingsPage status={status} onChanged={load} /></div>}
         {tab === 'integrations' && <div className="page-content"><LeadIntegrationsPage tenantId={activeTenantId} folders={leadFolders} /></div>}
         {tab === 'profile' && session && <div className="page-content"><ProfilePage session={session} reload={reload} logout={logout} /></div>}
-        {tab === 'callbacks' && <div className="page-content"><CallbacksPage sdrs={sdrs} isSdr={isSdr} /></div>}
+        {tab === 'callbacks' && <div className="page-content"><CallbacksPage sdrs={sdrs} isSdr={isSdr} featureEnabled={!featureFlags || Boolean(featureFlags.callbacks)} /></div>}
         {tab === 'privacy' && <div className="page-content"><PrivacyPage /></div>}
-        <div className="page-content">{tab === 'dashboard' && <Dashboard tenantId={activeTenantId} isSdr={isSdr} status={status} available={available} connected={connected} connecting={connecting} sdrReady={sdrReady} sdrs={sdrs} connectSdr={connectSdr} disconnectSdr={disconnect} setAvailability={setAvailability} manualDial={manualDial} manualPhone={manualPhone} setManualPhone={setManualPhone} manualName={manualName} setManualName={setManualName} manualCalling={manualCalling} logs={logs} activeCall={activeCall} hangup={hangup} micMuted={micMuted} toggleMicMute={toggleMicMute} connectedNumbers={connectedNumbers} postCall={postCall} finishPostCall={finishPostCall} finishingPause={finishingPause} audioReady={audioReady} connectionNotice={connectionNotice} dateRange={dateRange} toggleDialer={toggleDialer} audioDevices={audioDevices} selectInputDevice={selectInputDevice} selectOutputDevice={selectOutputDevice} testSpeaker={testSpeaker} inboundAudio={inboundAudio} />}{tab === 'metrics' && activeTenantId && <MetricsPage tenantId={activeTenantId} leadFolders={leadFolders} sdrs={sdrs} numbers={numbers} />}{tab === 'numbers' && <NumbersPage numbers={numbers} numbersTotal={numbersTotal} numbersOffset={numbersOffset} onNumbersPageChange={setNumbersOffset} numberForm={numberForm} setNumberForm={setNumberForm} createNumber={createNumber} showQr={showQr} reconnectNumber={reconnectNumber} removeNumber={removeNumber} qrLoading={qrLoading} qr={qr} closeQr={closeQr} canManageNumbers={!isSdr} />}{tab === 'leads' && <LeadsPage leads={leads} leadsTotal={leadsTotal} leadsOffset={leadsOffset} onLeadsPageChange={setLeadsOffset} folders={leadFolders} selectedFolderId={selectedFolderId} selectedFolder={leadFolders.find((folder) => folder.id === selectedFolderId)} metrics={folderMetrics} setSelectedFolderId={setSelectedFolderId} createFolder={createFolder} updateFolder={updateFolder} removeFolder={removeFolder} leadForm={leadForm} setLeadForm={setLeadForm} createLead={createLead} importCsv={importCsv} importResult={importResult} clearFolder={clearFolder} manualCall={manualCall} resetLead={resetLead} removeLead={removeLead} suppressLead={suppressLead} />}{tab === 'compliance' && activeTenantId && <CompliancePage tenantId={activeTenantId} />}{tab === 'sdrs' && <SdrsPage tenantId={activeTenantId} sdrs={sdrs} />}{tab === 'calls' && <CallsPage calls={calls} callsTotal={callsTotal} callsOffset={callsOffset} onCallsPageChange={setCallsOffset} search={callsSearch} onSearchChange={setCallsSearch} status={callsStatus} onStatusChange={setCallsStatus} result={callsResult} onResultChange={setCallsResult} />}{tab === 'access' && activeTenantId && <AccessPage tenantId={activeTenantId} role={isSuperAdmin ? 'super_admin' : activeTenant?.role ?? ''} />}{tab === 'admin' && isSuperAdmin && <AdminPage onChanged={reload} onOpenTenant={(tenantId) => { selectTenant(tenantId); setTab('dashboard'); }} />}</div>
+        <div className="page-content">{tab === 'dashboard' && <Dashboard tenantId={activeTenantId} isSdr={isSdr} status={status} available={available} connected={connected} connecting={connecting} sdrReady={sdrReady} sdrs={sdrs} connectSdr={connectSdr} disconnectSdr={disconnect} setAvailability={setAvailability} manualDial={manualDial} manualPhone={manualPhone} setManualPhone={setManualPhone} manualName={manualName} setManualName={setManualName} manualCalling={manualCalling} logs={logs} activeCall={activeCall} hangup={hangup} micMuted={micMuted} toggleMicMute={toggleMicMute} connectedNumbers={connectedNumbers} postCall={postCall} finishPostCall={finishPostCall} finishingPause={finishingPause} audioReady={audioReady} connectionNotice={connectionNotice} dateRange={dateRange} toggleDialer={toggleDialer} audioDevices={audioDevices} selectInputDevice={selectInputDevice} selectOutputDevice={selectOutputDevice} testSpeaker={testSpeaker} inboundAudio={inboundAudio} featureFlags={featureFlags ?? undefined} />}{tab === 'metrics' && activeTenantId && <MetricsPage tenantId={activeTenantId} leadFolders={leadFolders} sdrs={sdrs} numbers={numbers} />}{tab === 'numbers' && <NumbersPage numbers={numbers} numbersTotal={numbersTotal} numbersOffset={numbersOffset} onNumbersPageChange={setNumbersOffset} numberForm={numberForm} setNumberForm={setNumberForm} createNumber={createNumber} showQr={showQr} reconnectNumber={reconnectNumber} removeNumber={removeNumber} qrLoading={qrLoading} qr={qr} closeQr={closeQr} canManageNumbers={!isSdr} />}{tab === 'leads' && <LeadsPage leads={leads} leadsTotal={leadsTotal} leadsOffset={leadsOffset} onLeadsPageChange={setLeadsOffset} folders={leadFolders} selectedFolderId={selectedFolderId} selectedFolder={leadFolders.find((folder) => folder.id === selectedFolderId)} metrics={folderMetrics} setSelectedFolderId={setSelectedFolderId} createFolder={createFolder} updateFolder={updateFolder} removeFolder={removeFolder} leadForm={leadForm} setLeadForm={setLeadForm} createLead={createLead} importCsv={importCsv} importResult={importResult} clearFolder={clearFolder} manualCall={manualCall} resetLead={resetLead} removeLead={removeLead} suppressLead={suppressLead} />}{tab === 'compliance' && activeTenantId && <CompliancePage tenantId={activeTenantId} />}{tab === 'sdrs' && <SdrsPage tenantId={activeTenantId} sdrs={sdrs} />}{tab === 'calls' && <CallsPage calls={calls} callsTotal={callsTotal} callsOffset={callsOffset} onCallsPageChange={setCallsOffset} search={callsSearch} onSearchChange={setCallsSearch} status={callsStatus} onStatusChange={setCallsStatus} result={callsResult} onResultChange={setCallsResult} />}{tab === 'access' && activeTenantId && <AccessPage tenantId={activeTenantId} role={isSuperAdmin ? 'super_admin' : activeTenant?.role ?? ''} />}{tab === 'admin' && isSuperAdmin && <AdminPage onChanged={reload} onOpenTenant={(tenantId) => { selectTenant(tenantId); setTab('dashboard'); }} />}</div>
       </main></div>
   </div></>;
 }
