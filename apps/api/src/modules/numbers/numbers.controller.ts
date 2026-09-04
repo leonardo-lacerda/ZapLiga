@@ -27,7 +27,12 @@ export class NumbersController {
     if (!label) throw new BadRequestException('label é obrigatório');
     try {
       const session = await this.createWaxumSession(label);
-      const result = await this.db.query(`INSERT INTO whatsapp_numbers (id,tenant_id,label,phone,waxum_session_id,max_concurrent_calls,cooldown_seconds,max_calls_per_window,call_window_seconds) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING *`, [randomUUID(), tenantId, label, digits(body.phone) || null, session.id, Number(body.maxConcurrentCalls ?? 1), Number(body.cooldownSeconds ?? 60), Number(body.maxCallsPerWindow ?? 3), Number(body.callWindowSeconds ?? 180)]);
+      // A new line's cooldown defaults to the tenant's own "Proteção entre
+      // chamadas" (Configurações do discador) instead of a hardcoded value,
+      // so that setting stays the single place operators configure it.
+      const dialerDefaults = await this.db.query('SELECT default_number_cooldown_seconds FROM dialer_settings WHERE tenant_id = $1', [tenantId]);
+      const defaultCooldownSeconds = Number(dialerDefaults.rows[0]?.default_number_cooldown_seconds ?? 60);
+      const result = await this.db.query(`INSERT INTO whatsapp_numbers (id,tenant_id,label,phone,waxum_session_id,max_concurrent_calls,cooldown_seconds,max_calls_per_window,call_window_seconds) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING *`, [randomUUID(), tenantId, label, digits(body.phone) || null, session.id, Number(body.maxConcurrentCalls ?? 1), Number(body.cooldownSeconds ?? defaultCooldownSeconds), Number(body.maxCallsPerWindow ?? 3), Number(body.callWindowSeconds ?? 180)]);
       await this.audit.record({ actorUserId: user.id, tenantId, action: 'number.created', entityType: 'whatsapp_number', entityId: result.rows[0].id });
       return result.rows[0];
     } catch (error) {

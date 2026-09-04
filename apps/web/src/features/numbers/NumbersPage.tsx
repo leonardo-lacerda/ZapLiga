@@ -52,69 +52,8 @@ export function NumbersPage({ numbers, numbersTotal, numbersOffset, onNumbersPag
           </div>
         </div>
 
-        <div className="number-form-section">
-          <div className="number-form-section-head">
-            <strong>Proteção da linha</strong>
-            <span>Limites que evitam spam e bloqueio no WhatsApp. Os valores padrão já são seguros para começar.</span>
-          </div>
-          <div className="number-form-grid number-form-grid-limits">
-            <label>
-              <span>Chamadas simultâneas</span>
-              <input
-                name="maxConcurrentCalls"
-                type="number"
-                min={1}
-                max={50}
-                value={numberForm.maxConcurrentCalls ?? 1}
-                onChange={(e) => updateNumberField(setNumberForm, numberForm, 'maxConcurrentCalls', Number(e.target.value))}
-                required
-              />
-              <small>Quantas chamadas esta linha pode manter ao mesmo tempo (1–50). Padrão: 1.</small>
-            </label>
-            <label>
-              <span>Espera entre chamadas (segundos)</span>
-              <input
-                name="cooldownSeconds"
-                type="number"
-                min={0}
-                max={3600}
-                value={numberForm.cooldownSeconds ?? 60}
-                onChange={(e) => updateNumberField(setNumberForm, numberForm, 'cooldownSeconds', Number(e.target.value))}
-                required
-              />
-              <small>Pausa mínima após cada chamada antes de discar de novo (0–3600). Padrão: 60.</small>
-            </label>
-            <label>
-              <span>Tentativas na janela</span>
-              <input
-                name="maxCallsPerWindow"
-                type="number"
-                min={1}
-                max={20}
-                value={numberForm.maxCallsPerWindow ?? 3}
-                onChange={(e) => updateNumberField(setNumberForm, numberForm, 'maxCallsPerWindow', Number(e.target.value))}
-                required
-              />
-              <small>Máximo de tentativas nesta linha dentro da janela móvel (1–20). Padrão: 3.</small>
-            </label>
-            <label>
-              <span>Janela de proteção (segundos)</span>
-              <input
-                name="callWindowSeconds"
-                type="number"
-                min={60}
-                max={3600}
-                value={numberForm.callWindowSeconds ?? 180}
-                onChange={(e) => updateNumberField(setNumberForm, numberForm, 'callWindowSeconds', Number(e.target.value))}
-                required
-              />
-              <small>Duração da janela móvel usada com as tentativas acima (60–3600). Padrão: 180.</small>
-            </label>
-          </div>
-        </div>
-
         <div className="number-form-footer">
-          <p className="form-hint">Depois de criar, use <strong>Abrir QR</strong> no card da sessão para conectar o WhatsApp no celular.</p>
+          <p className="form-hint">A linha nasce com os limites de <strong>Configurações do discador</strong> (chamadas simultâneas e proteção entre chamadas). Depois de criar, use <strong>Abrir QR</strong> no card da sessão para conectar o WhatsApp no celular.</p>
           <Button icon="plus">Criar sessão</Button>
         </div>
       </form>

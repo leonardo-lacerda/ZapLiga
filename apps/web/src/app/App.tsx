@@ -62,7 +62,7 @@ function AuthenticatedApp() {
   const [featureFlags, setFeatureFlags] = useState<AnyRow | null>(null);
   const [qr, setQr] = useState<any>(null);
   const [qrNumberId, setQrNumberId] = useState('');
-  const [numberForm, setNumberForm] = useState({ label: '', phone: '', maxConcurrentCalls: 1, cooldownSeconds: 60, maxCallsPerWindow: 3, callWindowSeconds: 180 });
+  const [numberForm, setNumberForm] = useState({ label: '', phone: '' });
   const [leadForm, setLeadForm] = useState({ name: '', phone: '' });
   const [manualPhone, setManualPhone] = useState('');
   const [manualName, setManualName] = useState('');
@@ -321,7 +321,7 @@ function AuthenticatedApp() {
     await switchAccount(accountId);
   };
   const hangup = () => { if (!activeCall) return; const answered = activeCall.phase === 'answered' || activeCall.mediaActive; control.current?.send(JSON.stringify({ type: 'outcome', callId: activeCall.callId, outcome: answered ? 'sdr_hangup' : 'sdr_cancelled' })); };
-  const createNumber = async (event: React.FormEvent) => { event.preventDefault(); try { await json('/api/numbers', { method: 'POST', body: JSON.stringify(numberForm) }); setNumberForm({ label: '', phone: '', maxConcurrentCalls: 1, cooldownSeconds: 60, maxCallsPerWindow: 3, callWindowSeconds: 180 }); await load(); } catch (e) { setError(String(e)); } };
+  const createNumber = async (event: React.FormEvent) => { event.preventDefault(); try { await json('/api/numbers', { method: 'POST', body: JSON.stringify(numberForm) }); setNumberForm({ label: '', phone: '' }); await load(); } catch (e) { setError(String(e)); } };
   const createFolder = async (name: string) => { try { const folder = await json('/api/lead-folders', { method: 'POST', body: JSON.stringify({ name, isActive: true }) }); setSelectedFolderId(folder.id); await load(); } catch (e) { setError(e instanceof Error ? e.message : String(e)); } };
   const updateFolder = async (id: string, input: AnyRow) => { try { await json(`/api/lead-folders/${id}`, { method: 'PATCH', body: JSON.stringify(input) }); await load(); } catch (e) { setError(e instanceof Error ? e.message : String(e)); } };
   const removeFolder = async (id: string, name: string) => { if (!window.confirm(`Excluir a pasta ${name}? Ela precisa estar vazia para ser excluída.`)) return; try { await json(`/api/lead-folders/${id}`, { method: 'DELETE' }); if (selectedFolderId === id) setSelectedFolderId(''); await load(); } catch (e) { setError(e instanceof Error ? e.message : String(e)); } };
