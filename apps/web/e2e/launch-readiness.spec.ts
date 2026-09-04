@@ -6,7 +6,7 @@ const wsBase = apiBase.replace(/^http/, 'ws');
 const suffix = `${Date.now()}-${Math.floor(Math.random() * 10000)}`;
 const initialPassword = 'Launch!23456';
 const changedPassword = 'Changed!23456';
-const e2eAdminEmail = process.env.E2E_ADMIN_EMAIL ?? 'admin@zapcall.local';
+const e2eAdminEmail = process.env.E2E_ADMIN_EMAIL ?? 'admin@zapliga.local';
 const e2eAdminPassword = process.env.E2E_ADMIN_PASSWORD ?? 'ZapCall-Smoke-2026!';
 
 let leaderToken = '';

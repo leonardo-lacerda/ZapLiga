@@ -44,10 +44,10 @@ export class RecommendationsRepository {
     }
     if (activeCodes.length) {
       await this.db.query(`UPDATE operation_recommendations SET status='resolved', resolved_at=now(), updated_at=now()
-        WHERE tenant_id=$1 AND status IN ('active','snoozed') AND NOT (code = ANY($2::text[]))`, [tenantId, activeCodes]);
+        WHERE tenant_id=$1 AND status IN ('active','snoozed') AND code NOT LIKE 'operation_health_%' AND NOT (code = ANY($2::text[]))`, [tenantId, activeCodes]);
     } else {
       await this.db.query(`UPDATE operation_recommendations SET status='resolved', resolved_at=now(), updated_at=now()
-        WHERE tenant_id=$1 AND status IN ('active','snoozed')`, [tenantId]);
+        WHERE tenant_id=$1 AND status IN ('active','snoozed') AND code NOT LIKE 'operation_health_%'`, [tenantId]);
     }
     return synced;
   }

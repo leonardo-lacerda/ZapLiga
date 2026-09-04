@@ -97,7 +97,10 @@ export function evaluateLeadEligibility(input: LeadEligibilityInput): Eligibilit
   if (callback?.status && callbackStatuses.has(String(callback.status))) {
     if (callback.assignedSdrId) {
       const ownedByAnother = !input.sdrId || callback.assignedSdrId !== input.sdrId;
-      add(ownedByAnother ? 'callback_owned_by_another_sdr' : 'callback_due', false);
+      const callbackDueAt = asDate(callback.dueAt);
+      const callbackIsDue = ['due', 'reassigned'].includes(String(callback.status)) && (!callbackDueAt || callbackDueAt.getTime() <= now.getTime());
+      const manualDueCallback = input.mode === 'manual' && callbackIsDue && !ownedByAnother;
+      add(ownedByAnother ? 'callback_owned_by_another_sdr' : 'callback_due', manualDueCallback);
     } else {
       add(callback.status === 'due' ? 'callback_due' : 'callback_pending', false);
     }

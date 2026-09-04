@@ -133,10 +133,20 @@ endpoints gerais e por linha atrás de feature flag.
 - Visão geral, drilldown e timeline.
 - Conectar riscos ao Plano 03.
 
+Status: concluída no Lote 10. A central e a página dedicada mostram score,
+componentes, capacidade, próxima liberação, tendência, drilldown por linha e
+timeline com autoria automática ou humana; riscos continuam conectados às
+recomendações catalogadas do Plano 03.
+
 ### Fase 4 — histórico e tendência
 
 - Persistir snapshots agregados.
 - Comparar estabilidade antes/depois de mudanças de ritmo.
+
+Status: concluída no Lote 10 para a primeira versão do produto. Snapshots são
+persistidos por tenant, expostos por histórico e apresentados como tendência;
+comparações causais antes/depois permanecem fora do escopo até a instrumentação
+de experimentos do Plano 05.
 
 ## Critérios de aceite
 
@@ -145,8 +155,8 @@ endpoints gerais e por linha atrás de feature flag.
 - [x] Bloqueios de compliance não podem ser compensados pelo score.
 - [x] Reiniciar a API não apaga cooldown, quarentena ou evidência necessária.
 - [x] A timeline distingue evento automático de intervenção humana.
-- [ ] Nenhuma tela apresenta limites internos como regra oficial do WhatsApp.
-- [ ] Cálculo, histórico e endpoints são isolados por tenant.
+- [x] Nenhuma tela apresenta limites internos como regra oficial do WhatsApp.
+- [x] Cálculo, histórico e endpoints são isolados por tenant.
 - [ ] Testes cobrem desconexão, 429, queda rápida, cooldown e recuperação.
 
 ## Métricas

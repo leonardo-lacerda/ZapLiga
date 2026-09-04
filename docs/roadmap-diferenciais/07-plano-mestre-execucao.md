@@ -612,7 +612,7 @@ Atualizar esta tabela ao final de cada lote. Estados válidos: `pendente`,
 | 07 | concluído | Catálogo tenant-scoped, central de recomendações, flag, evidência e eventos aprovados em `evidencias/lote-07-central-recomendacoes.md`. |
 | 08 | concluído | Ações recomendadas catalogadas, revalidadas e idempotentes; executor operacional, confirmação, before/after e falha auditável em `evidencias/lote-08-acoes-recomendadas-seguras.md`. |
 | 09 | concluído | Telemetria, fórmula `v1`, snapshots, timeline por linha, flag, isolamento e recomendações de risco em `evidencias/lote-09-telemetria-score-saude.md`. |
-| 10 | em andamento | Experiência visual de saúde, drilldown, timeline, capacidade e tendência. |
+| 10 | concluído | Experiência visual, drilldown, timeline, capacidade, tendência e callback seguro validados em `evidencias/lote-10-experiencia-saude-historico.md`. |
 | 11 | pendente | — |
 | 12 | pendente | — |
 | 13 | pendente | — |
@@ -639,6 +639,5 @@ O conjunto está pronto somente quando:
 
 ## Próxima ação de execução
 
-Os Lotes 08 e 09 estão concluídos com evidência local. A frente em execução é o
-Lote 10: experiência visual de saúde, drilldown, timeline, capacidade atual e
-tendência histórica.
+Os Lotes 00 a 10 estão concluídos com evidência local. A frente em execução é o
+Lote 11: contrato analítico, outbox, qualidade de eventos e webhooks outbound.

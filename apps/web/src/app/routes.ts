@@ -17,6 +17,7 @@ export const tabPaths: Record<TabKey, string> = {
   calls: '/app/historico',
   access: '/app/acesso',
   admin: '/app/admin',
+  operationHealth: '/app/saude-operacao',
 };
 
 const tabPathEntries = Object.entries(tabPaths) as Array<[TabKey, string]>;

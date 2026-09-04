@@ -82,7 +82,7 @@ export class RecommendationsService {
     const actionType = String(row.action_type ?? action.type ?? '');
     const before = await this.actionState(tenantId, actionType, action.payload ?? {});
     try {
-      const result = await this.executeAction(tenantId, actorUserId, actionType, action.payload ?? {});
+      const result = await this.executeAction(tenantId, actorUserId, actionType, action.payload ?? {}, id);
       const after = await this.actionState(tenantId, actionType, action.payload ?? {});
       await this.repo.recordEvent(tenantId, id, 'applied', actorUserId, { actionType, before, after, result });
       await this.repo.updateStatus(tenantId, id, 'resolved');
@@ -101,7 +101,7 @@ export class RecommendationsService {
     return null;
   }
 
-  private async executeAction(tenantId: string, actorUserId: string, actionType: string, payload: Record<string, any>) {
+  private async executeAction(tenantId: string, actorUserId: string, actionType: string, payload: Record<string, any>, recommendationId?: string) {
     if (actionType === 'navigate') return { kind: 'navigation', payload };
     if (actionType === 'pause_campaign') {
       const campaignId = String(payload.campaignId ?? '');
@@ -134,6 +134,11 @@ export class RecommendationsService {
         if (number.flagged_until && new Date(number.flagged_until).getTime() > Date.now()) return { kind: 'no_op', reason: 'already_protected', numberId, flaggedUntil: number.flagged_until };
         const flaggedUntil = new Date(Date.now() + 15 * 60 * 1000);
         await client.query('UPDATE whatsapp_numbers SET flagged_until=$1 WHERE tenant_id=$2 AND id=$3', [flaggedUntil, tenantId, numberId]);
+        await client.query(`
+          INSERT INTO number_health_events (tenant_id, number_id, source_event_id, event_type, actor_type, metadata, occurred_at)
+          VALUES ($1, $2, $3, 'manual_protection', 'human', $4::jsonb, now())
+          ON CONFLICT (tenant_id, source_event_id) WHERE source_event_id IS NOT NULL DO NOTHING
+        `, [tenantId, numberId, `recommendation:${recommendationId ?? 'unknown'}:manual_protection`, JSON.stringify({ source: 'recommendation', recommendationId: recommendationId ?? null, flaggedUntil: flaggedUntil.toISOString() })]);
         return { kind: 'number_temporarily_disabled', numberId, flaggedUntil: flaggedUntil.toISOString() };
       });
       await this.audit.record({ actorUserId, tenantId, action: 'recommendation.number_temporarily_disabled', entityType: 'whatsapp_number', entityId: numberId, metadata: result });

@@ -1,4 +1,4 @@
-import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, HttpException, Injectable, NotFoundException } from '@nestjs/common';
 import { DatabaseService } from '../../database/database.service';
 import { AuditService } from '../audit/audit.service';
 import { DialerService } from '../dialer/dialer.service';
@@ -79,7 +79,12 @@ export class CallbacksService {
       assignedUserId = (await this.db.query('SELECT user_id FROM sdrs WHERE tenant_id = $1 AND id = $2 LIMIT 1', [tenantId, callback.assigned_sdr_id])).rows[0]?.user_id;
       if (!assignedUserId) throw new BadRequestException('O SDR responsável não está mais disponível');
     }
-    const result = await this.dialer.manualCallWithInput({ leadId: callback.lead_id }, tenantId, assignedUserId);
-    await this.audit.record({ actorUserId, tenantId, action: 'callback.call_started', entityType: 'callback', entityId: id, metadata: { callId: result.callId } }); return result;
+    try {
+      const result = await this.dialer.manualCallWithInput({ leadId: callback.lead_id }, tenantId, assignedUserId);
+      await this.audit.record({ actorUserId, tenantId, action: 'callback.call_started', entityType: 'callback', entityId: id, metadata: { callId: result.callId } }); return result;
+    } catch (error) {
+      if (error instanceof HttpException) throw error;
+      throw new BadRequestException(String(error instanceof Error ? error.message : error));
+    }
   }
 }

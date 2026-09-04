@@ -145,6 +145,25 @@ function RecommendationCenter({ tenantId, enabled }: { tenantId: string; enabled
   </section>;
 }
 
+const operationHealthLabels: Record<string, string> = { healthy: 'Saudável', attention: 'Atenção', degraded: 'Degradado', blocked: 'Bloqueado', insufficient_data: 'Dados insuficientes' };
+const operationHealthTone = (state: string) => state === 'healthy' ? 'success' : state === 'blocked' || state === 'degraded' ? 'danger' : state === 'attention' ? 'warning' : 'info';
+const operationHealthReason = (reason: string) => ({ no_connected_number: 'nenhuma linha conectada', high_failure_rate: 'falhas acima do esperado', rate_limited_numbers: 'linha sob limite temporário', rapid_failure_streak: 'quedas rápidas em sequência', no_available_sdr: 'nenhum SDR disponível', numbers_quarantined: 'linha em quarentena', insufficient_sample: 'amostra ainda insuficiente' }[reason] ?? reason.replaceAll('_', ' '));
+
+function OperationHealthCard({ tenantId, enabled }: { tenantId: string; enabled: boolean }) {
+  const [health, setHealth] = useState<AnyRow | null>(null);
+  const [loading, setLoading] = useState(enabled);
+  useEffect(() => {
+    if (!enabled || !tenantId) { setHealth(null); setLoading(false); return; }
+    let cancelled = false;
+    const refresh = async () => { try { const result = await json(`/api/tenants/${tenantId}/operation-health`); if (!cancelled) setHealth(result); } catch { /* o dashboard continua funcional se o módulo estiver indisponível */ } finally { if (!cancelled) setLoading(false); } };
+    void refresh();
+    const timer = window.setInterval(() => { if (document.visibilityState === 'visible') void refresh(); }, 30000);
+    return () => { cancelled = true; window.clearInterval(timer); };
+  }, [enabled, tenantId]);
+  if (!enabled) return null;
+  return <Panel className={`overview-operation-health${health ? ` overview-operation-health-${health.state}` : ''}`}><div className="overview-operation-health-heading"><div><span className="eyebrow">CONFIANÇA OPERACIONAL</span><h2>Saúde da operação</h2><p>O que merece atenção antes de aumentar o ritmo.</p></div>{health && <Badge tone={operationHealthTone(health.state)}><i className="badge-dot" />{operationHealthLabels[health.state] ?? health.state}</Badge>}</div>{loading && !health ? <div className="overview-operation-health-loading">Calculando sinais atuais…</div> : health ? <div className="overview-operation-health-body"><div className="overview-operation-health-score"><strong>{health.score}</strong><small>/100 · score interno</small></div><div className="overview-operation-health-copy"><strong>{health.nextSafeAction}</strong><span>{(health.reasonCodes ?? []).slice(0, 2).map((reason: string) => operationHealthReason(reason)).join(' · ') || 'Nenhum risco prioritário identificado.'}</span><small>Atualizado {health.collectedAt ? new Date(health.collectedAt).toLocaleTimeString('pt-BR') : 'agora'} · fórmula {health.formulaVersion}</small></div><Button variant="secondary" onClick={() => navigateToTab('operationHealth')}>Ver diagnóstico</Button></div> : <div className="overview-operation-health-empty"><Icon name="activity" size={18} /><span>Saúde temporariamente indisponível.</span><Button variant="ghost" onClick={() => navigateToTab('operationHealth')}>Abrir página</Button></div>}</Panel>;
+}
+
 function PerformancePanel({ status, dateRange }: AnyRow) {
   const completed = Number(status.call_counts?.completed ?? 0);
   const answered = Number(status.answered ?? 0);
@@ -177,6 +196,7 @@ export function OrganizerOverview(props: AnyRow) {
   const { status, dateRange, logs, connectedNumbers, toggleDialer } = props;
   return <div className="organizer-overview">
     <OverviewHero status={status} dateRange={dateRange} toggleDialer={toggleDialer} />
+    <OperationHealthCard tenantId={String(props.tenantId ?? '')} enabled={Boolean(props.featureFlags?.operation_health)} />
     {props.featureFlags?.recommendations ? <RecommendationCenter tenantId={String(props.tenantId ?? '')} enabled /> : <AttentionSection status={status} connectedNumbers={connectedNumbers} sdrs={props.sdrs} toggleDialer={toggleDialer} />}
     <OnboardingChecklist enabled={Boolean(props.featureFlags?.onboarding)} />
     <OperationsNowPanel tenantId={String(props.tenantId ?? '')} fallbackStatus={status} />

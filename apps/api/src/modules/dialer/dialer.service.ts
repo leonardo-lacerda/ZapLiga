@@ -1276,6 +1276,7 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
         this.assertEligibility({
           mode: isAutomatic ? 'automatic' : 'manual',
           manualQueueOverride: !isAutomatic,
+          sdrId: sdr.id,
           lead: { id: lead.id, phone: lead.phone, status: folder.rows[0].status ?? lead.status, attempts: folder.rows[0].attempts ?? lead.attempts, nextEligibleAt: folder.rows[0].next_eligible_at ?? lead.next_eligible_at, doNotCall: folder.rows[0].do_not_call ?? lead.do_not_call },
           maxAttempts,
           folderActive: folder.rows[0].is_active,

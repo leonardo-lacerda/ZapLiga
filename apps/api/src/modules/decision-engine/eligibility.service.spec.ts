@@ -37,6 +37,17 @@ describe('eligibility contract', () => {
     expect(eligibilityErrorMessage(result)).toContain('outro SDR');
   });
 
+  it('allows an owned due callback only when the human explicitly starts it', () => {
+    const allowed = evaluateLeadEligibility({ ...base, mode: 'manual', manualQueueOverride: true, sdrId: 'sdr-1', callback: { status: 'due', assignedSdrId: 'sdr-1' } });
+    expect(allowed.eligible).toBe(true);
+    const reassigned = evaluateLeadEligibility({ ...base, mode: 'manual', manualQueueOverride: true, sdrId: 'sdr-1', callback: { status: 'reassigned', assignedSdrId: 'sdr-1', dueAt: '2026-09-04T11:59:00.000Z' } });
+    expect(reassigned.eligible).toBe(true);
+    const futureReassignment = evaluateLeadEligibility({ ...base, mode: 'manual', manualQueueOverride: true, sdrId: 'sdr-1', callback: { status: 'reassigned', assignedSdrId: 'sdr-1', dueAt: '2026-09-04T12:01:00.000Z' } });
+    expect(futureReassignment.blockedBy).toContain('callback_due');
+    const pending = evaluateLeadEligibility({ ...base, mode: 'manual', manualQueueOverride: true, sdrId: 'sdr-1', callback: { status: 'pending', assignedSdrId: 'sdr-1' } });
+    expect(pending.blockedBy).toContain('callback_due');
+  });
+
   it('preserves the explicit manual redial override while retaining safety barriers', () => {
     const allowed = evaluateLeadEligibility({ ...base, mode: 'manual', manualQueueOverride: true, lead: { ...base.lead, status: 'completed', attempts: 99, nextEligibleAt: '2099-01-01T00:00:00.000Z' } });
     expect(allowed.eligible).toBe(true);

@@ -109,6 +109,13 @@ export class OperationHealthService implements OnModuleInit, OnModuleDestroy {
             AND last_call_ended_at IS NOT NULL
             AND last_call_ended_at > now() - (cooldown_seconds * interval '1 second'))::int AS cooldown,
           COALESCE(sum(max_concurrent_calls), 0)::int AS capacity,
+          min(CASE
+            WHEN flagged_until > now() THEN flagged_until
+            WHEN last_call_ended_at IS NOT NULL
+              AND last_call_ended_at + (cooldown_seconds * interval '1 second') > now()
+              THEN last_call_ended_at + (cooldown_seconds * interval '1 second')
+            ELSE NULL
+          END) AS next_release_at,
           count(*) FILTER (WHERE status = 'removed')::int AS removed
         FROM whatsapp_numbers
         WHERE tenant_id = $1
@@ -189,7 +196,7 @@ export class OperationHealthService implements OnModuleInit, OnModuleDestroy {
       window: '24h',
       numbers: { total: totalNumbers, connected: connectedNumbers, cooldown: cooldownNumbers, quarantined: protectedNumbers, removed: numberValue(numberRow.removed) },
       calls: { attempts: numberValue(callRow.attempts), failures: numberValue(callRow.failures), rateLimited: numberValue(callRow.rate_limited), rapidFailures: numberValue(callRow.rapid_failures) },
-      capacity: { configured: numberValue(numberRow.capacity), active: signals.capacity.active, available: Math.max(0, numberValue(numberRow.capacity) - signals.capacity.active) },
+      capacity: { configured: numberValue(numberRow.capacity), active: signals.capacity.active, available: Math.max(0, numberValue(numberRow.capacity) - signals.capacity.active), nextReleaseAt: numberRow.next_release_at ?? null },
       team: { total: numberValue(teamRow.total), available: numberValue(teamRow.available), inCall: numberValue(teamRow.in_call), postCall: numberValue(teamRow.post_call), offline: numberValue(teamRow.offline) },
       queue: { ready: signals.queue.ready, waiting: signals.queue.waiting, dueCallbacks: signals.queue.dueCallbacks, attemptsExhausted: signals.queue.exhausted },
       compliance: { schedule, activeSuppressions: signals.compliance.suppressionBlocks },
