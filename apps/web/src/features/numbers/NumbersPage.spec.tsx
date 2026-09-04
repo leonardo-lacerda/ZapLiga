@@ -5,14 +5,7 @@ import { vi } from 'vitest';
 import { NumbersPage } from './NumbersPage';
 
 function Harness({ onCreate }: { onCreate: (payload: Record<string, unknown>) => void }) {
-  const [numberForm, setNumberForm] = useState({
-    label: '',
-    phone: '',
-    maxConcurrentCalls: 1,
-    cooldownSeconds: 60,
-    maxCallsPerWindow: 3,
-    callWindowSeconds: 180,
-  });
+  const [numberForm, setNumberForm] = useState({ label: '', phone: '' });
   const createNumber = (event: FormEvent) => {
     event.preventDefault();
     onCreate(numberForm);
@@ -37,42 +30,29 @@ function Harness({ onCreate }: { onCreate: (payload: Record<string, unknown>) =>
   );
 }
 
-it('mostra labels claros no formulário de adicionar número', () => {
+it('mostra labels claros no formulário de adicionar número, sem duplicar Configurações do discador', () => {
   render(<Harness onCreate={vi.fn()} />);
 
   expect(screen.getByText('Adicionar número')).toBeInTheDocument();
   expect(screen.getByText('Identificação')).toBeInTheDocument();
-  expect(screen.getByText('Proteção da linha')).toBeInTheDocument();
+  expect(screen.queryByText('Proteção da linha')).not.toBeInTheDocument();
 
   expect(screen.getByLabelText(/Nome da linha/i)).toBeInTheDocument();
   expect(screen.getByLabelText(/Telefone/i)).toBeInTheDocument();
-  expect(screen.getByLabelText(/Chamadas simultâneas/i)).toBeInTheDocument();
-  expect(screen.getByLabelText(/Espera entre chamadas/i)).toBeInTheDocument();
-  expect(screen.getByLabelText(/Tentativas na janela/i)).toBeInTheDocument();
-  expect(screen.getByLabelText(/Janela de proteção/i)).toBeInTheDocument();
+  expect(screen.queryByLabelText(/Chamadas simultâneas/i)).not.toBeInTheDocument();
 
   expect(screen.getByText(/Apelido interno para identificar a sessão/i)).toBeInTheDocument();
-  expect(screen.getByText(/Pausa mínima após cada chamada/i)).toBeInTheDocument();
-  expect(screen.getByText(/Máximo de tentativas nesta linha/i)).toBeInTheDocument();
+  expect(screen.getByText(/Configurações do discador/i)).toBeInTheDocument();
   expect(screen.getByRole('button', { name: /Criar sessão/i })).toBeInTheDocument();
 });
 
-it('envia os campos preenchidos ao criar a sessão', async () => {
+it('envia apenas nome e telefone ao criar a sessão', async () => {
   const onCreate = vi.fn();
   render(<Harness onCreate={onCreate} />);
 
   await userEvent.type(screen.getByLabelText(/Nome da linha/i), 'Comercial SP');
   await userEvent.type(screen.getByLabelText(/Telefone/i), '5511999999999');
-  await userEvent.clear(screen.getByLabelText(/Chamadas simultâneas/i));
-  await userEvent.type(screen.getByLabelText(/Chamadas simultâneas/i), '2');
   await userEvent.click(screen.getByRole('button', { name: /Criar sessão/i }));
 
-  expect(onCreate).toHaveBeenCalledWith(expect.objectContaining({
-    label: 'Comercial SP',
-    phone: '5511999999999',
-    maxConcurrentCalls: 2,
-    cooldownSeconds: 60,
-    maxCallsPerWindow: 3,
-    callWindowSeconds: 180,
-  }));
+  expect(onCreate).toHaveBeenCalledWith({ label: 'Comercial SP', phone: '5511999999999' });
 });
