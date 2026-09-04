@@ -76,13 +76,31 @@ describe('DialerService', () => {
 
       expect(result).toEqual(expect.objectContaining({ status: 'reserved' }));
       expect(db.transaction).toHaveBeenCalledTimes(1);
+      // A manual call is paced by the person, not the dialer: the reservation
+      // records the call in the line's window (so automatic pacing still sees
+      // it) but never refuses on window, per-minute or minimum-gap grounds.
       expect((service as any).redis.reserve).toHaveBeenCalledWith(expect.objectContaining({
         waxumSessionId: 'num-2',
-        maxCallsPerWindow: 3,
+        maxCallsPerWindow: 1_000_000,
         callWindowSeconds: 180,
-        maxCallsPerMinute: 6,
-        minSecondsBetweenCalls: 10,
+        maxCallsPerMinute: 1_000_000,
+        minSecondsBetweenCalls: 0,
       }));
+    });
+
+    it('lets a manual call dial again right after the previous one, ignoring the line cooldown', async () => {
+      const gateway = makeGateway();
+      const db = makeDb({
+        sdrs: [{ id: 'sdr-1', available: false, state: 'offline' }],
+        // Ended 5 s ago with a 60 s cooldown: the automatic dialer would wait, a person does not.
+        numbers: [{ id: 'num-1', phone: '5585989779394', max_concurrent_calls: 2, cooldown_seconds: 60, last_call_ended_at: new Date(Date.now() - 5_000) }],
+        leads: [{ id: 'lead-1', phone: '5511957632036', name: 'Lead' }],
+      });
+      const service = new DialerService(db as any, makeRedis() as any, makeWaxum() as any, gateway as any);
+
+      const result = await service.manualCall('lead-1', 'tenant-1');
+
+      expect(result).toEqual(expect.objectContaining({ status: 'reserved' }));
     });
 
     it('allows manual dialing for a connected but unavailable SDR', async () => {
