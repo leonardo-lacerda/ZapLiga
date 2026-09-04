@@ -137,7 +137,7 @@ services:
     # fica unidirecional (SDR nunca ouve o cliente). A imagem stock do
     # fdciabdul/waxum NAO tem essa correcao — nao trocar de volta para ela sem
     # reaplicar o patch em whatsapp-rust/. Ver docs/deploy-runbook.md.
-    image: zapliga-waxum:0.12.6-multirelay-v1
+    image: zapliga-waxum:0.12.6-multirelay-v2
     entrypoint: ["/bin/sh", "/usr/local/bin/waxum-entrypoint-guard.sh"]
     command: ["/app/waxum"]
     restart: unless-stopped
