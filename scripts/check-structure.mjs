@@ -3,6 +3,8 @@ import { extname, join } from 'node:path';
 
 const rootFiles = new Set([
   '.dockerignore', '.env.example', '.gitignore',
+  // Keeps infra/waxum/patches/*.patch byte-exact and infra scripts in LF on Windows checkouts.
+  '.gitattributes',
   'docker-compose.yml', 'docker-compose.e2e.yml', 'package.json', 'package-lock.json', 'README.md',
   'AGENTS.md', 'CLAUDE.md',
 ]);
