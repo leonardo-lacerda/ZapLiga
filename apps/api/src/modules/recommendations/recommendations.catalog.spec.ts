@@ -14,4 +14,12 @@ describe('buildRecommendationCandidates', () => {
     expect(candidates[0].evidence).toEqual({ summary: 'fila', source: 'metrics_summary', observedAt: '2026-09-04T12:00:00.000Z', sampleSize: 12 });
     expect(candidates[0].recommendedAction.type).toBe('navigate');
   });
+
+  it('catalogs a reversible operational action with no client-controlled payload', () => {
+    const [candidate] = buildRecommendationCandidates([
+      { id: 'paused', code: 'dialer_paused_with_queue', severity: 'warning', title: 'Discador pausado', evidence: 'fila pronta', recommendedAction: 'iniciar' },
+    ], '2026-09-04T12:00:00.000Z');
+
+    expect(candidate.recommendedAction).toEqual({ label: 'Iniciar discador', description: 'Revalide agenda, SDRs e linhas e inicie o discador.', type: 'start_dialer', payload: {} });
+  });
 });

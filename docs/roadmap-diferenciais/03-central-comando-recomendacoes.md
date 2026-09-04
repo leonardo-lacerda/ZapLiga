@@ -122,15 +122,26 @@ Não aceitar endpoint genérico que execute método ou payload arbitrário.
 - Padronizar códigos, severidade, evidência e ação.
 - Cobrir os alertas já existentes sem mudança de comportamento.
 
+Status: concluída no Lote 07. O catálogo reutiliza os alertas determinísticos,
+normaliza evidência/ação, deduplica por código e escopo, limita a três prioridades e
+marca recomendações obsoletas como resolvidas.
+
 ### Fase 2 — central unificada
 
 - Nova API e consumo na visão geral.
 - Telemetria de impressão, abertura e dispensa.
 
+Status: concluída no Lote 07. A central é opt-in por tenant, mantém a visão legada
+quando desligada e registra as interações em histórico tenant-scoped.
+
 ### Fase 3 — ações seguras
 
 - Implementar CTAs catalogados e idempotentes.
 - Registrar antes/depois e falhas.
+
+Status: concluída no Lote 08. A aplicação aceita somente tipos catalogados, revalida
+estado e autorização no momento da ação, usa transação nas mutações e registra
+before/after, sucesso e falha.
 
 ### Fase 4 — oportunidades
 

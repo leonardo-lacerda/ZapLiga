@@ -3,6 +3,7 @@ import { Recommendation, RecommendationAction, RecommendationEvidence, Recommend
 
 const severityRank: Record<RecommendationSeverity, number> = { critical: 0, warning: 1, info: 2 };
 const actionByCode: Record<string, RecommendationAction> = {
+  dialer_paused_with_queue: { label: 'Iniciar discador', description: 'Revalide agenda, SDRs e linhas e inicie o discador.', type: 'start_dialer', payload: {} },
   queue_stalled: { label: 'Verificar operação', description: 'Abra o painel operacional para conferir SDRs e linhas aptas.', type: 'navigate', payload: { tab: 'dashboard' } },
   no_sdr_available: { label: 'Ver equipe', description: 'Confira disponibilidade e conexão da equipe.', type: 'navigate', payload: { tab: 'sdrs' } },
   numbers_in_quarantine: { label: 'Ver linhas', description: 'Inspecione a saúde das linhas e os tempos de quarentena.', type: 'navigate', payload: { tab: 'numbers' } },

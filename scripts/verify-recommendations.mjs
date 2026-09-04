@@ -40,7 +40,7 @@ try {
   const auth = { authorization: `Bearer ${token}`, 'x-tenant-id': tenantId };
   const disabled = await request(`/api/tenants/${tenantId}/recommendations`, { headers: auth });
   assert(disabled.response.status === 409, `flag desligada deveria bloquear recomendações: ${disabled.response.status}`);
-  await ok(await request(`/api/tenants/${tenantId}/feature-flags`, { method: 'PATCH', headers: auth, body: JSON.stringify({ recommendations: true }) }), 'habilita recomendações');
+  await ok(await request(`/api/tenants/${tenantId}/feature-flags`, { method: 'PATCH', headers: auth, body: JSON.stringify({ recommendations: true, schedule_enforcement: false }) }), 'habilita recomendações');
 
   const list = await ok(await request(`/api/tenants/${tenantId}/recommendations`, { headers: auth }), 'lista recomendações');
   assert(Array.isArray(list.items) && list.items.length <= 3, 'central deve limitar a três itens');
@@ -53,6 +53,17 @@ try {
     const history = await ok(await request(`/api/tenants/${tenantId}/recommendations/history?recommendationId=${encodeURIComponent(item.id)}`, { headers: auth }), 'histórico');
     assert(history.items.some((event) => event.event_type === 'opened') && history.items.some((event) => event.event_type === 'snoozed'), 'interações devem ser auditáveis');
   }
+
+  const pool = new pg.Pool({ connectionString: process.env.DATABASE_URL ?? 'postgres://zapcall:zapcall@127.0.0.1:5432/zapcall' });
+  try {
+    await pool.query("UPDATE dialer_settings SET running=false WHERE tenant_id=$1", [tenantId]);
+    await pool.query(`INSERT INTO operation_recommendations (id, tenant_id, code, scope_key, status, severity, title_key, evidence, recommended_action, action_type, action_payload, fingerprint)
+      VALUES ('manual-start-action',$1,'dialer_paused_with_queue','manual','active','warning','Iniciar discador',$2::jsonb,$3::jsonb,'start_dialer','{}'::jsonb,'manual-start-action-v1')`, [tenantId, JSON.stringify({ summary: 'fixture', source: 'metrics_summary', observedAt: new Date().toISOString() }), JSON.stringify({ label: 'Iniciar discador', type: 'start_dialer', payload: {} })]);
+  } finally { await pool.end(); }
+  const applied = await ok(await request(`/api/tenants/${tenantId}/recommendations/manual-start-action/apply`, { method: 'POST', headers: auth }), 'aplica ação catalogada');
+  assert(applied.result?.kind === 'dialer_started', `ação operacional não foi aplicada: ${JSON.stringify(applied)}`);
+  const repeated = await request(`/api/tenants/${tenantId}/recommendations/manual-start-action/apply`, { method: 'POST', headers: auth });
+  assert(repeated.response.status === 409, `ação resolvida deveria bloquear repetição: ${repeated.response.status}`);
   console.log(JSON.stringify({ ok: true, tenantId, items: list.items.length }));
 } finally {
   await cleanup();

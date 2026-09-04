@@ -609,8 +609,8 @@ Atualizar esta tabela ao final de cada lote. Estados válidos: `pendente`,
 | 04 | concluído | Elegibilidade unificada do discador, reason codes, preview/simulação, revalidação transacional e paridade testada em `evidencias/lote-04-elegibilidade-unificada.md`. |
 | 05 | concluído | Score determinístico, políticas versionadas, simulação, explicação visual, registro sombra, comparação FIFO/score e gates Q1–Q6 aprovados em `evidencias/lote-05-score-simulacao-sombra.md`. |
 | 06 | concluído | Ativação controlada, ordenação segura, fairness, starvation, kill switch, métricas e gates Q1–Q7 aprovados em `evidencias/lote-06-ativacao-fila-inteligente.md`. |
-| 07 | em andamento | Catálogo tenant-scoped e central de recomendações, com flag, evidência e eventos, em `evidencias/lote-07-central-recomendacoes.md`. |
-| 08 | pendente | — |
+| 07 | concluído | Catálogo tenant-scoped, central de recomendações, flag, evidência e eventos aprovados em `evidencias/lote-07-central-recomendacoes.md`. |
+| 08 | em andamento | Ações recomendadas catalogadas, revalidadas e idempotentes; executor operacional em validação. |
 | 09 | pendente | — |
 | 10 | pendente | — |
 | 11 | pendente | — |
@@ -639,5 +639,5 @@ O conjunto está pronto somente quando:
 
 ## Próxima ação de execução
 
-O Lote 06 está concluído. A frente em execução é o Lote 07: catálogo e central de
-recomendações, mantendo a compatibilidade legada enquanto a flag estiver desligada.
+O Lote 07 está concluído. A frente em execução é o Lote 08: ações recomendadas
+seguras, com revalidação no momento da aplicação e histórico before/after.
