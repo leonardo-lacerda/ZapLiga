@@ -51,7 +51,7 @@ try {
   const tenant = await expectOk(await request('/api/tenants', { method: 'POST', headers: { authorization: `Bearer ${token}` }, body: JSON.stringify({ name: `Campaign execution ${suffix}`, slug: `campaign-execution-${suffix}` }) }), 'cria tenant');
   tenantId = tenant.id;
   const auth = { authorization: `Bearer ${token}`, 'x-tenant-id': tenantId };
-  await expectOk(await request(`/api/tenants/${tenantId}/feature-flags`, { method: 'PATCH', headers: auth, body: JSON.stringify({ campaigns: true }) }), 'habilita campaigns');
+  await expectOk(await request(`/api/tenants/${tenantId}/feature-flags`, { method: 'PATCH', headers: auth, body: JSON.stringify({ campaigns: true, decision_engine: true }) }), 'habilita campaigns e motor de decisao');
 
   const folderId = randomUUID();
   const sdrId = randomUUID();
@@ -81,6 +81,12 @@ try {
   assert(linkedLead.campaign_id === created.id && Number(linkedLead.campaign_version) === 1, 'lead nÃ£o congelou a campanha e a versÃ£o efetiva');
   const outbox = await executionPool.query("SELECT event_type, campaign_id, campaign_version FROM campaign_event_outbox WHERE tenant_id=$1 AND aggregate_type='lead'", [tenantId]);
   assert(outbox.rows.some((row) => row.event_type === 'lead.received' && row.campaign_id === created.id && Number(row.campaign_version) === 1), 'evento lead.received nÃ£o foi registrado no outbox');
+  const eligibility = await expectOk(await request(`/api/tenants/${tenantId}/leads/${linkedLead.id}/eligibility?mode=simulation`, { headers: auth }), 'avalia elegibilidade');
+  assert(eligibility.mode === 'simulation' && eligibility.eligible === true && eligibility.blockedBy.length === 0, 'contrato de elegibilidade nao aprovou lead elegivel');
+  await executionPool.query('UPDATE leads SET do_not_call = true WHERE tenant_id=$1 AND id=$2', [tenantId, linkedLead.id]);
+  const blocked = await expectOk(await request(`/api/tenants/${tenantId}/leads/${linkedLead.id}/eligibility?mode=preview`, { headers: auth }), 'explica bloqueio de supressao');
+  assert(blocked.eligible === false && blocked.blockedBy.includes('contact_suppressed'), 'contrato de elegibilidade nao explicou a supressao');
+  await executionPool.query('UPDATE leads SET do_not_call = false WHERE tenant_id=$1 AND id=$2', [tenantId, linkedLead.id]);
   await executionPool.end();
 
   const playbook = await expectOk(await request(`/api/tenants/${tenantId}/campaigns/${created.id}/playbook`, { method: 'POST', headers: auth, body: JSON.stringify({ name: `Playbook ${suffix}` }) }), 'salva playbook');

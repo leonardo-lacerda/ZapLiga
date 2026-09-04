@@ -606,8 +606,8 @@ Atualizar esta tabela ao final de cada lote. Estados válidos: `pendente`,
 | 01 | concluído | Domínio/read model, backfill legado, APIs tenant-scoped e gates Q1–Q4 aprovados em `evidencias/lote-01-campanhas-leitura.md`. |
 | 02 | concluído | Ciclo de vida, lock otimista, snapshots imutáveis, hash/diff, wizard, testes direcionados e verificação HTTP completa em `evidencias/lote-02-ciclo-versionamento.md`. |
 | 03 | concluído | Execução por campanha, integração versionada, playbooks, outbox, testes unitários e verificadores HTTP aprovados em `evidencias/lote-03-execucao-integracoes-playbooks.md`. |
-| 04 | em andamento | Elegibilidade unificada do discador, com reason codes e paridade entre fila/manual/preview/simulação. |
-| 05 | pendente | — |
+| 04 | concluído | Elegibilidade unificada do discador, reason codes, preview/simulação, revalidação transacional e paridade testada em `evidencias/lote-04-elegibilidade-unificada.md`. |
+| 05 | em andamento | Score determinístico, políticas versionadas, simulação e modo sombra sem alterar a ordem real. |
 | 06 | pendente | — |
 | 07 | pendente | — |
 | 08 | pendente | — |

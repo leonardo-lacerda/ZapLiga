@@ -15,6 +15,7 @@ import { FeatureFlagsService } from '../feature-flags/feature-flags.service';
 import { AuditService } from '../audit/audit.service';
 import { CampaignExecutionService } from '../campaigns/campaign-execution.service';
 import { CampaignEventsService } from '../campaigns/campaign-events.service';
+import { EligibilityService, eligibilityErrorMessage, evaluateLeadEligibility } from '../decision-engine/eligibility.service';
 import {
   analyzePcm16Le,
   computeCallOutcome,
@@ -157,6 +158,7 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
     @Optional() private readonly audit?: AuditService,
     @Optional() private readonly campaignExecution?: CampaignExecutionService,
     @Optional() private readonly campaignEvents?: CampaignEventsService,
+    @Optional() private readonly eligibility?: EligibilityService,
   ) {}
 
   onModuleInit() {
@@ -195,6 +197,17 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
   }
 
   private normalizePhone(value: unknown) { return normalizePhone(value); }
+
+  private evaluateEligibility(input: Parameters<typeof evaluateLeadEligibility>[0]) {
+    if (!this.eligibility) return null;
+    return this.eligibility.evaluate(input);
+  }
+
+  private assertEligibility(input: Parameters<typeof evaluateLeadEligibility>[0]) {
+    const result = this.evaluateEligibility(input);
+    if (result && !result.eligible) throw new Error(eligibilityErrorMessage(result));
+    return result;
+  }
 
   private relayAudio(socket: WebSocket | undefined, data: RawData) {
     if (!socket || socket.readyState !== WebSocket.OPEN) return false;
@@ -443,20 +456,55 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
       // failures, Waxum 429 backoff -- both future-date last_call_ended_at) but
       // not the automatic dialer's pacing: a person may dial again right away.
       this.db.query(`SELECT * FROM whatsapp_numbers WHERE tenant_id = $1 AND status IN ('connected', 'online', 'ready', 'authenticated') AND (flagged_until IS NULL OR flagged_until <= now()) ORDER BY last_call_ended_at NULLS FIRST, last_call_ended_at ASC`, [tenantId]),
-      this.db.query(`SELECT l.* FROM leads l JOIN lead_folders f ON f.tenant_id = l.tenant_id AND f.id = l.folder_id WHERE l.tenant_id = $1 AND l.id = $2 AND f.is_active = true AND l.do_not_call = false AND l.status IN ('queued', 'retry_wait') AND l.attempts < $3`, [tenantId, leadId, settings.max_attempts_per_lead]),
+      this.db.query(`SELECT l.*, f.is_active AS folder_active,
+          EXISTS (SELECT 1 FROM contact_suppressions cs WHERE cs.tenant_id = l.tenant_id AND cs.phone = l.phone AND cs.lifted_at IS NULL) AS contact_suppressed,
+          EXISTS (SELECT 1 FROM calls active_call WHERE active_call.tenant_id = l.tenant_id AND active_call.lead_id = l.id AND active_call.status IN ('reserved','dialing','media_active')) AS active_call,
+          callback.status AS callback_status, callback.assigned_sdr_id AS callback_assigned_sdr_id, callback.due_at AS callback_due_at
+        FROM leads l JOIN lead_folders f ON f.tenant_id = l.tenant_id AND f.id = l.folder_id
+        LEFT JOIN LATERAL (
+          SELECT cb.status, cb.assigned_sdr_id, cb.due_at FROM lead_callbacks cb
+          WHERE cb.tenant_id = l.tenant_id AND cb.lead_id = l.id AND cb.status IN ('pending','due','reassigned')
+          ORDER BY cb.due_at ASC LIMIT 1
+        ) callback ON true
+        WHERE l.tenant_id = $1 AND l.id = $2 AND f.is_active = true AND l.do_not_call = false AND l.status IN ('queued', 'retry_wait') AND l.attempts < $3`, [tenantId, leadId, settings.max_attempts_per_lead]),
     ]);
     const lead = leads.rows[0];
     if (!lead) throw new Error('Este lead nao esta elegivel para uma chamada manual');
+    this.assertEligibility({
+      mode: 'manual',
+      lead: { id: lead.id, phone: lead.phone, status: lead.status, attempts: lead.attempts, nextEligibleAt: lead.next_eligible_at, doNotCall: lead.do_not_call },
+      maxAttempts: settings.max_attempts_per_lead,
+      folderActive: lead.folder_active,
+      contactSuppressed: lead.contact_suppressed,
+      activeCall: lead.active_call,
+      callback: lead.callback_status ? { status: lead.callback_status, assignedSdrId: lead.callback_assigned_sdr_id, dueAt: lead.callback_due_at } : null,
+      scheduleAllowed: true,
+    });
     const execution = this.campaignExecution ? await this.campaignExecution.resolveForLead(tenantId, lead) : undefined;
-    if (execution && !execution.allowed) throw new Error('A campanha deste lead nÃ£o estÃ¡ em execuÃ§Ã£o ou nÃ£o possui recursos disponÃ­veis');
-    if (execution && !CampaignExecutionService.scheduleAllowed(execution.effectiveConfig)) throw new Error('A campanha deste lead estÃ¡ fora da janela de atendimento');
+    if (execution && !execution.allowed) throw new Error('A campanha deste lead não está em execução ou não possui recursos disponíveis');
+    if (execution && !CampaignExecutionService.scheduleAllowed(execution.effectiveConfig)) throw new Error('A campanha deste lead está fora da janela de atendimento');
     const sdr = sdrs.rows.find((row: any) => this.gateway.isConnected(row.id) && (!execution?.campaignId || execution.sdrIds.includes(row.id)));
     if (!lead) throw new Error('Este lead não está elegível para uma chamada manual');
     if (!sdr) throw new Error('Nenhum SDR conectado e disponível');
     if (!numbers.rows.length) throw new Error('Nenhum número WhatsApp conectado');
     const readyNumbers = numbers.rows.filter((row: any) => !lineIsProtected(row.last_call_ended_at));
     if (!readyNumbers.length) throw new Error('A linha WhatsApp está temporariamente protegida por limite de chamadas. Aguarde alguns minutos e tente novamente.');
-    const number = readyNumbers.find((row: any) => !isSelfCallNumber(row.phone, lead.phone) && (!execution?.campaignId || execution.numberIds.includes(row.id)));
+    const number = readyNumbers.find((row: any) => {
+      if (execution?.campaignId && !execution.numberIds.includes(row.id)) return false;
+      const evaluation = this.evaluateEligibility({
+        mode: 'manual',
+        manualQueueOverride: true,
+        lead: { id: lead.id, phone: lead.phone, status: lead.status, attempts: lead.attempts, nextEligibleAt: lead.next_eligible_at, doNotCall: lead.do_not_call },
+        folderActive: lead.folder_active ?? true,
+        contactSuppressed: lead.contact_suppressed ?? lead.do_not_call ?? false,
+        activeCall: false,
+        callback: null,
+        scheduleAllowed: true,
+        sdrConnected: true,
+        line: { phone: row.phone, status: row.status, flaggedUntil: row.flagged_until, lastCallEndedAt: row.last_call_ended_at, cooldownSeconds: row.cooldown_seconds },
+      });
+      return evaluation ? evaluation.eligible : !isSelfCallNumber(row.phone, lead.phone);
+    });
     if (!number) throw new Error('O número de destino é a própria linha de WhatsApp conectada. Ligue para um número diferente.');
 
     const token = randomUUID();
@@ -477,7 +525,10 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
     let lead: any;
     const leadId = String(input.leadId ?? '').trim();
     if (leadId) {
-      const result = await this.db.query(`SELECT l.* FROM leads l JOIN lead_folders f ON f.tenant_id = l.tenant_id AND f.id = l.folder_id WHERE l.tenant_id = $1 AND l.id = $2 AND l.do_not_call = false AND NOT EXISTS (SELECT 1 FROM contact_suppressions cs WHERE cs.tenant_id = l.tenant_id AND cs.phone = l.phone AND cs.lifted_at IS NULL)`, [tenantId, leadId]);
+      const result = await this.db.query(`SELECT l.*, f.is_active AS folder_active,
+          EXISTS (SELECT 1 FROM contact_suppressions cs WHERE cs.tenant_id = l.tenant_id AND cs.phone = l.phone AND cs.lifted_at IS NULL) AS contact_suppressed
+        FROM leads l JOIN lead_folders f ON f.tenant_id = l.tenant_id AND f.id = l.folder_id
+        WHERE l.tenant_id = $1 AND l.id = $2`, [tenantId, leadId]);
       lead = result.rows[0];
       if (lead) {
         const activeCall = await this.db.query(`SELECT 1 FROM calls WHERE tenant_id = $1 AND lead_id = $2 AND status IN ('reserved', 'dialing', 'media_active') LIMIT 1`, [tenantId, lead.id]);
@@ -488,7 +539,10 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
       if (phone.length < 10 || phone.length > 15) throw new Error('Informe um telefone valido com DDD');
       const suppressed = await this.db.query(`SELECT 1 FROM contact_suppressions WHERE tenant_id = $1 AND phone = $2 AND lifted_at IS NULL LIMIT 1`, [tenantId, phone]);
       if (suppressed.rows[0]) { await this.redis.incrementMetric?.('calls_blocked_suppression_total'); await this.audit?.record({ tenantId, action: 'call.blocked_suppression', entityType: 'contact' }).catch(() => undefined); throw new Error('Este telefone está na lista de não contato'); }
-      const existing = await this.db.query(`SELECT l.* FROM leads l JOIN lead_folders f ON f.tenant_id = l.tenant_id AND f.id = l.folder_id WHERE l.tenant_id = $1 AND l.phone = $2 LIMIT 1`, [tenantId, phone]);
+      const existing = await this.db.query(`SELECT l.*, f.is_active AS folder_active,
+          EXISTS (SELECT 1 FROM contact_suppressions cs WHERE cs.tenant_id = l.tenant_id AND cs.phone = l.phone AND cs.lifted_at IS NULL) AS contact_suppressed
+        FROM leads l JOIN lead_folders f ON f.tenant_id = l.tenant_id AND f.id = l.folder_id
+        WHERE l.tenant_id = $1 AND l.phone = $2 LIMIT 1`, [tenantId, phone]);
       if (existing.rows[0]) {
         lead = existing.rows[0];
         const activeCall = await this.db.query(`SELECT 1 FROM calls WHERE tenant_id = $1 AND lead_id = $2 AND status IN ('reserved', 'dialing', 'media_active') LIMIT 1`, [tenantId, lead.id]);
@@ -510,6 +564,16 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
       }
     }
     if (!lead) throw new Error('Este contato nao esta elegivel para uma chamada manual');
+    this.assertEligibility({
+      mode: 'manual',
+      manualQueueOverride: true,
+      lead: { id: lead.id, phone: lead.phone, status: lead.status, attempts: lead.attempts, nextEligibleAt: lead.next_eligible_at, doNotCall: lead.do_not_call },
+      folderActive: lead.folder_active ?? true,
+      contactSuppressed: lead.contact_suppressed ?? lead.do_not_call ?? false,
+      activeCall: false,
+      callback: null,
+      scheduleAllowed: true,
+    });
 
     const [sdrs, numbers] = await Promise.all([
       this.db.query(`
@@ -526,8 +590,8 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
       this.db.query(`SELECT * FROM whatsapp_numbers WHERE tenant_id = $1 AND status IN ('connected', 'online', 'ready', 'authenticated') AND (flagged_until IS NULL OR flagged_until <= now()) ORDER BY last_call_ended_at NULLS FIRST, last_call_ended_at ASC`, [tenantId]),
     ]);
     const execution = this.campaignExecution ? await this.campaignExecution.resolveForLead(tenantId, lead) : undefined;
-    if (execution && !execution.allowed) throw new Error('A campanha deste lead nÃ£o estÃ¡ em execuÃ§Ã£o ou nÃ£o possui recursos disponÃ­veis');
-    if (execution && !CampaignExecutionService.scheduleAllowed(execution.effectiveConfig)) throw new Error('A campanha deste lead estÃ¡ fora da janela de atendimento');
+    if (execution && !execution.allowed) throw new Error('A campanha deste lead não está em execução ou não possui recursos disponíveis');
+    if (execution && !CampaignExecutionService.scheduleAllowed(execution.effectiveConfig)) throw new Error('A campanha deste lead está fora da janela de atendimento');
     const sdr = sdrs.rows.find((row: any) => this.gateway.isConnected(row.id) && (!execution?.campaignId || execution.sdrIds.includes(row.id)));
     if (!sdr) throw new Error('Nenhum SDR conectado e disponivel');
     if (!numbers.rows.length) throw new Error('Nenhum numero WhatsApp conectado');
@@ -536,7 +600,22 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
     if (!readyNumbers.length) throw new Error('A linha WhatsApp esta temporariamente protegida por limite de chamadas. Aguarde alguns minutos e tente novamente.');
     // WhatsApp cannot place a call to the line's own number (self-call closes
     // the media socket immediately), so never pair a lead with its own line.
-    const number = readyNumbers.find((row: any) => !isSelfCallNumber(row.phone, lead.phone) && (!execution?.campaignId || execution.numberIds.includes(row.id)));
+    const number = readyNumbers.find((row: any) => {
+      if (execution?.campaignId && !execution.numberIds.includes(row.id)) return false;
+      const evaluation = this.evaluateEligibility({
+        mode: 'manual',
+        manualQueueOverride: true,
+        lead: { id: lead.id, phone: lead.phone, status: lead.status, attempts: lead.attempts, nextEligibleAt: lead.next_eligible_at, doNotCall: lead.do_not_call },
+        folderActive: lead.folder_active ?? true,
+        contactSuppressed: lead.contact_suppressed ?? lead.do_not_call ?? false,
+        activeCall: false,
+        callback: null,
+        scheduleAllowed: true,
+        sdrConnected: true,
+        line: { phone: row.phone, status: row.status, flaggedUntil: row.flagged_until, lastCallEndedAt: row.last_call_ended_at, cooldownSeconds: row.cooldown_seconds },
+      });
+      return evaluation ? evaluation.eligible : !isSelfCallNumber(row.phone, lead.phone);
+    });
     if (!number) throw new Error('O numero de destino e a propria linha de WhatsApp conectada. Ligue para um numero diferente.');
 
     const token = randomUUID();
@@ -635,7 +714,9 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
           AND NOT EXISTS (SELECT 1 FROM lead_callbacks cb WHERE cb.tenant_id = l.tenant_id AND cb.lead_id = l.id AND cb.status IN ('pending','due','reassigned'))
       `, [tenantId, settings.max_attempts_per_lead]),
       this.db.query(`
-        SELECT l.id, l.name, l.phone, l.status, l.attempts, l.next_eligible_at, f.name AS folder_name,
+        SELECT l.id, l.name, l.phone, l.status, l.attempts, l.next_eligible_at, l.do_not_call, f.is_active AS folder_active, f.name AS folder_name,
+          EXISTS (SELECT 1 FROM contact_suppressions cs WHERE cs.tenant_id = l.tenant_id AND cs.phone = l.phone AND cs.lifted_at IS NULL) AS contact_suppressed,
+          EXISTS (SELECT 1 FROM calls active_call WHERE active_call.tenant_id = l.tenant_id AND active_call.lead_id = l.id AND active_call.status IN ('reserved','dialing','media_active')) AS active_call,
           ROW_NUMBER() OVER (ORDER BY l.next_eligible_at ASC, l.created_at ASC)::int AS queue_position
         FROM leads l JOIN lead_folders f ON f.tenant_id = l.tenant_id AND f.id = l.folder_id
         WHERE l.tenant_id = $1 AND f.is_active = true AND l.do_not_call = false AND l.status IN ('queued', 'retry_wait') AND l.attempts < $2
@@ -689,7 +770,20 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
       `, [tenantId]),
     ]);
     const queue = queueSummary.rows[0] ?? { total: 0, ready: 0, waiting: 0 };
-    const nextLead = queuePreview.rows[0] ?? null;
+    const preview = queuePreview.rows.map((row: any) => ({
+      ...row,
+      eligibility: this.evaluateEligibility({
+        mode: 'preview',
+        lead: { id: row.id, phone: row.phone, status: row.status, attempts: row.attempts, nextEligibleAt: row.next_eligible_at, doNotCall: row.do_not_call },
+        maxAttempts: settings.max_attempts_per_lead,
+        folderActive: row.folder_active,
+        contactSuppressed: row.contact_suppressed,
+        activeCall: row.active_call,
+        callback: null,
+        scheduleAllowed: scheduleState.allowed,
+      }),
+    }));
+    const nextLead = preview[0] ?? null;
     const connectedNumbers = numberDetails.rows.filter((row: any) => ['connected', 'online', 'ready', 'authenticated'].includes(String(row.status).toLowerCase()));
     const dialableNumbers = connectedNumbers.filter((row: any) => !row.flagged);
     const readyNumbers = dialableNumbers.filter((row: any) => Number(row.cooldown_remaining_seconds) === 0);
@@ -718,7 +812,7 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
       lead_counts: Object.fromEntries(leads.rows.map((row: any) => [row.status, row.count])),
       sdrs: sdrDetails.rows,
       post_call_sdrs: sdrDetails.rows.filter((row: any) => row.state === 'post_call'),
-      queue: { total: Number(queue.total), ready: Number(queue.ready), waiting: Number(queue.waiting), preview: queuePreview.rows },
+      queue: { total: Number(queue.total), ready: Number(queue.ready), waiting: Number(queue.waiting), preview },
       numbers: numberDetails.rows,
       active_calls_detail: activeCalls.rows,
       next_action: nextAction,
@@ -925,6 +1019,8 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
             WHERE f.tenant_id = $1 AND f.is_active = true
           ), eligible AS (
             SELECT l.*, f.name AS folder_name, f.sort_order AS folder_sort_order,
+              EXISTS (SELECT 1 FROM contact_suppressions cs WHERE cs.tenant_id = l.tenant_id AND cs.phone = l.phone AND cs.lifted_at IS NULL) AS contact_suppressed,
+              EXISTS (SELECT 1 FROM calls active_call WHERE active_call.tenant_id = l.tenant_id AND active_call.lead_id = l.id AND active_call.status IN ('reserved','dialing','media_active')) AS active_call,
               af.folder_index, af.folder_count,
               ROW_NUMBER() OVER (PARTITION BY l.folder_id
                 ORDER BY CASE WHEN $5 = 'priority_fifo' THEN l.queue_priority ELSE 0 END DESC,
@@ -950,14 +1046,41 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
             next_eligible_at ASC,
             CASE WHEN $5 = 'lifo' THEN -queue_sequence ELSE queue_sequence END ASC
           LIMIT 25
-        `, [tenantId, settings.max_attempts_per_lead, Number(settings.dialer_round ?? 1), Number(settings.folder_rotation_cursor ?? 0), settings.queue_strategy ?? 'fifo']),
+      `, [tenantId, settings.max_attempts_per_lead, Number(settings.dialer_round ?? 1), Number(settings.folder_rotation_cursor ?? 0), settings.queue_strategy ?? 'fifo']),
         this.db.query(`SELECT count(*)::int AS count FROM lead_folders WHERE tenant_id = $1 AND is_active = true`, [tenantId]),
       ]);
 
       for (const lead of leads.rows) {
+        const eligibility = this.evaluateEligibility({
+          mode: 'automatic',
+          lead: { id: lead.id, phone: lead.phone, status: lead.status, attempts: lead.attempts, nextEligibleAt: lead.next_eligible_at, doNotCall: lead.do_not_call },
+          maxAttempts: settings.max_attempts_per_lead,
+          folderActive: true,
+          contactSuppressed: lead.contact_suppressed,
+          activeCall: lead.active_call,
+          callback: null,
+          scheduleAllowed: true,
+        });
+        if (eligibility && !eligibility.eligible) continue;
         const execution = this.campaignExecution ? await this.campaignExecution.resolveForLead(tenantId, lead, { globalSettings: settings }) : undefined;
         if (execution && (!execution.allowed || !CampaignExecutionService.scheduleAllowed(execution.effectiveConfig))) continue;
-        const sdr = sdrs.rows.find((row: any) => this.gateway.isConnected(row.id) && (!execution?.campaignId || execution.sdrIds.includes(row.id)));
+        const sdr = sdrs.rows.find((row: any) => {
+          if (!this.gateway.isConnected(row.id) || (execution?.campaignId && !execution.sdrIds.includes(row.id))) return false;
+          const decision = this.evaluateEligibility({
+            mode: 'automatic',
+            lead: { id: lead.id, phone: lead.phone, status: lead.status, attempts: lead.attempts, nextEligibleAt: lead.next_eligible_at, doNotCall: lead.do_not_call },
+            maxAttempts: settings.max_attempts_per_lead,
+            folderActive: true,
+            contactSuppressed: lead.contact_suppressed,
+            activeCall: lead.active_call,
+            callback: null,
+            scheduleAllowed: true,
+            sdrConnected: true,
+            sdrAvailable: row.available !== false && row.state === 'available',
+            enforceSdrAvailability: true,
+          });
+          return decision ? decision.eligible : true;
+        });
         if (!sdr) continue;
         // A campaign owns its resource pool. Legacy leads keep the global pool.
         // Self-calls are excluded before the Redis reservation so another line
@@ -965,6 +1088,21 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
         const candidateNumbers = numbers.rows.filter((row: any) => !isSelfCallNumber(row.phone, lead.phone) && (!execution?.campaignId || execution.numberIds.includes(row.id)));
         for (const number of candidateNumbers) {
           const token = randomUUID();
+          const numberEligibility = this.evaluateEligibility({
+            mode: 'automatic',
+            lead: { id: lead.id, phone: lead.phone, status: lead.status, attempts: lead.attempts, nextEligibleAt: lead.next_eligible_at, doNotCall: lead.do_not_call },
+            maxAttempts: settings.max_attempts_per_lead,
+            folderActive: true,
+            contactSuppressed: lead.contact_suppressed,
+            activeCall: lead.active_call,
+            callback: null,
+            scheduleAllowed: true,
+            sdrConnected: true,
+            sdrAvailable: true,
+            enforceSdrAvailability: true,
+            line: { phone: number.phone, status: number.status, flaggedUntil: number.flagged_until, lastCallEndedAt: number.last_call_ended_at, cooldownSeconds: number.cooldown_seconds },
+          });
+          if (numberEligibility && !numberEligibility.eligible) continue;
           const reserved = await this.redis.reserve({
             tenantId, token, globalMax: settings.global_max_concurrent_calls,
             numberMax: number.max_concurrent_calls, numberId: number.id, waxumSessionId: numberSessionId(number),
@@ -1078,21 +1216,40 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
       if (this.schedule) await this.schedule.assertAllowed(tenantId);
       await this.db.transaction(async (client) => {
         const folder = await client.query(`
-          SELECT l.folder_id, l.attempts, l.campaign_id, l.campaign_version, f.is_active,
+          SELECT l.folder_id, l.status, l.attempts, l.next_eligible_at, l.do_not_call, l.campaign_id, l.campaign_version, f.is_active,
             (l.do_not_call = false AND NOT EXISTS (
               SELECT 1 FROM contact_suppressions cs
               WHERE cs.tenant_id = l.tenant_id AND cs.phone = l.phone AND cs.lifted_at IS NULL
             )) AS contact_allowed
+            , EXISTS (SELECT 1 FROM calls active_call WHERE active_call.tenant_id = l.tenant_id AND active_call.lead_id = l.id AND active_call.status IN ('reserved','dialing','media_active')) AS active_call
+            , callback.status AS callback_status, callback.assigned_sdr_id AS callback_assigned_sdr_id, callback.due_at AS callback_due_at
           FROM leads l JOIN lead_folders f ON f.tenant_id = l.tenant_id AND f.id = l.folder_id
+          LEFT JOIN LATERAL (
+            SELECT cb.status, cb.assigned_sdr_id, cb.due_at FROM lead_callbacks cb
+            WHERE cb.tenant_id = l.tenant_id AND cb.lead_id = l.id AND cb.status IN ('pending','due','reassigned')
+            ORDER BY cb.due_at ASC LIMIT 1
+          ) callback ON true
           WHERE l.tenant_id = $1 AND l.id = $2 FOR UPDATE OF l
         `, [tenantId, lead.id]);
         if (!folder.rows[0]) throw new Error('Lead não encontrado');
         if (folder.rows[0].contact_allowed === false) { await this.redis.incrementMetric?.('calls_blocked_suppression_total'); await this.audit?.record({ tenantId, action: 'call.blocked_suppression', entityType: 'contact' }).catch(() => undefined); throw new Error('Este telefone está na lista de não contato'); }
         if (isAutomatic && !folder.rows[0]?.is_active) throw new Error('A pasta deste lead está inativa');
         const execution = this.campaignExecution ? await this.campaignExecution.resolveForLead(tenantId, { id: lead.id, folder_id: folder.rows[0].folder_id, campaign_id: folder.rows[0].campaign_id, campaign_version: folder.rows[0].campaign_version }, { sdrId: sdr.id, numberId: number.id, globalSettings: settings }, client) : undefined;
-        if (execution && !execution.allowed) throw new Error('A campanha deste lead nÃ£o estÃ¡ em execuÃ§Ã£o ou nÃ£o autoriza esta equipe/linha');
-        if (execution && !CampaignExecutionService.scheduleAllowed(execution.effectiveConfig)) throw new Error('A campanha deste lead estÃ¡ fora da janela de atendimento');
+        if (execution && !execution.allowed) throw new Error('A campanha deste lead não está em execução ou não autoriza esta equipe/linha');
+        if (execution && !CampaignExecutionService.scheduleAllowed(execution.effectiveConfig)) throw new Error('A campanha deste lead está fora da janela de atendimento');
         const maxAttempts = execution?.effectiveConfig.maxAttemptsPerLead.value ?? Number(settings.max_attempts_per_lead ?? 2);
+        this.assertEligibility({
+          mode: isAutomatic ? 'automatic' : 'manual',
+          manualQueueOverride: !isAutomatic,
+          lead: { id: lead.id, phone: lead.phone, status: folder.rows[0].status ?? lead.status, attempts: folder.rows[0].attempts ?? lead.attempts, nextEligibleAt: folder.rows[0].next_eligible_at ?? lead.next_eligible_at, doNotCall: folder.rows[0].do_not_call ?? lead.do_not_call },
+          maxAttempts,
+          folderActive: folder.rows[0].is_active,
+          contactSuppressed: !folder.rows[0].contact_allowed,
+          activeCall: folder.rows[0].active_call,
+          callback: folder.rows[0].callback_status ? { status: folder.rows[0].callback_status, assignedSdrId: folder.rows[0].callback_assigned_sdr_id, dueAt: folder.rows[0].callback_due_at } : null,
+          scheduleAllowed: true,
+          campaignAllowed: execution ? execution.allowed : true,
+        });
         if (isAutomatic && Number(folder.rows[0].attempts ?? lead.attempts ?? 0) >= maxAttempts) throw new Error('O limite de tentativas desta campanha foi atingido');
         if (execution?.campaignId && !folder.rows[0].campaign_id) await client.query('UPDATE leads SET campaign_id=$1, campaign_version=$2 WHERE tenant_id=$3 AND id=$4', [execution.campaignId, execution.campaignVersion, tenantId, lead.id]);
         await client.query(`INSERT INTO calls (id, tenant_id, folder_id, lead_id, number_id, sdr_id, campaign_id, campaign_version, status, attempt_number, source, offer_expires_at, owner_instance_id) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'reserved',$9,$10,$11,$12)`, [callId, tenantId, folder.rows[0].folder_id, lead.id, number.id, sdr.id, execution?.campaignId ?? null, execution?.campaignVersion ?? null, isAutomatic ? Number(lead.attempts) + 1 : 0, source, expires, runtimeInstanceId]);

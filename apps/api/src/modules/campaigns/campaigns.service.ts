@@ -272,7 +272,7 @@ export class CampaignsService {
     try {
       await this.db.transaction(async (client) => {
         const row = await this.campaigns.findForUpdate(client, tenantId, campaignId);
-        if (!row) throw new NotFoundException('Campanha nÃ£o encontrada');
+        if (!row) throw new NotFoundException('Campanha não encontrada');
         const definition = definitionFromRow(await this.campaigns.definition(client, tenantId, campaignId));
         this.validate(definition, false);
         const snapshot = snapshotFromDefinition(definition);
@@ -290,7 +290,7 @@ export class CampaignsService {
         await this.events?.record({ tenantId, campaignId, campaignVersion: row.current_version ?? null, eventType: 'campaign.playbook_created', aggregateType: 'campaign_playbook', aggregateId: playbookId, idempotencyKey: `campaign.playbook_created:${playbookId}`, payload: { sourceCampaignId: campaignId } }, client as any);
       });
     } catch (error) {
-      if ((error as { code?: string }).code === '23505') throw new ConflictException('JÃ¡ existe um playbook com este nome');
+      if ((error as { code?: string }).code === '23505') throw new ConflictException('Já existe um playbook com este nome');
       throw error;
     }
     return this.campaigns.findPlaybook(tenantId, playbookId);
@@ -298,7 +298,7 @@ export class CampaignsService {
 
   async instantiatePlaybook(tenantId: string, playbookId: string, userId: string, input: InstantiateCampaignPlaybookDto) {
     const playbook = await this.campaigns.findPlaybook(tenantId, playbookId);
-    if (!playbook) throw new NotFoundException('Playbook nÃ£o encontrado');
+    if (!playbook) throw new NotFoundException('Playbook não encontrado');
     const definition = definitionFromSnapshot(playbook.config_snapshot);
     return this.create(tenantId, userId, {
       name: input.name?.trim() || `${definition.name} (nova)`,

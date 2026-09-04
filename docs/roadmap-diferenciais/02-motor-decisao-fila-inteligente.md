@@ -144,6 +144,10 @@ validam impacto comercial.
 - Extrair regras hoje espalhadas no discador para um contrato testável.
 - Garantir paridade com o comportamento existente.
 
+Status: concluída no Lote 04. O contrato cobre seleção automática, chamada
+manual, preview, simulação, reason codes e revalidação transacional; o override
+manual continua explícito e não atravessa as barreiras de segurança.
+
 ### Fase 2 — score determinístico
 
 - Política padrão conservadora.
