@@ -16,6 +16,7 @@ import { AuditService } from '../audit/audit.service';
 import { CampaignExecutionService } from '../campaigns/campaign-execution.service';
 import { CampaignEventsService } from '../campaigns/campaign-events.service';
 import { EligibilityService, eligibilityErrorMessage, evaluateLeadEligibility } from '../decision-engine/eligibility.service';
+import { DecisionShadowService } from '../decision-engine/decision-shadow.service';
 import {
   analyzePcm16Le,
   computeCallOutcome,
@@ -159,6 +160,7 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
     @Optional() private readonly campaignExecution?: CampaignExecutionService,
     @Optional() private readonly campaignEvents?: CampaignEventsService,
     @Optional() private readonly eligibility?: EligibilityService,
+    @Optional() private readonly decisionShadow?: DecisionShadowService,
   ) {}
 
   onModuleInit() {
@@ -999,6 +1001,7 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
       const settings = await this.getSettings(tenantId);
       if (!settings?.running) return;
       if (this.schedule && !(await this.schedule.evaluate(tenantId)).allowed) return;
+      const decisionEngineEnabled = this.featureFlags ? await this.featureFlags.enabled(tenantId, 'decision_engine') : false;
       const [sdrs, numbers, leads, activeFolderCount] = await Promise.all([
         this.db.query(`
             SELECT s.* FROM sdrs s
@@ -1050,6 +1053,7 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
         this.db.query(`SELECT count(*)::int AS count FROM lead_folders WHERE tenant_id = $1 AND is_active = true`, [tenantId]),
       ]);
 
+      const shadowCandidates = new Map<string, Array<{ lead: any; fifoPosition: number; eligibility: any }>>();
       for (const lead of leads.rows) {
         const eligibility = this.evaluateEligibility({
           mode: 'automatic',
@@ -1064,6 +1068,11 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
         if (eligibility && !eligibility.eligible) continue;
         const execution = this.campaignExecution ? await this.campaignExecution.resolveForLead(tenantId, lead, { globalSettings: settings }) : undefined;
         if (execution && (!execution.allowed || !CampaignExecutionService.scheduleAllowed(execution.effectiveConfig))) continue;
+        if (decisionEngineEnabled && execution?.campaignId && this.decisionShadow) {
+          const campaignCandidates = shadowCandidates.get(execution.campaignId) ?? [];
+          campaignCandidates.push({ lead, fifoPosition: Number(lead.folder_rank ?? lead.queue_sequence ?? 0), eligibility });
+          shadowCandidates.set(execution.campaignId, campaignCandidates);
+        }
         const sdr = sdrs.rows.find((row: any) => {
           if (!this.gateway.isConnected(row.id) || (execution?.campaignId && !execution.sdrIds.includes(row.id))) return false;
           const decision = this.evaluateEligibility({
@@ -1121,6 +1130,11 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
           }
           break;
         }
+      }
+      for (const [campaignId, candidates] of shadowCandidates) {
+        void this.decisionShadow?.recordBatch(tenantId, campaignId, candidates).catch((error) => {
+          this.logger.warn(`Decision shadow recording failed: ${safeOperationalError(error)}`);
+        });
       }
       const round = Number(settings.dialer_round ?? 1);
       const roundState = await this.db.query(`

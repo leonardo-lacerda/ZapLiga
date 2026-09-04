@@ -39,6 +39,8 @@ export const ROADMAP_REASON_CODES = [
   'no_active_call',
   'self_call',
   'manual_queue_override',
+  'score_priority',
+  'lead_age',
   'campaign_running',
   'campaign_not_running',
   'insufficient_sample',

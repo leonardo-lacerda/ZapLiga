@@ -378,7 +378,7 @@ function AuthenticatedApp() {
         {tab === 'sdrMetrics' && isSdr && <div className="page-content"><SdrMetricsPage /></div>}
         {tab === 'settings' && <div className="page-content"><OperationSettingsPage status={status} onChanged={load} /></div>}
         {tab === 'integrations' && <div className="page-content"><LeadIntegrationsPage tenantId={activeTenantId} folders={leadFolders} /></div>}
-        {tab === 'campaigns' && !isSdr && featureFlags && <div className="page-content"><CampaignsPage tenantId={activeTenantId} folders={leadFolders} sdrs={sdrs} numbers={numbers} featureEnabled={Boolean(featureFlags.campaigns)} /></div>}
+        {tab === 'campaigns' && !isSdr && featureFlags && <div className="page-content"><CampaignsPage tenantId={activeTenantId} folders={leadFolders} sdrs={sdrs} numbers={numbers} featureEnabled={Boolean(featureFlags.campaigns)} decisionFeatureEnabled={Boolean(featureFlags.decision_engine)} /></div>}
         {tab === 'profile' && session && <div className="page-content"><ProfilePage session={session} reload={reload} logout={logout} /></div>}
         {tab === 'callbacks' && <div className="page-content"><CallbacksPage sdrs={sdrs} isSdr={isSdr} featureEnabled={!featureFlags || Boolean(featureFlags.callbacks)} /></div>}
         {tab === 'privacy' && <div className="page-content"><PrivacyPage /></div>}

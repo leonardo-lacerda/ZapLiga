@@ -153,10 +153,18 @@ manual continua explícito e não atravessa as barreiras de segurança.
 - Política padrão conservadora.
 - Simulação e explicações.
 
+Status: concluída no Lote 05. O score é puro, determinístico, versionado por
+campanha, limitado a 0–1000 e acompanhado por motivos estruturados e snapshot
+minimizado.
+
 ### Fase 3 — sombra
 
 - Registrar comparações sem alterar chamadas.
 - Verificar latência, fairness e distribuição por pasta/campanha.
+
+Status: concluída no Lote 05 para a linha de base. O modo sombra registra a
+posição FIFO, a posição sugerida, delta, latência e distribuição por decisão;
+fairness ativo e sinais históricos permanecem no Lote 06 em diante.
 
 ### Fase 4 — ativação controlada
 

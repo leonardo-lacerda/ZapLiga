@@ -48,3 +48,21 @@ it('renders version history and requests a field-level diff', async () => {
   await user.click(screen.getByRole('button', { name: 'Comparar últimas' }));
   expect(await screen.findByText('rules.maxCallsPerMinute')).toBeInTheDocument();
 });
+
+it('exposes the explainable decision simulator only when the feature is enabled', async () => {
+  const user = userEvent.setup();
+  server.use(
+    http.get('http://localhost:3000/api/tenants/tenant-a/campaigns', () => HttpResponse.json({ items: [{ id: 'campaign-a', name: 'Enterprise', status: 'ready', folder_name: 'Inbound', lead_count: 4, current_version: 2 }] })),
+    http.get('http://localhost:3000/api/tenants/tenant-a/campaigns/campaign-a', () => HttpResponse.json({ id: 'campaign-a', name: 'Enterprise', status: 'ready', folder_name: 'Inbound', current_version: 2, lock_version: 3, draft_config: {} })),
+    http.get('http://localhost:3000/api/tenants/tenant-a/campaigns/campaign-a/versions', () => HttpResponse.json([])),
+    http.get('http://localhost:3000/api/tenants/tenant-a/campaigns/campaign-a/decision-policy', () => HttpResponse.json({ version: 1, mode: 'shadow', weights: {} })),
+    http.get('http://localhost:3000/api/tenants/tenant-a/campaigns/campaign-a/decision-comparison', () => HttpResponse.json({ summary: { count: 2, average_position_delta: 0 } })),
+    http.post('http://localhost:3000/api/tenants/tenant-a/campaigns/campaign-a/decision-policy/simulate', () => HttpResponse.json({ candidates: [{ id: 'lead-a', score: 730, suggested_position: 1, eligibility: { eligible: true, blockedBy: [] }, reasons: [{ code: 'callback_due', effect: 300 }] }] })),
+  );
+  render(<CampaignsPage tenantId="tenant-a" folders={folders} sdrs={sdrs} numbers={numbers} decisionFeatureEnabled />);
+  await user.click(await screen.findByRole('button', { name: /Enterprise/ }));
+  expect(await screen.findByText('Fila inteligente')).toBeInTheDocument();
+  await user.click(screen.getByRole('button', { name: 'Simular ordem' }));
+  expect(await screen.findByText(/score 730/)).toBeInTheDocument();
+  expect(await screen.findByText(/callback_due/)).toBeInTheDocument();
+});
