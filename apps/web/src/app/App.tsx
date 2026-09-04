@@ -139,16 +139,22 @@ function AuthenticatedApp() {
     const socket = control.current; control.current = undefined; if (socket) { socket.onclose = null; socket.close(); }
   }, [activeTenantId]);
   useEffect(() => {
-    if (isSdr && !['dashboard', 'sdrMetrics', 'callbacks', 'profile'].includes(tab)) navigateToTab('dashboard');
-    if (!isSdr && tab === 'sdrMetrics') navigateToTab('dashboard');
-  }, [isSdr, tab]);
-  useEffect(() => {
     const onPopState = () => setTab(tabFromPath(window.location.pathname));
     window.addEventListener('popstate', onPopState);
     return () => window.removeEventListener('popstate', onPopState);
   }, []);
   useEffect(() => {
-    if (isSdr && !['dashboard', 'sdrMetrics', 'callbacks', 'profile'].includes(tab)) return;
+    // Keep role restrictions and URL sync in one effect. Two separate effects used to
+    // fight on sdrMetrics when isSdr flipped false mid account-switch (empty tenant):
+    // one navigated to dashboard while the other restored sdrMetrics from stale tab
+    // state, causing "Maximum update depth exceeded" and the ErrorBoundary crash.
+    const sdrTabs = ['dashboard', 'sdrMetrics', 'callbacks', 'profile'] as const;
+    const restricted = (isSdr && !(sdrTabs as readonly string[]).includes(tab)) || (!isSdr && tab === 'sdrMetrics');
+    if (restricted) {
+      if (tab !== 'dashboard') setTab('dashboard');
+      if (tabFromPath(window.location.pathname) !== 'dashboard') navigateToTab('dashboard');
+      return;
+    }
     if (tabFromPath(window.location.pathname) !== tab) navigateToTab(tab);
   }, [isSdr, tab]);
   useEffect(() => { setLeadsOffset(0); }, [selectedFolderId]);
@@ -295,7 +301,14 @@ function AuthenticatedApp() {
     void audio.current.stop();
   }, [activeTenantId]);
   const handleLogout = async () => { await disconnect(); await logout(); };
-  const handleAccountSwitch = async (accountId: string) => { await disconnect(); await switchAccount(accountId); setTab('dashboard'); };
+  const handleAccountSwitch = async (accountId: string) => {
+    // Leave SDR-only routes before the auth transition so a temporary empty
+    // tenant (isSdr=false) cannot collide with tab=sdrMetrics.
+    if (tab !== 'dashboard') setTab('dashboard');
+    if (tabFromPath(window.location.pathname) !== 'dashboard') navigateToTab('dashboard');
+    await disconnect();
+    await switchAccount(accountId);
+  };
   const hangup = () => { if (!activeCall) return; const answered = activeCall.phase === 'answered' || activeCall.mediaActive; control.current?.send(JSON.stringify({ type: 'outcome', callId: activeCall.callId, outcome: answered ? 'sdr_hangup' : 'sdr_cancelled' })); };
   const createNumber = async (event: React.FormEvent) => { event.preventDefault(); try { await json('/api/numbers', { method: 'POST', body: JSON.stringify(numberForm) }); setNumberForm({ label: '', phone: '', maxConcurrentCalls: 1, cooldownSeconds: 60, maxCallsPerWindow: 3, callWindowSeconds: 180 }); await load(); } catch (e) { setError(String(e)); } };
   const createFolder = async (name: string) => { try { const folder = await json('/api/lead-folders', { method: 'POST', body: JSON.stringify({ name, isActive: true }) }); setSelectedFolderId(folder.id); await load(); } catch (e) { setError(e instanceof Error ? e.message : String(e)); } };

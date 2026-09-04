@@ -51,7 +51,7 @@ export class AccountSwitcherService {
   }
 
   async switch(currentUserId: string, targetUserId: string, request: Request, response: Response) {
-    if (currentUserId === targetUserId) return { switched: false };
+    if (currentUserId === targetUserId) throw new BadRequestException('Esta conta já está ativa');
     const browser = this.browserId(request, response);
     const link = await this.db.query(`SELECT u.id FROM browser_account_links bal JOIN users u ON u.id = bal.user_id WHERE bal.browser_id_hash = $1 AND bal.user_id = $2 AND u.status = 'active' LIMIT 1`, [sha256(browser), targetUserId]);
     if (!link.rows[0]) throw new UnauthorizedException('Conta não autorizada neste navegador');
