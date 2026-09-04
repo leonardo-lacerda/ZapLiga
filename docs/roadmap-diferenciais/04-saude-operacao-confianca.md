@@ -115,10 +115,18 @@ O endpoint deve explicar:
 - Catalogar reason codes e fechar lacunas de eventos.
 - Validar relógios, transições e reinícios.
 
+Status: concluída no Lote 09. Os sinais de chamadas, linhas, cooldown, quarentena,
+agenda, fila, equipe e supressões são coletados por tenant; o histórico de status
+é projetado de forma idempotente para a timeline normalizada.
+
 ### Fase 2 — fórmula e endpoint
 
 - Calcular score em tempo real e testar cenários sintéticos.
 - Expor versão e componentes.
+
+Status: concluída no Lote 09. A fórmula `v1` é pura, determinística, mostra amostra
+e denominadores, força `blocked` para restrições de agenda/política e expõe os
+endpoints gerais e por linha atrás de feature flag.
 
 ### Fase 3 — experiência visual
 
@@ -132,11 +140,11 @@ O endpoint deve explicar:
 
 ## Critérios de aceite
 
-- [ ] O mesmo snapshot produz o mesmo score para a mesma versão da fórmula.
-- [ ] Todo estado degradado possui ao menos um motivo verificável.
-- [ ] Bloqueios de compliance não podem ser compensados pelo score.
-- [ ] Reiniciar a API não apaga cooldown, quarentena ou evidência necessária.
-- [ ] A timeline distingue evento automático de intervenção humana.
+- [x] O mesmo snapshot produz o mesmo score para a mesma versão da fórmula.
+- [x] Todo estado degradado possui ao menos um motivo verificável.
+- [x] Bloqueios de compliance não podem ser compensados pelo score.
+- [x] Reiniciar a API não apaga cooldown, quarentena ou evidência necessária.
+- [x] A timeline distingue evento automático de intervenção humana.
 - [ ] Nenhuma tela apresenta limites internos como regra oficial do WhatsApp.
 - [ ] Cálculo, histórico e endpoints são isolados por tenant.
 - [ ] Testes cobrem desconexão, 429, queda rápida, cooldown e recuperação.

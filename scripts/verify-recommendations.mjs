@@ -20,7 +20,7 @@ async function cleanup() {
   try {
     await pool.query("UPDATE tenants SET status = 'archived' WHERE id = $1", [tenantId]);
     for (const table of [
-      'recommendation_events', 'operation_recommendations', 'tenant_onboarding_steps', 'tenant_feature_flags',
+      'recommendation_events', 'operation_recommendations', 'number_health_events', 'operation_health_snapshots', 'tenant_onboarding_steps', 'tenant_feature_flags',
       'dialer_schedule_exceptions', 'dialer_schedule_windows', 'contact_compliance_events', 'contact_suppressions',
       'metric_exports', 'metric_saved_views', 'metric_goals', 'metrics_daily_rollup', 'lead_stage_history',
       'number_status_history', 'sdr_availability_history', 'tenant_notes', 'call_result_catalog', 'pipeline_stage_catalog',

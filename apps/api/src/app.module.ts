@@ -28,9 +28,10 @@ import { OperationalMetricsInterceptor } from './infrastructure/operational-metr
 import { LeadIngestionModule } from './modules/lead-ingestion/lead-ingestion.module';
 import { CampaignsModule } from './modules/campaigns/campaigns.module';
 import { RecommendationsModule } from './modules/recommendations/recommendations.module';
+import { OperationHealthModule } from './modules/operation-health/operation-health.module';
 
 @Module({
-  imports: [DatabaseModule, RedisModule, FeatureFlagsModule, AuthModule, AuditModule, InvitationsModule, MembershipsModule, TenantsModule, UsersModule, ContactComplianceModule, DialerScheduleModule, DialerModule, CallbacksModule, OnboardingModule, PrivacyModule, AdminModule, LeadFoldersModule, MetricsModule, LeadIngestionModule, CampaignsModule, RecommendationsModule],
+  imports: [DatabaseModule, RedisModule, FeatureFlagsModule, AuthModule, AuditModule, InvitationsModule, MembershipsModule, TenantsModule, UsersModule, ContactComplianceModule, DialerScheduleModule, DialerModule, CallbacksModule, OnboardingModule, PrivacyModule, AdminModule, LeadFoldersModule, MetricsModule, LeadIngestionModule, CampaignsModule, RecommendationsModule, OperationHealthModule],
   controllers: [CallsController, DialerController, HealthController, LeadsController, NumbersController, SdrsController],
   providers: [{ provide: APP_INTERCEPTOR, useClass: OperationalMetricsInterceptor }],
 })

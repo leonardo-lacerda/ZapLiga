@@ -610,9 +610,9 @@ Atualizar esta tabela ao final de cada lote. Estados válidos: `pendente`,
 | 05 | concluído | Score determinístico, políticas versionadas, simulação, explicação visual, registro sombra, comparação FIFO/score e gates Q1–Q6 aprovados em `evidencias/lote-05-score-simulacao-sombra.md`. |
 | 06 | concluído | Ativação controlada, ordenação segura, fairness, starvation, kill switch, métricas e gates Q1–Q7 aprovados em `evidencias/lote-06-ativacao-fila-inteligente.md`. |
 | 07 | concluído | Catálogo tenant-scoped, central de recomendações, flag, evidência e eventos aprovados em `evidencias/lote-07-central-recomendacoes.md`. |
-| 08 | em andamento | Ações recomendadas catalogadas, revalidadas e idempotentes; executor operacional em validação. |
-| 09 | pendente | — |
-| 10 | pendente | — |
+| 08 | concluído | Ações recomendadas catalogadas, revalidadas e idempotentes; executor operacional, confirmação, before/after e falha auditável em `evidencias/lote-08-acoes-recomendadas-seguras.md`. |
+| 09 | concluído | Telemetria, fórmula `v1`, snapshots, timeline por linha, flag, isolamento e recomendações de risco em `evidencias/lote-09-telemetria-score-saude.md`. |
+| 10 | em andamento | Experiência visual de saúde, drilldown, timeline, capacidade e tendência. |
 | 11 | pendente | — |
 | 12 | pendente | — |
 | 13 | pendente | — |
@@ -639,5 +639,6 @@ O conjunto está pronto somente quando:
 
 ## Próxima ação de execução
 
-O Lote 07 está concluído. A frente em execução é o Lote 08: ações recomendadas
-seguras, com revalidação no momento da aplicação e histórico before/after.
+Os Lotes 08 e 09 estão concluídos com evidência local. A frente em execução é o
+Lote 10: experiência visual de saúde, drilldown, timeline, capacidade atual e
+tendência histórica.
