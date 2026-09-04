@@ -26,6 +26,7 @@ A vantagem não depende de uma funcionalidade isolada. Ela surge da combinação
 
 | Ordem | Documento | Resultado principal |
 | ---: | --- | --- |
+| Execução | [Plano mestre de implementação](07-plano-mestre-execucao.md) | Organiza os seis planos em lotes executáveis, gates de qualidade e um acompanhamento persistente. |
 | 1 | [Campanhas, playbooks e integrações](01-campanhas-playbooks-integracoes.md) | A operação passa a ser configurada e acompanhada como campanha, não como conjunto de telas soltas. |
 | 2 | [Motor de decisão e fila inteligente](02-motor-decisao-fila-inteligente.md) | Cada lead recebe prioridade explicável e o discador usa a melhor decisão disponível. |
 | 3 | [Central de comando e recomendações](03-central-comando-recomendacoes.md) | O líder recebe bloqueios, oportunidades e ações priorizadas em tempo real. |

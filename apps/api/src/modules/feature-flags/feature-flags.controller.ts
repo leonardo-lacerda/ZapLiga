@@ -8,6 +8,13 @@ class UpdateFeatureFlagsDto {
   @IsOptional() @IsBoolean() callbacks?: boolean;
   @IsOptional() @IsBoolean() privacy_requests?: boolean;
   @IsOptional() @IsBoolean() onboarding?: boolean;
+  @IsOptional() @IsBoolean() campaigns?: boolean;
+  @IsOptional() @IsBoolean() decision_engine?: boolean;
+  @IsOptional() @IsBoolean() recommendations?: boolean;
+  @IsOptional() @IsBoolean() operation_health?: boolean;
+  @IsOptional() @IsBoolean() analytics_learning?: boolean;
+  @IsOptional() @IsBoolean() experiments?: boolean;
+  @IsOptional() @IsBoolean() benchmarks?: boolean;
 }
 
 @Controller('/api/tenants/:tenantId/feature-flags')

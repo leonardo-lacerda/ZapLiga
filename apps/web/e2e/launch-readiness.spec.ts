@@ -99,7 +99,12 @@ test.describe.serial('Gate B - jornadas criticas', () => {
     const api = await context();
     leaderToken = (await expectOk(await api.post('/api/auth/login', { data: { email: leaderEmail, password: initialPassword } }))).accessToken;
     adminToken = (await expectOk(await api.post('/api/auth/login', { data: { email: 'admin@zapcall.local', password: 'ZapCall-Smoke-2026!' } }))).accessToken;
+    const roadmapFeatures = ['campaigns', 'decision_engine', 'recommendations', 'operation_health', 'analytics_learning', 'experiments', 'benchmarks'];
+    const initialFlags = await expectOk(await api.get(`/api/tenants/${tenantA}/feature-flags`, { headers: headers(adminToken, tenantA) }));
+    for (const feature of roadmapFeatures) expect(initialFlags[feature], `${feature} deve nascer desativada`).toBe(false);
     await expectOk(await api.patch(`/api/tenants/${tenantA}/feature-flags`, { headers: headers(adminToken, tenantA), data: { schedule_enforcement: true, callbacks: true, privacy_requests: true, onboarding: true } }));
+    const updatedFlags = await expectOk(await api.get(`/api/tenants/${tenantA}/feature-flags`, { headers: headers(adminToken, tenantA) }));
+    for (const feature of roadmapFeatures) expect(updatedFlags[feature], `${feature} nao deve ser ativada por outra flag`).toBe(false);
     await api.dispose();
   });
 
