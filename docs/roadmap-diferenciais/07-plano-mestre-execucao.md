@@ -603,7 +603,7 @@ Atualizar esta tabela ao final de cada lote. Estados válidos: `pendente`,
 | Lote | Estado | Evidência |
 | ---: | --- | --- |
 | 00 | concluído | Baseline, flags, contratos, fixtures, compatibilidade e gates Q1/Q2/Q4 aprovados em `evidencias/lote-00-baseline.md`. |
-| 01 | pendente | — |
+| 01 | concluído | Domínio/read model, backfill legado, APIs tenant-scoped e gates Q1–Q4 aprovados em `evidencias/lote-01-campanhas-leitura.md`. |
 | 02 | pendente | — |
 | 03 | pendente | — |
 | 04 | pendente | — |

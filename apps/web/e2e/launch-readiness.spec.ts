@@ -102,9 +102,12 @@ test.describe.serial('Gate B - jornadas criticas', () => {
     const roadmapFeatures = ['campaigns', 'decision_engine', 'recommendations', 'operation_health', 'analytics_learning', 'experiments', 'benchmarks'];
     const initialFlags = await expectOk(await api.get(`/api/tenants/${tenantA}/feature-flags`, { headers: headers(adminToken, tenantA) }));
     for (const feature of roadmapFeatures) expect(initialFlags[feature], `${feature} deve nascer desativada`).toBe(false);
+    const disabledCampaigns = await api.get(`/api/tenants/${tenantA}/campaigns`, { headers: headers(leaderToken, tenantA) });
+    expect(disabledCampaigns.status()).toBe(409);
     await expectOk(await api.patch(`/api/tenants/${tenantA}/feature-flags`, { headers: headers(adminToken, tenantA), data: { schedule_enforcement: true, callbacks: true, privacy_requests: true, onboarding: true } }));
     const updatedFlags = await expectOk(await api.get(`/api/tenants/${tenantA}/feature-flags`, { headers: headers(adminToken, tenantA) }));
     for (const feature of roadmapFeatures) expect(updatedFlags[feature], `${feature} nao deve ser ativada por outra flag`).toBe(false);
+    await expectOk(await api.patch(`/api/tenants/${tenantA}/feature-flags`, { headers: headers(adminToken, tenantA), data: { campaigns: true } }));
     await api.dispose();
   });
 
@@ -144,6 +147,7 @@ test.describe.serial('Gate B - jornadas criticas', () => {
     const createdB = await register(ownerBEmail, 'Tenant B');
     tenantB = createdB.tenant.id; ownerBToken = createdB.accessToken;
     const api = await context();
+    await expectOk(await api.patch(`/api/tenants/${tenantB}/feature-flags`, { headers: headers(adminToken, tenantB), data: { campaigns: true } }));
     const invitation = await expectOk(await api.post(`/api/tenants/${tenantB}/invitations`, { headers: headers(ownerBToken, tenantB), data: { email: leaderEmail, role: 'leader' } }));
     const accepted = await expectOk(await api.post(`/api/invitations/${tokenFromInvitation(invitation.invitationUrl)}/accept`, { data: { name: 'Lider E2E', password: changedPassword } }));
     leaderToken = accepted.accessToken;
@@ -160,7 +164,24 @@ test.describe.serial('Gate B - jornadas criticas', () => {
     await api.dispose();
   });
 
-  test('5. conexao de numero usa o fake deterministico e le estado', async () => {
+  test('5. campanha legada representa a operacao sem alterar a fila', async () => {
+    const api = await context();
+    const campaignList = await expectOk(await api.get(`/api/tenants/${tenantA}/campaigns`, { headers: headers(leaderToken, tenantA) }));
+    expect(campaignList.total).toBe(1);
+    expect(campaignList.items[0]).toMatchObject({ tenant_id: tenantA, is_legacy: true, current_version: 1 });
+
+    const campaignId = campaignList.items[0].id;
+    const campaign = await expectOk(await api.get(`/api/tenants/${tenantA}/campaigns/${campaignId}`, { headers: headers(leaderToken, tenantA) }));
+    expect(campaign.current_config).toMatchObject({ schema_version: 1, source: 'legacy_operation', uses_all_active_folders: true });
+    expect(campaign.sdr_count).toBeGreaterThanOrEqual(3);
+    expect(campaign.sdrs.length).toBeGreaterThanOrEqual(3);
+
+    const crossTenant = await api.get(`/api/tenants/${tenantB}/campaigns/${campaignId}`, { headers: headers(leaderToken, tenantB) });
+    expect(crossTenant.status()).toBe(404);
+    await api.dispose();
+  });
+
+  test('6. conexao de numero usa o fake deterministico e le estado', async () => {
     const api = await context();
     const created = await expectOk(await api.post(`/api/tenants/${tenantA}/numbers`, { headers: headers(leaderToken, tenantA), data: { label: 'Linha CI', phone: '5511999999999', maxConcurrentCalls: 1, cooldownSeconds: 0 } }));
     numberId = created.id;
@@ -172,10 +193,12 @@ test.describe.serial('Gate B - jornadas criticas', () => {
     const numbers = await expectOk(await api.get(`/api/tenants/${tenantA}/numbers`, { headers: headers(leaderToken, tenantA) }));
     expect(numbers.items).toHaveLength(1);
     expect(numbers.items[0].status).toBe('connected');
+    const campaigns = await expectOk(await api.get(`/api/tenants/${tenantA}/campaigns`, { headers: headers(leaderToken, tenantA) }));
+    expect(campaigns.items[0].number_count).toBe(1);
     await api.dispose();
   });
 
-  test('6. importacao preserva supressao depois de excluir e reimportar', async () => {
+  test('7. importacao preserva supressao depois de excluir e reimportar', async () => {
     const api = await context();
     await expectOk(await api.post(`/api/tenants/${tenantA}/leads/import`, { headers: headers(leaderToken, tenantA), multipart: { file: { name: 'leads.csv', mimeType: 'text/csv', buffer: Buffer.from(`name,phone\nTitular E2E,${suppressedPhone}\n`) } } }));
     const leads = await expectOk(await api.get(`/api/tenants/${tenantA}/leads`, { headers: headers(leaderToken, tenantA) }));
@@ -189,7 +212,7 @@ test.describe.serial('Gate B - jornadas criticas', () => {
     await api.dispose();
   });
 
-  test('7. discagem e bloqueada fora do horario', async () => {
+  test('8. discagem e bloqueada fora do horario', async () => {
     const api = await context();
     await expectOk(await api.put(`/api/tenants/${tenantA}/dialer/schedule`, { headers: headers(leaderToken, tenantA), data: { timezone: 'America/Sao_Paulo', windows: [], exceptions: [] } }));
     const blocked = await api.post(`/api/tenants/${tenantA}/calls/manual`, { headers: headers(leaderToken, tenantA), data: { phone: '5511988887777', name: 'Bloqueado' } });
@@ -198,7 +221,7 @@ test.describe.serial('Gate B - jornadas criticas', () => {
     await api.dispose();
   });
 
-  test('8. voz chega ao SDR sem depender do evento Accept e abre pos-atendimento', async () => {
+  test('9. voz chega ao SDR sem depender do evento Accept e abre pos-atendimento', async () => {
     const api = await context();
     const ticket = await expectOk(await api.post('/api/auth/ws-ticket', { headers: headers(sdrToken, tenantA) }));
     control = new WebSocket(`${wsBase}/ws/tenants/${tenantA}/sdr?ticket=${encodeURIComponent(ticket.ticket)}`);
@@ -224,7 +247,7 @@ test.describe.serial('Gate B - jornadas criticas', () => {
     await api.dispose();
   });
 
-  test('9. callback vence, e reatribuido e concluido por nova chamada', async () => {
+  test('10. callback vence, e reatribuido e concluido por nova chamada', async () => {
     const api = await context();
     await delay(1400);
     let callbacks = await expectOk(await api.get(`/api/tenants/${tenantA}/callbacks`, { headers: headers(leaderToken, tenantA) }));
@@ -242,7 +265,7 @@ test.describe.serial('Gate B - jornadas criticas', () => {
     await api.dispose();
   });
 
-  test('10. exportacao e anonimizacao LGPD sao autenticadas e idempotentes', async () => {
+  test('11. exportacao e anonimizacao LGPD sao autenticadas e idempotentes', async () => {
     const api = await context();
     const exportRequest = await expectOk(await api.post(`/api/tenants/${tenantA}/privacy/requests`, { headers: headers(leaderToken, tenantA), data: { phone: suppressedPhone, requestType: 'export' } }));
     await expectOk(await api.post(`/api/tenants/${tenantA}/privacy/requests/${exportRequest.id}/process`, { headers: headers(leaderToken, tenantA) }));
@@ -257,7 +280,7 @@ test.describe.serial('Gate B - jornadas criticas', () => {
     await api.dispose();
   });
 
-  test('11. revogacao de sessao invalida access token no request seguinte', async () => {
+  test('12. revogacao de sessao invalida access token no request seguinte', async () => {
     const api = await context();
     const first = await expectOk(await api.post('/api/auth/login', { data: { email: leaderEmail, password: changedPassword } }));
     const second = await expectOk(await api.post('/api/auth/login', { data: { email: leaderEmail, password: changedPassword } }));
@@ -268,9 +291,9 @@ test.describe.serial('Gate B - jornadas criticas', () => {
     await api.dispose();
   });
 
-  test('12. todas as novas rotas preservam isolamento multitenant', async () => {
+  test('13. todas as novas rotas preservam isolamento multitenant', async () => {
     const api = await context();
-    const paths = ['dialer/schedule', 'callbacks', 'privacy/requests', 'feature-flags', 'onboarding', 'contact-suppressions'];
+    const paths = ['dialer/schedule', 'callbacks', 'privacy/requests', 'feature-flags', 'onboarding', 'contact-suppressions', 'campaigns'];
     for (const path of paths) {
       const response = await api.get(`/api/tenants/${tenantA}/${path}`, { headers: headers(ownerBToken, tenantA) });
       expect(response.status(), path).toBe(401);

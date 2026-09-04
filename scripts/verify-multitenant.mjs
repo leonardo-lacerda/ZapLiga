@@ -50,7 +50,7 @@ const cleanup = async () => {
         'tenant_notes', 'call_result_catalog', 'pipeline_stage_catalog',
         'lead_callbacks', 'calls', 'sdr_pauses', 'leads', 'audit_logs', 'invitations',
         'tenant_memberships', 'websocket_tickets', 'dialer_settings',
-        'lead_folders', 'sdrs', 'whatsapp_numbers',
+        'campaigns', 'lead_folders', 'sdrs', 'whatsapp_numbers',
       ]) {
         await pool.query(`DELETE FROM ${table} WHERE tenant_id = $1`, [tenantId]);
       }
