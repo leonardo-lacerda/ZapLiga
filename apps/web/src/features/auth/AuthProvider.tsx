@@ -178,10 +178,21 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       await waitForRefresh();
       if (shouldRefreshAccessToken(5) && !await refreshAccessToken(true)) throw new Error('Sua sessão expirou. Entre novamente para continuar.');
       const result = await json(`/api/auth/accounts/${encodeURIComponent(accountId)}/switch`, { method: 'POST' });
+      if (!result?.accessToken) {
+        if (result?.switched === false) return;
+        throw new Error('Não foi possível trocar de conta. Tente novamente.');
+      }
       setAccessToken(result.accessToken);
+      // Abort in-flight tenant fetches immediately, but wait until after /me to
+      // reset React tenant state. Clearing before the await published
+      // activeTenantId='' with the old session still mounted, flipping isSdr and
+      // crashing AuthenticatedApp via antagonistic tab effects.
       clearActiveTenantId();
-      setActiveTenantState('');
+      window.localStorage.removeItem('zapliga_active_tenant');
       const nextSession = await json('/api/auth/me', undefined, false);
+      // Same synchronous turn as applySession so React 18 batches the empty
+      // reset with the new tenant and never paints the broken intermediate UI.
+      setActiveTenantState('');
       applySession(nextSession);
       await loadSavedAccounts(nextSession.user);
     });
@@ -192,10 +203,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       await waitForRefresh();
       if (shouldRefreshAccessToken(5) && !await refreshAccessToken(true)) throw new Error('Sua sessão expirou. Entre novamente para continuar.');
       const result = await json('/api/auth/accounts/add', { method: 'POST', body: JSON.stringify({ email, password }) });
+      if (!result?.accessToken) throw new Error('Não foi possível adicionar a conta. Tente novamente.');
       setAccessToken(result.accessToken);
       clearActiveTenantId();
+      window.localStorage.removeItem('zapliga_active_tenant');
+      const next = await json('/api/auth/me', undefined, false);
       setActiveTenantState('');
-      const next = await json('/api/auth/me', undefined, false); applySession(next); await loadSavedAccounts(next.user);
+      applySession(next);
+      await loadSavedAccounts(next.user);
     });
   }, [applySession, loadSavedAccounts]);
 

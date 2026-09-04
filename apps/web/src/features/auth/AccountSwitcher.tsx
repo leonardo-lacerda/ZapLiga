@@ -55,14 +55,17 @@ export function AccountSwitcher({ accounts, currentName, currentTenantName, busy
     {open && <div className="account-switcher-menu" role="dialog" aria-label="Trocar conta">
       <div className="account-switcher-heading"><strong>Contas conectadas</strong><small>Troque sem fazer login novamente</small></div>
       <div className="account-list">
-        {accounts.map((account) => <div className={`account-row${account.current ? ' current' : ''}`} key={account.id}>
-          <button type="button" className="account-row-main" onClick={() => switchAccount(account)} disabled={working || account.current}>
-            <span className="account-avatar">{account.name.slice(0, 1).toUpperCase()}</span>
-            <span><strong>{account.name}</strong><small>{account.email}</small></span>
-            {account.current && <span className="account-current"><Icon name="check" size={13} /> Atual</span>}
-          </button>
-          {!account.current && <button type="button" className="account-remove" aria-label={`Remover ${account.name}`} onClick={() => { if (window.confirm(`Remover ${account.name} deste navegador?`)) void run(() => onRemove(account.id)); }} disabled={working}><Icon name="close" size={14} /></button>}
-        </div>)}
+        {accounts.map((account) => {
+          const label = account.name || account.email || 'Conta';
+          return <div className={`account-row${account.current ? ' current' : ''}`} key={account.id}>
+            <button type="button" className="account-row-main" onClick={() => switchAccount(account)} disabled={working || account.current}>
+              <span className="account-avatar">{label.slice(0, 1).toUpperCase()}</span>
+              <span><strong>{label}</strong><small>{account.email}</small></span>
+              {account.current && <span className="account-current"><Icon name="check" size={13} /> Atual</span>}
+            </button>
+            {!account.current && <button type="button" className="account-remove" aria-label={`Remover ${label}`} onClick={() => { if (window.confirm(`Remover ${label} deste navegador?`)) void run(() => onRemove(account.id)); }} disabled={working}><Icon name="close" size={14} /></button>}
+          </div>;
+        })}
       </div>
       {message && <div className="account-switcher-message" role="alert">{message}</div>}
       {!adding ? <button type="button" className="account-switcher-action" onClick={() => { setAdding(true); setMessage(''); }} disabled={working}><Icon name="plus" size={15} /> Adicionar outra conta</button> : <form className="account-add-form" onSubmit={(event) => void submitAdd(event)}>

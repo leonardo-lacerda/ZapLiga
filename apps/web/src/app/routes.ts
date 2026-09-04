@@ -53,6 +53,7 @@ export function isPublicAuthPath(pathname: string) {
 
 export function navigateToTab(tab: TabKey) {
   const path = tabPaths[tab];
-  if (window.location.pathname !== path) window.history.pushState({}, '', path);
+  if (window.location.pathname === path) return;
+  window.history.pushState({}, '', path);
   window.dispatchEvent(new PopStateEvent('popstate'));
 }
