@@ -26,12 +26,18 @@ export class FeatureFlagsService {
     if (!(await this.enabled(tenantId, feature))) throw new ConflictException({ code: 'feature_disabled', feature, message: 'Recurso temporariamente indisponivel para esta empresa' });
   }
   async update(tenantId: string, updates: Partial<TenantFeatureFlags>, userId: string) {
-    const next = { ...(await this.get(tenantId)), ...updates };
+    // The DTO declares every flag as an optional field, so an unset flag still
+    // arrives here as an own property with value `undefined` (not absent) —
+    // spreading it over the current flags would null out that column.
+    const definedUpdates = Object.fromEntries(
+      TENANT_FEATURES.filter((feature) => typeof updates[feature] === 'boolean').map((feature) => [feature, updates[feature]]),
+    ) as Partial<TenantFeatureFlags>;
+    const next = { ...(await this.get(tenantId)), ...definedUpdates };
     await this.db.query(`INSERT INTO tenant_feature_flags (tenant_id, schedule_enforcement, callbacks, privacy_requests, onboarding, updated_by, updated_at)
       VALUES ($1,$2,$3,$4,$5,$6,now()) ON CONFLICT (tenant_id) DO UPDATE SET schedule_enforcement=EXCLUDED.schedule_enforcement, callbacks=EXCLUDED.callbacks, privacy_requests=EXCLUDED.privacy_requests, onboarding=EXCLUDED.onboarding, updated_by=EXCLUDED.updated_by, updated_at=now()`,
     [tenantId, next.schedule_enforcement, next.callbacks, next.privacy_requests, next.onboarding, userId]);
     await this.redis.client.del(this.key(tenantId)).catch(() => undefined);
-    await this.audit.record({ actorUserId: userId, tenantId, action: 'tenant.feature_flags_updated', entityType: 'tenant', entityId: tenantId, metadata: { changed: Object.keys(updates) } });
+    await this.audit.record({ actorUserId: userId, tenantId, action: 'tenant.feature_flags_updated', entityType: 'tenant', entityId: tenantId, metadata: { changed: Object.keys(definedUpdates) } });
     return next;
   }
 }
