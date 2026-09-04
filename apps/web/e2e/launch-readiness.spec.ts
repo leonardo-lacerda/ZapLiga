@@ -99,7 +99,13 @@ test.describe.serial('Gate B - jornadas criticas', () => {
     const api = await context();
     leaderToken = (await expectOk(await api.post('/api/auth/login', { data: { email: leaderEmail, password: initialPassword } }))).accessToken;
     adminToken = (await expectOk(await api.post('/api/auth/login', { data: { email: 'admin@zapcall.local', password: 'ZapCall-Smoke-2026!' } }))).accessToken;
-    await expectOk(await api.patch(`/api/tenants/${tenantA}/feature-flags`, { headers: headers(adminToken, tenantA), data: { schedule_enforcement: true, callbacks: true, privacy_requests: true, onboarding: true } }));
+    const launchFeatures = ['schedule_enforcement', 'callbacks', 'privacy_requests', 'onboarding'];
+    const initialFlags = await expectOk(await api.get(`/api/tenants/${tenantA}/feature-flags`, { headers: headers(adminToken, tenantA) }));
+    for (const feature of launchFeatures) expect(initialFlags[feature], `${feature} deve nascer ativada`).toBe(true);
+    await expectOk(await api.patch(`/api/tenants/${tenantA}/feature-flags`, { headers: headers(adminToken, tenantA), data: { callbacks: false } }));
+    const disabledCallbacks = await api.get(`/api/tenants/${tenantA}/callbacks`, { headers: headers(leaderToken, tenantA) });
+    expect(disabledCallbacks.status()).toBe(409);
+    await expectOk(await api.patch(`/api/tenants/${tenantA}/feature-flags`, { headers: headers(adminToken, tenantA), data: { callbacks: true } }));
     await api.dispose();
   });
 

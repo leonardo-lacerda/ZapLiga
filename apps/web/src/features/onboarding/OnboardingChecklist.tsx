@@ -12,10 +12,13 @@ const stepPaths: Record<string, string> = {
   operation_started: '/app/',
 };
 
-export function OnboardingChecklist() {
+export function OnboardingChecklist({ enabled = true }: { enabled?: boolean } = {}) {
   const [state, setState] = useState<AnyRow | null>(null);
-  useEffect(() => { void json('/api/onboarding').then(setState).catch(() => undefined); }, []);
-  if (!state || state.completed === state.total) return null;
+  useEffect(() => {
+    if (!enabled) { setState(null); return; }
+    void json('/api/onboarding').then(setState).catch(() => undefined);
+  }, [enabled]);
+  if (!enabled || !state || state.completed === state.total) return null;
 
   const markAudio = async () => setState(await json('/api/onboarding/audio-tested', { method: 'POST' }));
   const openStep = (path: string) => {

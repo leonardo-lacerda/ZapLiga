@@ -6,7 +6,8 @@ import { AuditService } from '../audit/audit.service';
 export const TENANT_FEATURES = ['schedule_enforcement', 'callbacks', 'privacy_requests', 'onboarding'] as const;
 export type TenantFeature = typeof TENANT_FEATURES[number];
 export type TenantFeatureFlags = Record<TenantFeature, boolean>;
-const defaults = (): TenantFeatureFlags => ({ schedule_enforcement: false, callbacks: false, privacy_requests: false, onboarding: false });
+// Launch features stay on by default; super admin can still disable per tenant.
+const defaults = (): TenantFeatureFlags => ({ schedule_enforcement: true, callbacks: true, privacy_requests: true, onboarding: true });
 
 @Injectable()
 export class FeatureFlagsService {

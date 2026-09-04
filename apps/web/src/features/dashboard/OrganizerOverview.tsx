@@ -127,7 +127,7 @@ export function OrganizerOverview(props: AnyRow) {
   return <div className="organizer-overview">
     <OverviewHero status={status} dateRange={dateRange} toggleDialer={toggleDialer} />
     <AttentionSection status={status} connectedNumbers={connectedNumbers} sdrs={props.sdrs} toggleDialer={toggleDialer} />
-    <OnboardingChecklist />
+    <OnboardingChecklist enabled={Boolean(props.featureFlags?.onboarding)} />
     <OperationsNowPanel tenantId={String(props.tenantId ?? '')} fallbackStatus={status} />
     <div className="overview-lower-grid">
       <PerformancePanel status={status} dateRange={dateRange} />

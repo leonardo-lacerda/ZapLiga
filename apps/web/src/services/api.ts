@@ -134,6 +134,30 @@ export const refreshAccessToken = (allowDuringAuthTransition = false): Promise<b
   return refreshInFlight;
 };
 
+export class ApiError extends Error {
+  readonly status: number;
+  readonly code?: string;
+  readonly feature?: string;
+  readonly details: unknown;
+
+  constructor(status: number, body: any) {
+    const payload = body?.message;
+    const message = typeof payload === 'string'
+      ? payload
+      : typeof payload?.message === 'string'
+        ? payload.message
+        : typeof body?.error === 'string'
+          ? body.error
+          : 'Erro na API';
+    super(message);
+    this.name = 'ApiError';
+    this.status = status;
+    this.code = typeof payload?.code === 'string' ? payload.code : typeof body?.code === 'string' ? body.code : undefined;
+    this.feature = typeof payload?.feature === 'string' ? payload.feature : undefined;
+    this.details = body;
+  }
+}
+
 export const json = async (path: string, init?: RequestInit, retry = true): Promise<any> => {
   // Do not knowingly send an expired access token. This is especially
   // important when a suspended/mobile tab becomes visible again: its polling
@@ -152,6 +176,6 @@ export const json = async (path: string, init?: RequestInit, retry = true): Prom
   }
   const body = await response.json().catch(() => ({}));
   if (response.status === 401 && typeof window !== 'undefined') window.dispatchEvent(new CustomEvent('zapliga:access-changed'));
-  if (!response.ok) throw new Error(body.message ?? 'Erro na API');
+  if (!response.ok) throw new ApiError(response.status, body);
   return body;
 };
