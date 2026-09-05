@@ -86,7 +86,7 @@ jobs:
         env:
           DATABASE_URL: postgres://zapcall:zapcall@127.0.0.1:5432/zapcall
           SMOKE_API_URL: http://127.0.0.1:3000
-          SMOKE_ADMIN_EMAIL: admin@zapcall.local
+          SMOKE_ADMIN_EMAIL: admin@zapliga.local
           SMOKE_ADMIN_PASSWORD: ZapCall-Smoke-2026!
         run: |
           docker compose -f docker-compose.yml -f docker-compose.e2e.yml exec -T api-a node apps/api/dist/scripts/bootstrap-admin.js

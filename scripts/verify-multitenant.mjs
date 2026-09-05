@@ -1,7 +1,7 @@
 import pg from 'pg';
 
 const baseUrl = process.env.SMOKE_API_URL ?? 'http://localhost:3000';
-const adminEmail = process.env.SMOKE_ADMIN_EMAIL ?? 'admin@zapcall.local';
+const adminEmail = process.env.SMOKE_ADMIN_EMAIL ?? 'admin@zapliga.local';
 const adminPassword = process.env.SMOKE_ADMIN_PASSWORD ?? 'ZapCall-Smoke-2026!';
 const legacyTenantId = process.env.SMOKE_LEGACY_TENANT_ID ?? 'tenant-legado';
 const slug = `smoke-${Date.now()}`;
