@@ -6,7 +6,7 @@ import { OperationHealthPage } from './OperationHealthPage';
 
 afterEach(() => vi.useRealTimers());
 
-it('mostra score, evidências, tendência e drilldown da linha', async () => {
+it('explica a nota, o que fazer agora, a tendência e o detalhe por linha em linguagem simples', async () => {
   server.use(
     http.get('http://localhost:3000/api/tenants/tenant-1/operation-health', () => HttpResponse.json({ score: 78, state: 'attention', formulaVersion: 'v1', internalScoreNotice: 'Score interno do ZapLiga', nextSafeAction: 'Revise a fila', collectedAt: new Date().toISOString(), sampleSize: { attempts: 20, numbers: 2 }, components: [{ code: 'connectivity', score: 100, weight: .25, numerator: 2, denominator: 2 }], reasonCodes: ['callbacks_due'], evidence: { capacity: { configured: 4, active: 1, available: 3, nextReleaseAt: null }, queue: { ready: 4, waiting: 2, dueCallbacks: 1 } }, trend: { direction: 'up', delta: 4 } })),
     http.get('http://localhost:3000/api/tenants/tenant-1/operation-health/history', () => HttpResponse.json({ items: [{ id: 'snapshot-1', score: 74, state: 'attention', formulaVersion: 'v1', createdAt: new Date().toISOString(), components: [], reasonCodes: [], evidence: {} }] })),
@@ -18,10 +18,22 @@ it('mostra score, evidências, tendência e drilldown da linha', async () => {
   render(<OperationHealthPage tenantId="tenant-1" enabled />);
 
   expect(await screen.findByRole('heading', { name: 'Saúde da operação' })).toBeInTheDocument();
+  // The state is explained in words, not just a code, and the safe next step is on screen.
+  expect(screen.getByText(/Dá para operar, mas há sinais que merecem ação/)).toBeInTheDocument();
   expect(screen.getByText('Revise a fila')).toBeInTheDocument();
+  // Component codes become the operator's words.
+  expect(screen.getAllByText('Linhas conectadas').length).toBeGreaterThan(0);
+  expect(screen.getByText('Retornos agendados vencidos')).toBeInTheDocument();
   expect(screen.getByText('Tendência da saúde')).toBeInTheDocument();
-  expect(screen.getByText('Linha principal')).toBeInTheDocument();
+  expect(screen.getAllByText('Linha principal').length).toBeGreaterThan(0);
   expect(await screen.findByText('Automático', { exact: false })).toBeInTheDocument();
   fireEvent.click(screen.getByRole('button', { name: /Linha principal/i }));
   expect(await screen.findByText('Nenhuma intervenção imediata')).toBeInTheDocument();
+  expect(screen.getByText('Reconectou')).toBeInTheDocument();
+});
+
+it('diz o que a página faria quando o recurso está desligado', () => {
+  render(<OperationHealthPage tenantId="tenant-1" enabled={false} />);
+  expect(screen.getByText(/Saúde da operação ainda não está ligada/)).toBeInTheDocument();
+  expect(screen.getByText(/Admin → Detalhes da empresa → Recursos da empresa/)).toBeInTheDocument();
 });

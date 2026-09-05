@@ -18,7 +18,8 @@ it('guides a leader through the six-step campaign wizard and creates a draft', a
     http.get('http://localhost:3000/api/tenants/tenant-a/campaigns/campaign-a/versions', () => HttpResponse.json([])),
   );
   render(<CampaignsPage tenantId="tenant-a" folders={folders} sdrs={sdrs} numbers={numbers} />);
-  await user.click(screen.getByRole('button', { name: 'Nova campanha' }));
+  // The header and the empty state both offer "Nova campanha"; either works.
+  await user.click(screen.getAllByRole('button', { name: 'Nova campanha' })[0]);
   await user.type(screen.getByPlaceholderText('Ex.: Reativação inbound Q4'), 'Outbound enterprise');
   await user.click(screen.getByRole('button', { name: 'Continuar' }));
   await user.click(screen.getByRole('button', { name: /Inbound/ }));
@@ -66,6 +67,20 @@ it('exposes the explainable decision simulator only when the feature is enabled'
   await user.selectOptions(screen.getByRole('combobox', { name: 'Modo da fila inteligente' }), 'active');
   expect(await screen.findByText('Fila inteligente ativada para esta campanha.')).toBeInTheDocument();
   await user.click(screen.getByRole('button', { name: 'Simular ordem' }));
-  expect(await screen.findByText(/score 730/)).toBeInTheDocument();
-  expect(await screen.findByText(/callback_due/)).toBeInTheDocument();
+  expect(await screen.findByText(/pontuação 730/)).toBeInTheDocument();
+  // Reason codes are shown in the operator's words, not as identifiers.
+  expect(await screen.findByText(/Retorno agendado vencido \+300/)).toBeInTheDocument();
+});
+
+it('explica o status em palavras e oferece a próxima ação como botão principal', async () => {
+  server.use(
+    http.get('http://localhost:3000/api/tenants/tenant-a/campaigns', () => HttpResponse.json({ items: [{ id: 'campaign-a', name: 'Enterprise', status: 'ready', folder_name: 'Inbound', lead_count: 4, current_version: 1 }] })),
+    http.get('http://localhost:3000/api/tenants/tenant-a/campaigns/campaign-a', () => HttpResponse.json({ id: 'campaign-a', name: 'Enterprise', status: 'ready', folder_name: 'Inbound', lead_count: 4, current_version: 1, lock_version: 1, draft_config: { maxCallsPerMinute: 12, maxAttemptsPerLead: 3 } })),
+    http.get('http://localhost:3000/api/tenants/tenant-a/campaigns/campaign-a/versions', () => HttpResponse.json([])),
+  );
+  render(<CampaignsPage tenantId="tenant-a" folders={folders} sdrs={sdrs} numbers={numbers} />);
+  await userEvent.setup().click(await screen.findByRole('button', { name: /Enterprise/ }));
+  expect(await screen.findByText(/A definição foi congelada em uma versão/)).toBeInTheDocument();
+  expect(screen.getByRole('button', { name: 'Iniciar' })).toBeInTheDocument();
+  expect(screen.getByText('12/min')).toBeInTheDocument();
 });

@@ -1,19 +1,24 @@
 import { useEffect, useState } from 'react';
 import { Badge, Button, Icon, Panel, SectionHeader } from '../../components/ui';
+import { EmptyGuide, FeatureOff, HowItWorks, LoadingBlock, Notice, PageIntro, TechnicalDetails } from '../../components/guide';
 import { json } from '../../services/api';
 import type { AnyRow } from '../../types';
 
 const days = ['Domingo', 'Segunda', 'Terça', 'Quarta', 'Quinta', 'Sexta', 'Sábado'];
 const percent = (value: unknown) => `${Math.round(Number(value || 0) * 100)}%`;
 const sampleText = (value: unknown) => `${Number(value || 0)} tentativas`;
-const windowLabel = (value: string) => {
-  const [day, hour] = value.split(':');
-  return `${days[Number(day)] ?? 'Janela'} às ${String(Number(hour)).padStart(2, '0')}h`;
-};
-const dimensionLabel = (type: string, value: string) => type === 'best_time' ? windowLabel(value) : value === 'legacy' ? 'Operação legada' : value.replaceAll('_', ' ');
-const tone = (status: string) => status === 'reliable' ? 'success' : status === 'attention' ? 'warning' : 'info';
-const monitorTone = (status: string) => status === 'stable' || status === 'observed' ? 'success' : status === 'attention' ? 'warning' : 'info';
-const monitorLabel = (status: string) => status === 'stable' ? 'Estável' : status === 'observed' ? 'Observado' : status === 'attention' ? 'Atenção' : 'Dados insuficientes';
+const windowLabel = (value: string) => { const [day, hour] = value.split(':'); return `${days[Number(day)] ?? 'Janela'} às ${String(Number(hour)).padStart(2, '0')}h`; };
+const dimensionLabel = (type: string, value: string) => type === 'best_time' ? windowLabel(value) : value === 'legacy' ? 'Operação sem campanha' : value.replaceAll('_', ' ');
+
+// Titles the API sends are fine; what a leader needs is the question each
+// insight answers and how much to trust it.
+const insightQuestion: Record<string, string> = { best_time: 'Quando ligar?', campaign_positive_rate: 'Qual campanha rende mais?', source_positive_rate: 'Qual origem de leads rende mais?', best_recency: 'Quanto tempo depois do cadastro ligar?' };
+const insightIcon: Record<string, string> = { best_time: 'clock', campaign_positive_rate: 'sparkles', source_positive_rate: 'users', best_recency: 'calendar' };
+const confidenceLabel: Record<string, string> = { reliable: 'Base sólida', directional: 'Tendência inicial', insufficient_data: 'Amostra pequena' };
+const confidenceTone: Record<string, string> = { reliable: 'success', directional: 'info', insufficient_data: 'neutral' };
+const monitorLabel = (status?: string) => status === 'stable' || status === 'observed' ? 'Sem alerta' : status === 'attention' ? 'Atenção' : 'Poucos dados';
+const monitorTone = (status?: string) => status === 'stable' || status === 'observed' ? 'success' : status === 'attention' ? 'warning' : 'neutral';
+const dateOnly = (value?: string) => value ? new Date(value).toLocaleDateString('pt-BR') : '—';
 
 export function AnalyticsLearningPage({ tenantId, enabled }: { tenantId: string; enabled: boolean }) {
   const [data, setData] = useState<AnyRow | null>(null);
@@ -27,11 +32,7 @@ export function AnalyticsLearningPage({ tenantId, enabled }: { tenantId: string;
     if (!enabled || !tenantId) return;
     setLoading(true);
     try {
-      const [insights, aggregates, monitorData] = await Promise.all([
-        json(`/api/tenants/${tenantId}/analytics/learning/insights`),
-        json(`/api/tenants/${tenantId}/analytics/learning/aggregates?dimension=day_hour`),
-        json(`/api/tenants/${tenantId}/analytics/learning/monitor`),
-      ]);
+      const [insights, aggregates, monitorData] = await Promise.all([json(`/api/tenants/${tenantId}/analytics/learning/insights`), json(`/api/tenants/${tenantId}/analytics/learning/aggregates?dimension=day_hour`), json(`/api/tenants/${tenantId}/analytics/learning/monitor`)]);
       setData(insights); setWindows(aggregates.items ?? []); setMonitor(monitorData); setError('');
     } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
     finally { setLoading(false); }
@@ -45,18 +46,68 @@ export function AnalyticsLearningPage({ tenantId, enabled }: { tenantId: string;
     finally { setRebuilding(false); }
   };
 
-  if (!enabled) return <Panel><div className="analytics-learning-empty"><Icon name="lock" size={22} /><strong>Aprendizado ainda não habilitado</strong><p>Os sinais históricos só aparecem após a ativação deste recurso para a empresa.</p></div></Panel>;
-  if (loading && !data) return <div className="analytics-learning-page"><div className="analytics-learning-loading">Lendo sinais históricos…</div></div>;
+  if (!enabled) return <FeatureOff title="Aprendizado da operação ainda não está ligado para esta empresa" description="Esta página lê o histórico de chamadas e mostra padrões simples: melhores horários, campanhas e origens que mais rendem. É só leitura; nada aqui muda a fila." />;
+  if (loading && !data) return <LoadingBlock>Lendo o histórico de chamadas…</LoadingBlock>;
 
   const reliability = data?.reliability ?? {};
-  const insights = data?.insights ?? [];
-  return <div className="analytics-learning-page">
-    <div className="analytics-learning-heading"><div><span className="eyebrow">APRENDIZADO POR TENANT</span><h1>Aprendizado da operação</h1><p>Estatística descritiva para encontrar padrões sem transformar pouca amostra em promessa.</p></div><Button variant="secondary" icon="refresh" onClick={() => void rebuild()} disabled={rebuilding}>{rebuilding ? 'Recalculando…' : 'Recalcular sinais'}</Button></div>
-    {error && <div className="analytics-learning-error" role="alert">{error}</div>}
-    <Panel className="analytics-learning-guardrail"><div><Icon name="lock" size={17} /><div><strong>Guardrail ativo</strong><p>Esses sinais não alteram a fila ativa. O motor só os observa no modo shadow, com amostra mínima de {data?.minimumSampleSize ?? 20} tentativas.</p></div></div><Badge tone={tone(reliability.status)}>{reliability.status === 'reliable' ? 'Dados confiáveis' : 'Dados insuficientes'}</Badge></Panel>
-    <Panel><SectionHeader eyebrow="MONITOR DE QUALIDADE" title="Estabilidade e seleção" description="Alertas descritivos para evitar que concentração da amostra pareça uma causa." /><div className="analytics-learning-monitor-grid"><div className="analytics-learning-monitor-card"><div><span>Estabilidade por linha</span><Badge tone={monitorTone(monitor?.stability?.status)}>{monitorLabel(monitor?.stability?.status ?? 'insufficient_data')}</Badge></div><strong>{monitor?.stability?.lines?.length ?? 0} linhas com amostra mínima</strong><small>Maior variação de falha: {percent(monitor?.stability?.maxLineFailureDelta)}</small></div><div className="analytics-learning-monitor-card"><div><span>Concentração observada</span><Badge tone={monitorTone(monitor?.selectionBias?.status)}>{monitorLabel(monitor?.selectionBias?.status ?? 'insufficient_data')}</Badge></div><strong>{percent(monitor?.selectionBias?.concentration)} na origem dominante</strong><small>{monitor?.selectionBias?.dominantSource ?? 'Sem origem dominante'} · {percent(monitor?.selectionBias?.retryShare)} em tentativas posteriores</small></div></div>{monitor?.selectionBias?.warnings?.length ? <div className="analytics-learning-monitor-warning"><Icon name="alert" size={15} /><span>{monitor.selectionBias.warnings.join(' ')}</span></div> : null}</Panel>
-    <div className="analytics-learning-summary"><Panel><span>Confiabilidade</span><strong>{reliability.score ?? 0}/100</strong><small>fórmula {reliability.formulaVersion ?? '—'}</small></Panel><Panel><span>Período</span><strong>{data?.period?.from ? new Date(data.period.from).toLocaleDateString('pt-BR') : '—'}</strong><small>até {data?.period?.to ? new Date(data.period.to).toLocaleDateString('pt-BR') : '—'}</small></Panel><Panel><span>Estado do aprendizado</span><strong>{data?.status === 'ready' ? 'Pronto' : 'Insuficiente'}</strong><small>{data?.insights?.length ?? 0} insights elegíveis</small></Panel></div>
-    <Panel><SectionHeader eyebrow="INSIGHTS EXPLICÁVEIS" title="O que os dados sugerem" description={data?.message} />{insights.length ? <div className="analytics-learning-insights">{insights.map((item: AnyRow) => <article className="analytics-learning-insight" key={item.type}><div className="analytics-learning-insight-icon"><Icon name={item.type === 'best_time' ? 'clock' : item.type.includes('campaign') ? 'sparkles' : 'chart'} size={16} /></div><div><strong>{item.title}</strong><h3>{dimensionLabel(item.type, String(item.dimensionValue))}</h3><p>{item.explanation}</p><small>{item.metric?.includes('Rate') ? percent(item.value) : item.value} · {sampleText(item.denominator)} · confiança {item.confidence}</small></div></article>)}</div> : <div className="analytics-learning-empty-inline"><Icon name="chart" size={18} /><strong>Dados insuficientes para recomendar um padrão</strong><span>Recalcule depois de acumular mais chamadas e executar uma reconciliação confiável.</span></div>}</Panel>
-    <Panel><SectionHeader eyebrow="MELHORES HORÁRIOS" title="Janelas de atendimento" description="Taxa suavizada para reduzir oscilações de amostras pequenas." />{windows.length ? <div className="analytics-learning-window-list">{windows.slice(0, 8).map((item: AnyRow) => <div className="analytics-learning-window" key={item.id}><span>{windowLabel(String(item.dimensionValue))}</span><div className="analytics-learning-track"><i style={{ width: `${Math.min(100, Number(item.smoothedMetrics?.answerRate ?? 0) * 100)}%` }} /></div><strong>{percent(item.smoothedMetrics?.answerRate)}</strong><small>{sampleText(item.sampleSize)}</small></div>)}</div> : <div className="analytics-learning-empty-inline">Ainda não há agregados calculados para o período.</div>}</Panel>
+  const reliable = reliability.status === 'reliable';
+  const insights: AnyRow[] = data?.insights ?? [];
+  const minimum = data?.minimumSampleSize ?? 20;
+  const topWindows = windows.slice().sort((a, b) => Number(b.smoothedMetrics?.answerRate ?? 0) - Number(a.smoothedMetrics?.answerRate ?? 0)).slice(0, 8);
+
+  return <div className="guide-page analytics-learning-page">
+    <PageIntro
+      eyebrow="OPERAÇÃO"
+      title="Aprendizado da operação"
+      purpose="O que o seu histórico de chamadas mostra: em que horários as pessoas mais atendem, quais campanhas e origens rendem mais. É leitura para decidir melhor; nada aqui altera a fila sozinho."
+      aside={<Button variant="secondary" icon="refresh" onClick={() => void rebuild()} disabled={rebuilding}>{rebuilding ? 'Recalculando…' : 'Recalcular agora'}</Button>}
+    />
+    {error && <Notice tone="error">{error}</Notice>}
+
+    <Panel className={`readiness readiness-${reliable ? 'ok' : 'wait'}`}>
+      <span className="readiness-icon"><Icon name={reliable ? 'check' : 'clock'} size={18} /></span>
+      <div>
+        <strong>{reliable ? 'Há dados suficientes para ler padrões' : 'Ainda faltam dados para ler padrões com segurança'}</strong>
+        <p>{reliable ? `Período analisado: ${dateOnly(data?.period?.from)} a ${dateOnly(data?.period?.to)}. Cada padrão abaixo diz em quantas tentativas se baseia.` : `Cada padrão precisa de pelo menos ${minimum} tentativas no mesmo recorte e de um histórico consistente. Continue operando e recalcule depois.`}</p>
+      </div>
+      <Badge tone={reliable ? 'success' : 'neutral'}>{reliable ? 'Pronto para ler' : 'Aguardando volume'}</Badge>
+    </Panel>
+
+    <Panel>
+      <SectionHeader title="O que os dados sugerem" description={reliable ? 'Cada cartão responde a uma pergunta prática e mostra o tamanho da base.' : 'Os padrões aparecem aqui quando houver volume suficiente.'} />
+      {insights.length ? <div className="insight-grid">{insights.map((item: AnyRow) => <article className="insight-card" key={item.type}>
+        <span className="insight-card-icon"><Icon name={insightIcon[item.type] ?? 'chart'} size={16} /></span>
+        <div className="insight-card-body">
+          <span className="insight-question">{insightQuestion[item.type] ?? item.title}</span>
+          <h3>{dimensionLabel(item.type, String(item.dimensionValue))}</h3>
+          <p>{item.metric?.includes('Rate') ? `${percent(item.value)} de ${item.metric === 'answerRate' ? 'atendimento' : 'resultado positivo'}` : String(item.value)} · com base em {sampleText(item.denominator)}</p>
+          <div className="insight-card-foot"><Badge tone={confidenceTone[item.confidence] ?? 'neutral'}>{confidenceLabel[item.confidence] ?? item.confidence}</Badge><small>{item.explanation}</small></div>
+        </div>
+      </article>)}</div> : <EmptyGuide icon="chart" title="Nenhum padrão para mostrar ainda" text={`Um padrão só aparece quando um recorte (horário, campanha, origem) acumula ${minimum} tentativas ou mais. Isso evita tomar coincidência por regra.`} />}
+    </Panel>
+
+    <Panel>
+      <SectionHeader title="Melhores horários para ligar" description="Taxa de atendimento por dia e hora, do melhor para o pior. Barras mais longas atendem mais." />
+      {topWindows.length ? <div className="bar-list">{topWindows.map((item: AnyRow) => <div className="bar-row" key={item.id}><span className="bar-label">{windowLabel(String(item.dimensionValue))}</span><div className="bar-track"><span className="bar-fill bar-primary" style={{ width: `${Math.min(100, Number(item.smoothedMetrics?.answerRate ?? 0) * 100)}%` }} /></div><strong>{percent(item.smoothedMetrics?.answerRate)}</strong><small>{sampleText(item.sampleSize)}</small></div>)}</div> : <EmptyGuide icon="clock" title="Ainda sem horários calculados" text="Depois de algumas semanas de chamadas, os horários com mais atendimento aparecem aqui." />}
+    </Panel>
+
+    <Panel>
+      <SectionHeader title="Cuidados na leitura" description="Dois avisos automáticos para não confundir coincidência com causa." />
+      <div className="two-column">
+        <div className="care-card"><div className="care-head"><strong>As linhas se comportam parecido?</strong><Badge tone={monitorTone(monitor?.stability?.status)}>{monitorLabel(monitor?.stability?.status)}</Badge></div><p>{monitor?.stability?.lines?.length ?? 0} linha(s) com volume suficiente para comparar. Maior diferença de falha entre linhas: {percent(monitor?.stability?.maxLineFailureDelta)}.</p><small>Se uma linha falha muito mais que as outras, o problema pode ser dela, não do horário ou da campanha.</small></div>
+        <div className="care-card"><div className="care-head"><strong>Os dados vêm de um lugar só?</strong><Badge tone={monitorTone(monitor?.selectionBias?.status)}>{monitorLabel(monitor?.selectionBias?.status)}</Badge></div><p>{percent(monitor?.selectionBias?.concentration)} das tentativas vêm da origem “{monitor?.selectionBias?.dominantSource ?? 'não identificada'}”. {percent(monitor?.selectionBias?.retryShare)} são segundas tentativas ou posteriores.</p><small>Quando quase tudo vem de uma origem, um “melhor horário” pode ser só o horário em que essa origem chega.</small></div>
+      </div>
+      {monitor?.selectionBias?.warnings?.length ? <Notice tone="warning">{monitor.selectionBias.warnings.join(' ')}</Notice> : null}
+    </Panel>
+
+    <Panel>
+      <SectionHeader title="Como isto funciona" />
+      <HowItWorks items={[
+        { icon: 'lock', title: 'Só leitura', text: 'Nada aqui muda a fila. O motor de decisão pode observar estes padrões, mas só age quando você liga a fila inteligente em uma campanha.' },
+        { icon: 'chart', title: 'Amostra mínima', text: `Um recorte só vira padrão com ${minimum} tentativas ou mais. Números pequenos oscilam muito para servir de guia.` },
+        { icon: 'refresh', title: 'Recalcule quando quiser', text: 'O botão “Recalcular agora” refaz a leitura com as chamadas mais recentes.' },
+      ]} />
+      <TechnicalDetails><p className="subtle">Confiabilidade do histórico: {reliability.score ?? 0}/100 (fórmula {reliability.formulaVersion ?? '—'}). Taxas são suavizadas para reduzir oscilação de amostras pequenas. Estado: {data?.status ?? '—'} · {data?.message ?? ''}</p></TechnicalDetails>
+    </Panel>
   </div>;
 }
