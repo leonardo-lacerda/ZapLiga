@@ -51,6 +51,9 @@ export class FeatureFlagsService {
     if (!(await this.enabled(tenantId, feature))) throw new ConflictException({ code: 'feature_disabled', feature, message: 'Recurso temporariamente indisponivel para esta empresa' });
   }
   async update(tenantId: string, updates: Partial<TenantFeatureFlags>, userId: string) {
+    // The DTO declares every flag as an optional field, so an unset flag still
+    // arrives here as an own property with value `undefined` (not absent) —
+    // spreading it over the current flags would null out that column.
     const definedUpdates = Object.fromEntries(
       TENANT_FEATURES
         .filter((feature) => typeof updates[feature] === 'boolean')
