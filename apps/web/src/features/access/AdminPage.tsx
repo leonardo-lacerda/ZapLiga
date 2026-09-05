@@ -67,6 +67,13 @@ export function AdminPage({ onChanged, onOpenTenant }: { onChanged?: () => Promi
     ['onboarding', 'Checklist de onboarding'],
     ['privacy_requests', 'Solicitações de privacidade'],
     ['schedule_enforcement', 'Bloqueio fora da agenda'],
+    ['campaigns', 'Campanhas'],
+    ['decision_engine', 'Simulador de decisão'],
+    ['recommendations', 'Recomendações operacionais'],
+    ['operation_health', 'Saúde da operação'],
+    ['analytics_learning', 'Aprendizado analítico'],
+    ['experiments', 'Experimentos controlados'],
+    ['benchmarks', 'Benchmarks privados'],
   ] as const;
 
   const tenants = tenantPage.items as AnyRow[];

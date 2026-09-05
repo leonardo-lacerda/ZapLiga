@@ -44,7 +44,11 @@ describe('active decision ordering', () => {
     service.getPolicy = jest.fn().mockResolvedValue(activePolicy);
     service.incrementMetric = jest.fn();
     service.observeMetric = jest.fn();
-    const candidates = [row('fresh-high', 100, '2026-09-04T11:59:00.000Z', 1), row('waiting', 0, '2026-09-03T00:00:00.000Z', 2)];
+    const now = Date.now();
+    const candidates = [
+      row('fresh-high', 100, new Date(now - 2 * 3_600_000).toISOString(), 1),
+      row('waiting', 0, new Date(now - 48 * 3_600_000).toISOString(), 2),
+    ];
 
     const result = await service.prioritizeCandidates('tenant-1', candidates);
 
