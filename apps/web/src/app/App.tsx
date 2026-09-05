@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type React from 'react';
-import { AudioBridge, type AudioDeviceState, type InboundAudioLevel } from '../audio/AudioBridge';
+import type { AudioDeviceState, InboundAudioLevel } from '../audio/AudioBridge';
+import { useAudioBridge } from '../audio/useAudioBridge';
 import { json, wsUrl } from '../services/api';
 import type { AnyRow, TabKey } from '../types';
 import { Badge, Button, Icon } from '../components/ui';
@@ -85,7 +86,7 @@ function AuthenticatedApp() {
   const [qrLoading, setQrLoading] = useState(false);
   const qrBusy = useRef(false);
   const control = useRef<WebSocket>();
-  const audio = useRef(new AudioBridge());
+  const audio = useAudioBridge();
   const [audioDevices, setAudioDevices] = useState<AudioDeviceState>(() => audio.current.getDeviceState());
   const [inboundAudio, setInboundAudio] = useState<InboundAudioLevel>({ receiving: false, peak: 0, updatedAt: 0 });
   useEffect(() => {

@@ -141,7 +141,16 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, [reload, session]);
 
   useEffect(() => {
-    const accessChanged = () => void reload();
+    // A dashboard poll fires several requests at once; when the API answers
+    // 401 to all of them, each one dispatches this event. One reload settles
+    // the session for all of them, so coalesce the burst instead of queueing
+    // one reload (and one refresh-token rotation) per rejected request.
+    let pending = false;
+    const accessChanged = () => {
+      if (pending) return;
+      pending = true;
+      void reload().finally(() => { pending = false; });
+    };
     window.addEventListener('zapliga:access-changed', accessChanged);
     return () => window.removeEventListener('zapliga:access-changed', accessChanged);
   }, [reload]);

@@ -109,15 +109,28 @@ export class AudioBridge {
   private inboundWindowPeak = 0;
   private inboundReportTimer?: number;
   private refreshing?: Promise<void>;
+  private readonly onDeviceChange = () => {
+    void this.refreshDevices().then(() => this.applySink()).catch(() => undefined);
+  };
 
   constructor() {
     if (typeof navigator !== 'undefined' && navigator.mediaDevices?.addEventListener) {
       // A headset that is plugged in, unplugged or switches Bluetooth profile mid-call changes which
       // endpoint can actually play; re-list and re-route rather than keep talking to a gone device.
-      navigator.mediaDevices.addEventListener('devicechange', () => {
-        void this.refreshDevices().then(() => this.applySink()).catch(() => undefined);
-      });
+      // The handler is a stored field so dispose() can remove it: this listener lives on a global
+      // object and pins the whole bridge in memory for as long as it is registered.
+      navigator.mediaDevices.addEventListener('devicechange', this.onDeviceChange);
     }
+  }
+
+  /** Release everything, including the global devicechange listener. Call when the owner unmounts. */
+  async dispose() {
+    if (typeof navigator !== 'undefined' && navigator.mediaDevices?.removeEventListener) {
+      navigator.mediaDevices.removeEventListener('devicechange', this.onDeviceChange);
+    }
+    this.deviceListener = undefined;
+    this.inboundListener = undefined;
+    await this.stop();
   }
 
   // ---------------------------------------------------------------------------
