@@ -22,7 +22,9 @@
     "verify:campaign-lifecycle": "node scripts/verify-campaign-lifecycle.mjs",
     "verify:campaign-execution": "node scripts/verify-campaign-execution.mjs",
     "verify:recommendations": "node scripts/verify-recommendations.mjs",
-    "verify:operation-health": "node scripts/verify-operation-health.mjs"
+    "verify:operation-health": "node scripts/verify-operation-health.mjs",
+    "verify:analytics-events": "node scripts/verify-analytics-events.mjs",
+    "verify:analytics-learning": "node scripts/verify-analytics-learning.mjs"
   },
   "devDependencies": {
     "concurrently": "^9.1.2"

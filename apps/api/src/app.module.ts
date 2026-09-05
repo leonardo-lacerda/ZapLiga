@@ -29,9 +29,13 @@ import { LeadIngestionModule } from './modules/lead-ingestion/lead-ingestion.mod
 import { CampaignsModule } from './modules/campaigns/campaigns.module';
 import { RecommendationsModule } from './modules/recommendations/recommendations.module';
 import { OperationHealthModule } from './modules/operation-health/operation-health.module';
+import { AnalyticsEventsModule } from './modules/analytics-events/analytics-events.module';
+import { AnalyticsLearningModule } from './modules/analytics-learning/analytics-learning.module';
+import { ExperimentsModule } from './modules/experiments/experiments.module';
+import { BenchmarksModule } from './modules/benchmarks/benchmarks.module';
 
 @Module({
-  imports: [DatabaseModule, RedisModule, FeatureFlagsModule, AuthModule, AuditModule, InvitationsModule, MembershipsModule, TenantsModule, UsersModule, ContactComplianceModule, DialerScheduleModule, DialerModule, CallbacksModule, OnboardingModule, PrivacyModule, AdminModule, LeadFoldersModule, MetricsModule, LeadIngestionModule, CampaignsModule, RecommendationsModule, OperationHealthModule],
+  imports: [DatabaseModule, RedisModule, FeatureFlagsModule, AuthModule, AuditModule, InvitationsModule, MembershipsModule, TenantsModule, UsersModule, ContactComplianceModule, DialerScheduleModule, DialerModule, CallbacksModule, OnboardingModule, PrivacyModule, AdminModule, LeadFoldersModule, MetricsModule, LeadIngestionModule, CampaignsModule, RecommendationsModule, OperationHealthModule, AnalyticsEventsModule, AnalyticsLearningModule, ExperimentsModule, BenchmarksModule],
   controllers: [CallsController, DialerController, HealthController, LeadsController, NumbersController, SdrsController],
   providers: [{ provide: APP_INTERCEPTOR, useClass: OperationalMetricsInterceptor }],
 })

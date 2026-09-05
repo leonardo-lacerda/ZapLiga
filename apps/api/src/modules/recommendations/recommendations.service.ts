@@ -5,6 +5,7 @@ import { DialerScheduleService } from '../dialer-schedule/dialer-schedule.servic
 import { FeatureFlagsService } from '../feature-flags/feature-flags.service';
 import { MetricsService } from '../metrics/metrics.service';
 import { MetricsSummaryQueryDto } from '../metrics/dto/metrics-summary-query.dto';
+import { AnalyticsEventsService } from '../analytics-events/analytics-events.service';
 import { buildRecommendationCandidates } from './recommendations.catalog';
 import { RecommendationsRepository } from './recommendations.repository';
 import { RecommendationEventType, RecommendationStatus } from './recommendations.types';
@@ -18,6 +19,7 @@ export class RecommendationsService {
     private readonly db: DatabaseService,
     private readonly audit: AuditService,
     @Optional() private readonly schedule?: DialerScheduleService,
+    @Optional() private readonly analytics?: AnalyticsEventsService,
   ) {}
 
   private async assertEnabled(tenantId: string) { await this.flags.assertEnabled(tenantId, 'recommendations'); }
@@ -86,6 +88,11 @@ export class RecommendationsService {
       const after = await this.actionState(tenantId, actionType, action.payload ?? {});
       await this.repo.recordEvent(tenantId, id, 'applied', actorUserId, { actionType, before, after, result });
       await this.repo.updateStatus(tenantId, id, 'resolved');
+      await this.analytics?.record({
+        tenantId, eventType: 'recommendation.applied', aggregateType: 'recommendation', aggregateId: id,
+        idempotencyKey: `recommendation.applied:${id}:${result?.kind ?? 'completed'}`,
+        payload: { recommendationId: id, actionType },
+      }).catch(() => undefined);
       return { ok: true, action, status: 'resolved', result };
     } catch (error) {
       await this.repo.recordEvent(tenantId, id, 'failed', actorUserId, { actionType, before, error: String(error instanceof Error ? error.message : error).slice(0, 240) }).catch(() => undefined);

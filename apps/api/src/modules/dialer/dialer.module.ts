@@ -7,9 +7,10 @@ import { DialerScheduleModule } from '../dialer-schedule/dialer-schedule.module'
 import { AuditModule } from '../audit/audit.module';
 import { CampaignsModule } from '../campaigns/campaigns.module';
 import { DecisionEngineModule } from '../decision-engine/decision-engine.module';
+import { ExperimentsModule } from '../experiments/experiments.module';
 
 @Module({
-  imports: [ContactComplianceModule, DialerScheduleModule, AuditModule, CampaignsModule, DecisionEngineModule],
+  imports: [ContactComplianceModule, DialerScheduleModule, AuditModule, CampaignsModule, DecisionEngineModule, ExperimentsModule],
   providers: [WaxumClient, DialerService, SdrGateway],
   exports: [DialerService, SdrGateway, WaxumClient],
 })

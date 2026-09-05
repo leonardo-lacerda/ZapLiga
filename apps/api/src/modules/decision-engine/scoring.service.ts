@@ -38,6 +38,7 @@ export type ScoreLeadInput = {
   };
   callbackDueAt?: Date | string | null;
   fairnessBoost?: number;
+  historicalBoost?: number;
   now?: Date;
   policy?: Partial<ScorePolicyWeights>;
   policyVersion?: number;
@@ -96,6 +97,7 @@ export function scoreLead(input: ScoreLeadInput): ScoreResult {
   const inboundEffect = recentInbound ? policy.recentInboundWeight : 0;
   const attemptsEffect = -Math.min(500, attempts * policy.attemptsPenalty);
   const fairnessEffect = Math.round(Math.max(-1, Math.min(1, finite(input.fairnessBoost, 0))) * policy.fairnessWeight);
+  const historicalEffect = Math.round(Math.max(-1, Math.min(1, finite(input.historicalBoost, 0))) * 50);
   const reasons = ([
     { code: 'score_priority', effect: priorityEffect, metadata: { queuePriority: priority } },
     { code: 'lead_age', effect: ageEffect, metadata: { ageHours: Math.round(ageHours * 10) / 10 } },
@@ -103,6 +105,7 @@ export function scoreLead(input: ScoreLeadInput): ScoreResult {
     { code: 'callback_due', effect: callbackEffect, metadata: { callbackDue } },
     { code: 'previous_attempts', effect: attemptsEffect, metadata: { attempts } },
     { code: 'queue_fairness', effect: fairnessEffect, metadata: { fairnessBoost: Math.round(finite(input.fairnessBoost, 0) * 100) / 100 } },
+    { code: 'historical_signal', effect: historicalEffect, metadata: { historicalBoost: Math.round(finite(input.historicalBoost, 0) * 100) / 100 } },
   ] as ScoreReason[]).filter((reason) => reason.effect !== 0 || ['score_priority', 'lead_age', 'previous_attempts'].includes(reason.code));
   const score = Math.min(1000, Math.max(0, Math.round(policy.baseScore + reasons.reduce((total, reason) => total + reason.effect, 0))));
   return {
@@ -116,6 +119,7 @@ export function scoreLead(input: ScoreLeadInput): ScoreResult {
       recentInbound,
       callbackDue,
       sourceType: input.lead.sourceIntegrationId || String(input.lead.source ?? '').toLowerCase() === 'inbound' ? 'inbound' : 'other',
+      historicalBoost: Math.round(finite(input.historicalBoost, 0) * 100) / 100,
     },
   };
 }

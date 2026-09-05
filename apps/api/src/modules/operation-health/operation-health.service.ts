@@ -4,6 +4,7 @@ import { RedisService } from '../../infrastructure/redis/redis.service';
 import { DialerScheduleService } from '../dialer-schedule/dialer-schedule.service';
 import { calculateOperationHealth, HEALTH_FORMULA_VERSION, HealthResult, OperationHealthSignals } from './health-formula';
 import { HealthRecommendationsAdapter } from './health-recommendations.adapter';
+import { AnalyticsEventsService } from '../analytics-events/analytics-events.service';
 
 const CONNECTED_STATUSES = ['connected', 'online', 'ready', 'authenticated'];
 const ACTIVE_CALL_STATUSES = ['reserved', 'dialing', 'media_active'];
@@ -26,6 +27,7 @@ export class OperationHealthService implements OnModuleInit, OnModuleDestroy {
     @Optional() private readonly redis?: RedisService,
     @Optional() private readonly schedule?: DialerScheduleService,
     @Optional() private readonly recommendations?: HealthRecommendationsAdapter,
+    @Optional() private readonly analytics?: AnalyticsEventsService,
   ) {}
 
   onModuleInit() {
@@ -45,7 +47,8 @@ export class OperationHealthService implements OnModuleInit, OnModuleDestroy {
       `SELECT score, created_at FROM operation_health_snapshots WHERE tenant_id = $1 ORDER BY created_at DESC LIMIT 1`,
       [tenantId],
     )).rows[0];
-    await this.persist(tenantId, collected);
+    const snapshotId = await this.persist(tenantId, collected);
+    if (snapshotId) await this.recordAnalyticsHealth(tenantId, snapshotId, collected);
     await this.recommendations?.sync(tenantId, collected.result, collected.evidence, collected.collectedAt).catch(() => undefined);
     return this.toResponse(collected, this.trend(previous, collected.result.score));
   }
@@ -85,7 +88,8 @@ export class OperationHealthService implements OnModuleInit, OnModuleDestroy {
       if (!acquired) continue;
       try {
         const collected = await this.collect(tenant.id);
-        await this.persist(tenant.id, collected);
+        const snapshotId = await this.persist(tenant.id, collected);
+        if (snapshotId) await this.recordAnalyticsHealth(tenant.id, snapshotId, collected);
         await this.recommendations?.sync(tenant.id, collected.result, collected.evidence, collected.collectedAt).catch(() => undefined);
         results.push({ tenantId: tenant.id, state: collected.result.state, score: collected.result.score });
       } finally {
@@ -223,7 +227,7 @@ export class OperationHealthService implements OnModuleInit, OnModuleDestroy {
 
   private async persist(tenantId: string, collected: CollectedHealth) {
     const result = collected.result;
-    await this.db.query(`
+    const inserted = await this.db.query(`
       INSERT INTO operation_health_snapshots
         (tenant_id, state, score, component_scores, reason_codes, evidence, sample_size, formula_version)
       SELECT $1, $2, $3, $4::jsonb, $5::jsonb, $6::jsonb, $7, $8
@@ -231,7 +235,18 @@ export class OperationHealthService implements OnModuleInit, OnModuleDestroy {
         SELECT 1 FROM operation_health_snapshots
         WHERE tenant_id = $1 AND created_at >= now() - interval '1 minute'
       )
+      RETURNING id
     `, [tenantId, result.state, result.score, JSON.stringify(result.components), JSON.stringify(result.reasonCodes), JSON.stringify(collected.evidence), result.sampleSize.attempts, result.formulaVersion]);
+    return inserted.rows[0]?.id as string | undefined;
+  }
+
+  private async recordAnalyticsHealth(tenantId: string, snapshotId: string, collected: CollectedHealth) {
+    await this.analytics?.record({
+      tenantId, eventType: 'health.changed', aggregateType: 'operation_health', aggregateId: snapshotId,
+      idempotencyKey: `health.changed:${snapshotId}`,
+      payload: { score: collected.result.score, state: collected.result.state, formulaVersion: collected.result.formulaVersion },
+      occurredAt: collected.collectedAt,
+    }).catch(() => undefined);
   }
 
   private trend(previous: { score: number; created_at: string } | undefined, currentScore: number) {

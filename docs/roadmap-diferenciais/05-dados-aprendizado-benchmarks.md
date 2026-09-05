@@ -154,38 +154,41 @@ Jobs principais:
 
 ## Fases
 
-### Fase 1 — contrato e qualidade
+### Fase 1 — contrato e qualidade — concluída no Lote 11
 
 - Catálogo de eventos, idempotência e reconciliação.
 - Indicador de confiabilidade.
 
-### Fase 2 — sinais personalizados
+### Fase 2 — sinais personalizados — concluída no Lote 12
 
-- Agregados por tenant e consumo no motor em sombra.
+- Agregados por tenant, amostra mínima, suavização, monitor de estabilidade e
+  consumo no motor em sombra.
 
-### Fase 3 — experimentação
+### Fase 3 — experimentação — concluída no Lote 13
 
-- Variantes, guardrails e relatório.
+- Variantes, guardrails, atribuição estável, integração segura com o discador e
+  relatório descritivo com incerteza.
 
-### Fase 4 — benchmark privado
+### Fase 4 — benchmark privado — infraestrutura pronta no Lote 14
 
-- Opt-in, coortes e validação jurídica.
-- Disponível primeiro para equipe interna e pilotos autorizados.
+- Opt-in versionado, revogação, coortes e inspeção interna implementados.
+- Validação jurídica, piloto e liberação permanecem externos.
 
-### Fase 5 — benchmark no produto
+### Fase 5 — benchmark no produto — bloqueada até aprovação e volume
 
-- Exibir somente coortes que atendam limites de privacidade e qualidade.
+- UI e bloqueios implementados; exibição real depende dos limites aprovados e de
+  volume suficiente.
 
 ## Critérios de aceite
 
-- [ ] Eventos duplicados não alteram agregados.
-- [ ] É possível rastrear uma métrica até eventos e versão de fórmula.
-- [ ] Sinais de baixa amostra não influenciam decisões ativas.
-- [ ] Experimentos possuem hipótese, métrica primária e guardrails antes de iniciar.
-- [ ] Opt-out impede novos usos nos agregados compartilhados.
-- [ ] Benchmarks nunca permitem inferir resultado de um tenant específico.
-- [ ] O caminho do discador funciona mesmo com pipeline analítico indisponível.
-- [ ] Recomendações informam amostra, período e grau de confiança.
+- [x] Eventos duplicados não alteram agregados.
+- [x] É possível rastrear uma métrica até eventos e versão de fórmula.
+- [x] Sinais de baixa amostra não influenciam decisões ativas.
+- [x] Experimentos possuem hipótese, métrica primária e guardrails antes de iniciar.
+- [x] Opt-out impede novos usos nos agregados compartilhados.
+- [x] Benchmarks nunca permitem inferir resultado de um tenant específico.
+- [x] O caminho do discador funciona mesmo com pipeline analítico indisponível.
+- [x] Insights informam amostra, período e grau de confiança.
 
 ## Métricas
 

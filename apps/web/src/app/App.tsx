@@ -23,6 +23,9 @@ import { ProfilePage } from '../features/account/ProfilePage';
 import { CallbacksPage } from '../features/callbacks/CallbacksPage';
 import { PrivacyPage } from '../features/privacy/PrivacyPage';
 import { OperationHealthPage } from '../features/operation-health/OperationHealthPage';
+import { AnalyticsLearningPage } from '../features/analytics-learning/AnalyticsLearningPage';
+import { ExperimentsPage } from '../features/experiments/ExperimentsPage';
+import { BenchmarksPage } from '../features/benchmarks/BenchmarksPage';
 import { ForgotPasswordPage, LegalDocumentPage, ResetPasswordPage, VerifyEmailPage } from '../features/auth/AccountRecoveryPages';
 import { EmailVerificationGate, ForcePasswordChangeGate, LegalAcceptanceGate } from '../features/auth/AccountGates';
 import { AcceptInvitePage } from '../features/auth/AcceptInvitePage';
@@ -161,7 +164,7 @@ function AuthenticatedApp() {
     // one navigated to dashboard while the other restored sdrMetrics from stale tab
     // state, causing "Maximum update depth exceeded" and the ErrorBoundary crash.
     const sdrTabs = ['dashboard', 'sdrMetrics', 'callbacks', 'profile'] as const;
-    const restricted = (isSdr && !(sdrTabs as readonly string[]).includes(tab)) || (!isSdr && tab === 'sdrMetrics') || (tab === 'operationHealth' && !featureFlags?.operation_health);
+    const restricted = (isSdr && !(sdrTabs as readonly string[]).includes(tab)) || (!isSdr && tab === 'sdrMetrics') || (tab === 'operationHealth' && !featureFlags?.operation_health) || (tab === 'learning' && !featureFlags?.analytics_learning) || (tab === 'experiments' && !featureFlags?.experiments) || (tab === 'benchmarks' && !featureFlags?.benchmarks);
     if (restricted) {
       if (tab !== 'dashboard') setTab('dashboard');
       if (tabFromPath(window.location.pathname) !== 'dashboard') navigateToTab('dashboard');
@@ -348,6 +351,9 @@ function AuthenticatedApp() {
     { key: 'calls', label: 'Histórico', icon: 'history', group: 'Operação' },
     { key: 'metrics', label: 'Métricas', icon: 'chart', group: 'Operação' },
     { key: 'operationHealth', label: 'Saúde da operação', icon: 'activity', group: 'Operação' },
+    { key: 'learning', label: 'Aprendizado', icon: 'sparkles', group: 'Operação' },
+    { key: 'experiments', label: 'Experimentos', icon: 'flask', group: 'Operação' },
+    { key: 'benchmarks', label: 'Benchmarks', icon: 'chart', group: 'Operação' },
     { key: 'settings', label: 'Discador', icon: 'settings', group: 'Configuração' },
     { key: 'integrations', label: 'Integrações', icon: 'plug', group: 'Configuração' },
     { key: 'numbers', label: 'Números', icon: 'phone', group: 'Configuração' },
@@ -362,6 +368,9 @@ function AuthenticatedApp() {
   const gatedTabs: Partial<Record<TabKey, boolean>> = {
     campaigns: Boolean(featureFlags?.campaigns),
     operationHealth: Boolean(featureFlags?.operation_health),
+    learning: Boolean(featureFlags?.analytics_learning),
+    experiments: Boolean(featureFlags?.experiments),
+    benchmarks: Boolean(featureFlags?.benchmarks),
     callbacks: !featureFlags || Boolean(featureFlags.callbacks),
     privacy: !featureFlags || Boolean(featureFlags.privacy_requests),
   };
@@ -386,6 +395,9 @@ function AuthenticatedApp() {
         {tab === 'callbacks' && <div className="page-content"><CallbacksPage sdrs={sdrs} isSdr={isSdr} featureEnabled={!featureFlags || Boolean(featureFlags.callbacks)} /></div>}
         {tab === 'privacy' && <div className="page-content"><PrivacyPage /></div>}
         {tab === 'operationHealth' && activeTenantId && <div className="page-content"><OperationHealthPage tenantId={activeTenantId} enabled={Boolean(featureFlags?.operation_health)} /></div>}
+        {tab === 'learning' && activeTenantId && <div className="page-content"><AnalyticsLearningPage tenantId={activeTenantId} enabled={Boolean(featureFlags?.analytics_learning)} /></div>}
+        {tab === 'experiments' && activeTenantId && <div className="page-content"><ExperimentsPage tenantId={activeTenantId} enabled={Boolean(featureFlags?.experiments)} /></div>}
+        {tab === 'benchmarks' && activeTenantId && <div className="page-content"><BenchmarksPage tenantId={activeTenantId} enabled={Boolean(featureFlags?.benchmarks)} /></div>}
         <div className="page-content">{tab === 'dashboard' && <Dashboard tenantId={activeTenantId} isSdr={isSdr} status={status} available={available} connected={connected} connecting={connecting} sdrReady={sdrReady} sdrs={sdrs} connectSdr={connectSdr} disconnectSdr={disconnect} setAvailability={setAvailability} manualDial={manualDial} manualPhone={manualPhone} setManualPhone={setManualPhone} manualName={manualName} setManualName={setManualName} manualCalling={manualCalling} logs={logs} activeCall={activeCall} hangup={hangup} micMuted={micMuted} toggleMicMute={toggleMicMute} connectedNumbers={connectedNumbers} postCall={postCall} finishPostCall={finishPostCall} finishingPause={finishingPause} audioReady={audioReady} connectionNotice={connectionNotice} dateRange={dateRange} toggleDialer={toggleDialer} audioDevices={audioDevices} selectInputDevice={selectInputDevice} selectOutputDevice={selectOutputDevice} testSpeaker={testSpeaker} inboundAudio={inboundAudio} featureFlags={featureFlags ?? undefined} />}{tab === 'metrics' && activeTenantId && <MetricsPage tenantId={activeTenantId} leadFolders={leadFolders} sdrs={sdrs} numbers={numbers} />}{tab === 'numbers' && <NumbersPage numbers={numbers} numbersTotal={numbersTotal} numbersOffset={numbersOffset} onNumbersPageChange={setNumbersOffset} numberForm={numberForm} setNumberForm={setNumberForm} createNumber={createNumber} showQr={showQr} reconnectNumber={reconnectNumber} removeNumber={removeNumber} qrLoading={qrLoading} qr={qr} closeQr={closeQr} canManageNumbers={!isSdr} />}{tab === 'leads' && <LeadsPage leads={leads} leadsTotal={leadsTotal} leadsOffset={leadsOffset} onLeadsPageChange={setLeadsOffset} folders={leadFolders} selectedFolderId={selectedFolderId} selectedFolder={leadFolders.find((folder) => folder.id === selectedFolderId)} metrics={folderMetrics} setSelectedFolderId={setSelectedFolderId} createFolder={createFolder} updateFolder={updateFolder} removeFolder={removeFolder} leadForm={leadForm} setLeadForm={setLeadForm} createLead={createLead} importCsv={importCsv} importResult={importResult} clearFolder={clearFolder} manualCall={manualCall} resetLead={resetLead} removeLead={removeLead} suppressLead={suppressLead} />}{tab === 'compliance' && activeTenantId && <CompliancePage tenantId={activeTenantId} />}{tab === 'sdrs' && <SdrsPage tenantId={activeTenantId} sdrs={sdrs} />}{tab === 'calls' && <CallsPage calls={calls} callsTotal={callsTotal} callsOffset={callsOffset} onCallsPageChange={setCallsOffset} search={callsSearch} onSearchChange={setCallsSearch} status={callsStatus} onStatusChange={setCallsStatus} result={callsResult} onResultChange={setCallsResult} />}{tab === 'access' && activeTenantId && <AccessPage tenantId={activeTenantId} role={isSuperAdmin ? 'super_admin' : activeTenant?.role ?? ''} />}{tab === 'admin' && isSuperAdmin && <AdminPage onChanged={reload} onOpenTenant={(tenantId) => { selectTenant(tenantId); setTab('dashboard'); }} />}</div>
       </main></div>
   </div></>;

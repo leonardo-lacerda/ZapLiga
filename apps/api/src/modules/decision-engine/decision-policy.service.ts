@@ -5,6 +5,7 @@ import { RedisService } from '../../infrastructure/redis/redis.service';
 import { EligibilityService } from './eligibility.service';
 import { DecisionRepository } from './decision.repository';
 import { compareScoredLeads, DEFAULT_SCORE_POLICY, normalizeScorePolicy, scoreLead, ScorePolicyWeights } from './scoring.service';
+import { AnalyticsEventsService } from '../analytics-events/analytics-events.service';
 
 const publicPolicy = (row: any) => ({
   id: row.id,
@@ -21,7 +22,7 @@ const publicPolicy = (row: any) => ({
 
 @Injectable()
 export class DecisionPolicyService {
-  constructor(private readonly db: DatabaseService, private readonly decisions: DecisionRepository, private readonly eligibility: EligibilityService, @Optional() private readonly redis?: RedisService) {}
+  constructor(private readonly db: DatabaseService, private readonly decisions: DecisionRepository, private readonly eligibility: EligibilityService, @Optional() private readonly redis?: RedisService, @Optional() private readonly analytics?: AnalyticsEventsService) {}
 
   private incrementMetric(name: string, amount = 1) { void this.redis?.incrementMetric(`decision_${name}`, amount); }
   private observeMetric(name: string, durationMs: number) { void this.redis?.observeMetric(`decision_${name}`, durationMs); }
@@ -125,6 +126,25 @@ export class DecisionPolicyService {
       reasonCodes: [...(context.eligibility?.reasonCodes ?? []), ...context.reasons.map((reason) => reason.code)], featureSnapshot: { ...context.featureSnapshot, starvationProtected: context.starvationProtected, eligibility: context.eligibility?.blockedBy ?? [] },
       fifoPosition: context.fifoPosition, suggestedPosition: context.suggestedPosition, finalDecision: 'score', latencyMs: context.latencyMs, dedupeKey: `active:${context.callId}`,
     });
+    const reasonCodes = [...(context.eligibility?.reasonCodes ?? []), ...context.reasons.map((reason) => reason.code)];
+    void this.analytics?.record({
+      tenantId: context.tenantId,
+      eventType: 'decision.scored',
+      aggregateType: 'lead',
+      aggregateId: context.leadId,
+      campaignId: context.campaignId,
+      idempotencyKey: `decision.scored:active:${context.callId}`,
+      payload: { leadId: context.leadId, score: context.score, policyVersion: context.policyVersion, reasonCodes },
+    }).catch(() => undefined);
+    void this.analytics?.record({
+      tenantId: context.tenantId,
+      eventType: 'decision.selected',
+      aggregateType: 'lead',
+      aggregateId: context.leadId,
+      campaignId: context.campaignId,
+      idempotencyKey: `decision.selected:${context.callId}`,
+      payload: { leadId: context.leadId, score: context.score, policyVersion: context.policyVersion },
+    }).catch(() => undefined);
     this.incrementMetric('active_decisions_recorded_total');
     return decision;
   }

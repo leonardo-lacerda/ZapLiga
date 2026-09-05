@@ -425,7 +425,7 @@ Entregas:
 - amostra mínima, suavização e estado `dados insuficientes`;
 - melhores horários e insights por campanha;
 - consumo desses sinais apenas no modo sombra do motor;
-- monitor de estabilidade e viés de seleção.
+- monitor de estabilidade por linha e concentração/viés de seleção observável.
 
 Gate de saída:
 
@@ -613,10 +613,10 @@ Atualizar esta tabela ao final de cada lote. Estados válidos: `pendente`,
 | 08 | concluído | Ações recomendadas catalogadas, revalidadas e idempotentes; executor operacional, confirmação, before/after e falha auditável em `evidencias/lote-08-acoes-recomendadas-seguras.md`. |
 | 09 | concluído | Telemetria, fórmula `v1`, snapshots, timeline por linha, flag, isolamento e recomendações de risco em `evidencias/lote-09-telemetria-score-saude.md`. |
 | 10 | concluído | Experiência visual, drilldown, timeline, capacidade, tendência e callback seguro validados em `evidencias/lote-10-experiencia-saude-historico.md`. |
-| 11 | pendente | — |
-| 12 | pendente | — |
-| 13 | pendente | — |
-| 14 | pendente | — |
+| 11 | concluído | Contrato analítico v1, outbox transacional, consumidor idempotente, reconciliação, atraso observável e webhooks outbound aprovados nos gates locais em `evidencias/lote-11-contrato-analitico-webhooks.md`. |
+| 12 | concluído | Agregados históricos, suavização, amostra mínima, insights, monitor de estabilidade/concentração e consumo exclusivamente em shadow aprovados em `evidencias/lote-12-aprendizado-tenant-shadow.md`. |
+| 13 | concluído | Experimentos controlados, atribuição estável, guardrails, parada imediata, integração do discador e relatório descritivo aprovados nos gates locais em `evidencias/lote-13-experimentos-controlados.md`. |
+| 14 | em andamento | Infraestrutura de consentimento, revogação, coortes privadas, supressão de extremos, inspeção interna e UI atrás da flag implementadas; dependências externas registradas em `evidencias/lote-14-benchmarks-privados.md`. |
 | 15 | pendente | — |
 | 16 | pendente | — |
 | 17 | pendente | — |
@@ -639,5 +639,7 @@ O conjunto está pronto somente quando:
 
 ## Próxima ação de execução
 
-Os Lotes 00 a 10 estão concluídos com evidência local. A frente em execução é o
-Lote 11: contrato analítico, outbox, qualidade de eventos e webhooks outbound.
+Os Lotes 00 a 13 estão concluídos com evidência local. O Lote 14 está em andamento
+com a infraestrutura pronta, aguardando aprovação jurídica, definição formal dos
+limites e volume real suficiente antes da liberação. A próxima implementação
+independente é o Lote 15: identidade, linguagem e onboarding.

@@ -18,6 +18,7 @@ import { CampaignEventsService } from '../campaigns/campaign-events.service';
 import { EligibilityService, eligibilityErrorMessage, evaluateLeadEligibility } from '../decision-engine/eligibility.service';
 import { DecisionShadowService } from '../decision-engine/decision-shadow.service';
 import { DecisionPolicyService } from '../decision-engine/decision-policy.service';
+import { ExperimentsService } from '../experiments/experiments.service';
 import {
   analyzePcm16Le,
   computeCallOutcome,
@@ -163,6 +164,7 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
     @Optional() private readonly eligibility?: EligibilityService,
     @Optional() private readonly decisionShadow?: DecisionShadowService,
     @Optional() private readonly decisionPolicies?: DecisionPolicyService,
+    @Optional() private readonly experiments?: ExperimentsService,
   ) {}
 
   onModuleInit() {
@@ -331,6 +333,10 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
       await client.query(`UPDATE sdr_pauses SET ended_at = $1, duration_seconds = GREATEST(0, EXTRACT(EPOCH FROM ($1 - started_at))::int) WHERE tenant_id = $2 AND id = $3`, [endedAt, tenantId, pauseId]);
       if (pause.call_id) {
         await client.query(`UPDATE calls SET call_result = $1, pipeline_stage = $2, notes = $3, wrap_up_completed_at = $4 WHERE tenant_id = $5 AND id = $6`, [callResult, pipelineStage, notes, endedAt, tenantId, pause.call_id]);
+        await this.campaignEvents?.record({
+          tenantId, eventType: 'wrap_up.completed', aggregateType: 'call', aggregateId: pause.call_id,
+          idempotencyKey: `wrap_up.completed:${pause.call_id}`, payload: { callId: pause.call_id, callResult, pipelineStage }, occurredAt: endedAt,
+        }, client as any);
         const previousStage = await client.query(`SELECT pipeline_stage, phone FROM leads WHERE tenant_id = $1 AND id = $2`, [tenantId, pause.lead_id]);
         await client.query(`UPDATE leads SET pipeline_stage = $1,
           status = CASE WHEN $4::timestamptz IS NULL THEN status ELSE 'retry_wait' END,
@@ -339,12 +345,20 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
         const fromStage = previousStage.rows[0]?.pipeline_stage ?? null;
         if (fromStage !== pipelineStage) {
           await client.query(`INSERT INTO lead_stage_history (id, tenant_id, lead_id, from_stage, to_stage, source, call_id) VALUES ($1, $2, $3, $4, $5, 'wrap_up', $6)`, [randomUUID(), tenantId, pause.lead_id, fromStage, pipelineStage, pause.call_id]);
+          await this.campaignEvents?.record({
+            tenantId, eventType: 'stage.changed', aggregateType: 'lead', aggregateId: pause.lead_id,
+            idempotencyKey: `stage.changed:${pause.call_id}`, payload: { fromStage, toStage: pipelineStage, callId: pause.call_id }, occurredAt: endedAt,
+          }, client as any);
         }
         // Uma nova conversa encerra de forma idempotente qualquer retorno
         // anterior do lead. O retorno desta própria conversa é criado abaixo.
         const completedCallbacks = await client.query(`UPDATE lead_callbacks SET status = 'completed', completed_call_id = $1, completed_at = now(), updated_by_user_id = $2, updated_at = now()
           WHERE tenant_id = $3 AND lead_id = $4 AND origin_call_id IS DISTINCT FROM $1 AND status IN ('pending','due','reassigned') RETURNING id`, [pause.call_id, input.actorUserId ?? null, tenantId, pause.lead_id]);
         completedCallbackIds = completedCallbacks.rows.map((row: any) => row.id);
+        for (const callbackId of completedCallbackIds) await this.campaignEvents?.record({
+          tenantId, eventType: 'callback.completed', aggregateType: 'callback', aggregateId: callbackId,
+          idempotencyKey: `callback.completed:${callbackId}:${pause.call_id}`, payload: { callbackId, callId: pause.call_id, sdrId }, occurredAt: endedAt,
+        }, client as any);
         if (callResult === 'retornar' && callbackAt) {
           const callback = await client.query(`INSERT INTO lead_callbacks (tenant_id, lead_id, origin_call_id, requested_by_sdr_id, assigned_sdr_id, due_at, notes, created_by_user_id, updated_by_user_id)
             VALUES ($1,$2,$3,$4,$4,$5,$6,$7,$7)
@@ -354,6 +368,10 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
               status = 'pending', updated_by_user_id = EXCLUDED.updated_by_user_id, updated_at = now() RETURNING id`, [tenantId, pause.lead_id, pause.call_id, sdrId, callbackAt.toISOString(), notes, input.actorUserId ?? null]);
           createdCallbackId = callback.rows[0]?.id;
           await this.redis.incrementMetric?.('callbacks_created_total');
+          if (createdCallbackId) await this.campaignEvents?.record({
+            tenantId, eventType: 'callback.created', aggregateType: 'callback', aggregateId: createdCallbackId,
+            idempotencyKey: `callback.created:${createdCallbackId}`, payload: { callbackId: createdCallbackId, callId: pause.call_id, sdrId }, occurredAt: endedAt,
+          }, client as any);
         }
         if (callResult === 'nao_ligar_novamente') {
           if (!this.compliance) throw new Error('Serviço de compliance indisponível');
@@ -1082,6 +1100,17 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
         if (eligibility && !eligibility.eligible) continue;
         const execution = this.campaignExecution ? await this.campaignExecution.resolveForLead(tenantId, lead, { globalSettings: settings }) : undefined;
         if (execution && (!execution.allowed || !CampaignExecutionService.scheduleAllowed(execution.effectiveConfig))) continue;
+        let experimentAssignment: any = null;
+        if (execution?.campaignId && this.experiments) {
+          try {
+            experimentAssignment = await this.experiments.assignForCampaign(tenantId, execution.campaignId, String(lead.id));
+            if (experimentAssignment && !experimentAssignment.eligible) continue;
+          } catch (error) {
+            this.logger.warn(`Experiment assignment blocked: ${safeOperationalError(error)}`);
+            continue;
+          }
+        }
+        const callLead = experimentAssignment ? { ...lead, experimentAssignment } : lead;
         if (decisionEngineEnabled && execution?.campaignId && this.decisionShadow) {
           const campaignCandidates = shadowCandidates.get(execution.campaignId) ?? [];
           campaignCandidates.push({ lead, fifoPosition: Number(lead.folder_rank ?? lead.queue_sequence ?? 0), eligibility });
@@ -1137,7 +1166,7 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
           });
           if (!reserved) continue;
           try {
-            const reservation = await this.startReservedCall(sdr, number, lead, settings, token, 'automatico', tenantId);
+            const reservation = await this.startReservedCall(sdr, number, callLead, settings, token, 'automatico', tenantId);
             const decisionContext = activeDecisionContexts.get(String(lead.id));
             if (reservation?.callId && decisionContext && this.decisionPolicies) {
               void this.decisionPolicies.recordActiveDecision({ ...decisionContext, tenantId, leadId: lead.id, callId: reservation.callId, eligibility }).catch((error) => {
@@ -1288,7 +1317,7 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
         });
         if (isAutomatic && Number(folder.rows[0].attempts ?? lead.attempts ?? 0) >= maxAttempts) throw new Error('O limite de tentativas desta campanha foi atingido');
         if (execution?.campaignId && !folder.rows[0].campaign_id) await client.query('UPDATE leads SET campaign_id=$1, campaign_version=$2 WHERE tenant_id=$3 AND id=$4', [execution.campaignId, execution.campaignVersion, tenantId, lead.id]);
-        await client.query(`INSERT INTO calls (id, tenant_id, folder_id, lead_id, number_id, sdr_id, campaign_id, campaign_version, status, attempt_number, source, offer_expires_at, owner_instance_id) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'reserved',$9,$10,$11,$12)`, [callId, tenantId, folder.rows[0].folder_id, lead.id, number.id, sdr.id, execution?.campaignId ?? null, execution?.campaignVersion ?? null, isAutomatic ? Number(lead.attempts) + 1 : 0, source, expires, runtimeInstanceId]);
+        await client.query(`INSERT INTO calls (id, tenant_id, folder_id, lead_id, number_id, sdr_id, campaign_id, campaign_version, experiment_id, experiment_variant_id, status, attempt_number, source, offer_expires_at, owner_instance_id) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'reserved',$11,$12,$13,$14)`, [callId, tenantId, folder.rows[0].folder_id, lead.id, number.id, sdr.id, execution?.campaignId ?? null, execution?.campaignVersion ?? null, lead.experimentAssignment?.experimentId ?? null, lead.experimentAssignment?.variant?.id ?? null, isAutomatic ? Number(lead.attempts) + 1 : 0, source, expires, runtimeInstanceId]);
         await this.campaignEvents?.record({ tenantId, campaignId: execution?.campaignId ?? null, campaignVersion: execution?.campaignVersion ?? null, eventType: 'call.reserved', aggregateType: 'call', aggregateId: callId, idempotencyKey: `call.reserved:${callId}`, payload: { leadId: lead.id, sdrId: sdr.id, numberId: number.id, source } }, client as any);
         if (isAutomatic) {
           await client.query(`UPDATE leads SET status = 'reserved', attempts = attempts + 1, last_auto_round = $1 WHERE tenant_id = $2 AND id = $3`, [Number(settings.dialer_round ?? 1), tenantId, lead.id]);
@@ -1763,11 +1792,12 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
         }
         if (resource.media && resource.media.readyState === WebSocket.OPEN) resource.media.close();
       }
-      const call = await this.db.query(`SELECT c.*, s.id AS sdr_id, s.name AS sdr_name, n.id AS number_id, n.label AS number_label, n.cooldown_seconds, l.name AS lead_name, l.phone AS lead_phone, l.attempts, ds.max_attempts_per_lead, ds.retry_delay_minutes FROM calls c JOIN sdrs s ON s.tenant_id = c.tenant_id AND s.id = c.sdr_id JOIN whatsapp_numbers n ON n.id = c.number_id JOIN leads l ON l.tenant_id = c.tenant_id AND l.id = c.lead_id JOIN dialer_settings ds ON ds.tenant_id = c.tenant_id WHERE c.tenant_id = $1 AND c.id = $2`, [tenantId, callId]);
+      const call = await this.db.query(`SELECT c.*, s.id AS sdr_id, s.name AS sdr_name, n.id AS number_id, n.label AS number_label, n.cooldown_seconds, l.name AS lead_name, l.phone AS lead_phone, l.attempts, ds.max_attempts_per_lead, ds.retry_delay_minutes, ev.config AS experiment_variant_config FROM calls c JOIN sdrs s ON s.tenant_id = c.tenant_id AND s.id = c.sdr_id JOIN whatsapp_numbers n ON n.id = c.number_id JOIN leads l ON l.tenant_id = c.tenant_id AND l.id = c.lead_id JOIN dialer_settings ds ON ds.tenant_id = c.tenant_id LEFT JOIN experiment_variants ev ON ev.tenant_id = c.tenant_id AND ev.experiment_id = c.experiment_id AND ev.id = c.experiment_variant_id WHERE c.tenant_id = $1 AND c.id = $2`, [tenantId, callId]);
       if (!call.rows[0]) return;
       const row = call.rows[0];
       if (['completed', 'no_answer', 'failed', 'cancelled'].includes(row.status)) return;
       const isAutomatic = row.source !== 'manual';
+      const retryDelayMinutes = Number(row.experiment_variant_config?.cadenceMinutes ?? row.retry_delay_minutes);
       const { outcome, transientRateLimit, transientInfrastructureFailure, retryable, finalCallStatus, leadStatus } = computeCallOutcome({
         status, reason, forceNoRetry, isAutomatic,
         attempts: Number(row.attempts), maxAttemptsPerLead: Number(row.max_attempts_per_lead),
@@ -1785,7 +1815,7 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
         } else if (transientRateLimit || transientInfrastructureFailure) {
           await client.query(`UPDATE leads SET status = 'queued', attempts = GREATEST(0, attempts - 1), next_eligible_at = now() + interval '10 seconds' WHERE tenant_id = $1 AND id = $2`, [tenantId, row.lead_id]);
         } else if (retryable) {
-          await client.query(`UPDATE leads SET status = $2, next_eligible_at = now() + ($1::int * interval '1 minute') WHERE tenant_id = $3 AND id = $4`, [row.retry_delay_minutes, leadStatus, tenantId, row.lead_id]);
+          await client.query(`UPDATE leads SET status = $2, next_eligible_at = now() + ($1::int * interval '1 minute') WHERE tenant_id = $3 AND id = $4`, [retryDelayMinutes, leadStatus, tenantId, row.lead_id]);
         } else {
           await client.query(`UPDATE leads SET status = $1, next_eligible_at = now() WHERE tenant_id = $2 AND id = $3`, [leadStatus, tenantId, row.lead_id]);
         }
@@ -1823,6 +1853,11 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
           await client.query(`UPDATE whatsapp_numbers SET last_call_ended_at = now() WHERE id = $1`, [row.number_id]);
         }
       });
+      if (row.campaign_id && this.experiments) {
+        void this.experiments.evaluateForCampaign(tenantId, row.campaign_id).catch((error) => {
+          this.logger.warn(`Experiment guardrail evaluation failed: ${safeOperationalError(error)}`);
+        });
+      }
       if (resource) await this.redis.release({ tenantId: resource.tenantId, token: resource.token, numberId: resource.numberId, waxumSessionId: resource.waxumSessionId, leadId: resource.leadId, sdrId: resource.sdrId });
       const nextState = requiresPostCall ? 'post_call' : restoredState;
       const nextAvailable = requiresPostCall ? false : restoredAvailable;
