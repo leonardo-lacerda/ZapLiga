@@ -67,10 +67,10 @@ export const deleteMetricsGoal = (id: string): Promise<{ ok: boolean; id: string
 // então reaproveitamos a mesma lógica de retry em 401 (token expirado no
 // meio de um export não deve simplesmente falhar) sem tentar fazer parse do
 // corpo como JSON.
-async function fetchWithAuthRetry(path: string, retry = true): Promise<Response> {
-  const response = await apiFetch(path);
+async function fetchWithAuthRetry(path: string, retry = true, signal?: AbortSignal): Promise<Response> {
+  const response = await apiFetch(path, { signal });
   if (response.status === 401 && retry) {
-    if (await refreshAccessToken()) return fetchWithAuthRetry(path, false);
+    if (await refreshAccessToken()) return fetchWithAuthRetry(path, false, signal);
   }
   return response;
 }
@@ -99,12 +99,12 @@ async function throwIfError(response: Response, fallbackMessage: string) {
 
 export type CsvExportResult = { async: false } | { async: true; exportId: string };
 
-export const downloadMetricsCsv = async (dataset: string, params: MetricsQueryParams): Promise<CsvExportResult> => {
+export const downloadMetricsCsv = async (dataset: string, params: MetricsQueryParams, signal?: AbortSignal): Promise<CsvExportResult> => {
   // `buildQuery` só serializa os campos que conhece explicitamente — `dataset`
   // não é um deles, então entra à parte via URLSearchParams direto.
   const usp = new URLSearchParams(buildQuery(params).slice(1));
   usp.set('dataset', dataset);
-  const response = await fetchWithAuthRetry(`/api/metrics/export.csv?${usp.toString()}`);
+  const response = await fetchWithAuthRetry(`/api/metrics/export.csv?${usp.toString()}`, true, signal);
   await throwIfError(response, 'Não foi possível exportar');
   if (response.status === 202) { const body = await response.json(); return { async: true, exportId: body.exportId }; }
   await triggerBlobDownload(response, `${dataset}.csv`);
@@ -119,10 +119,10 @@ export const downloadMetricsPdf = async (params: MetricsQueryParams, period: Rep
   await triggerBlobDownload(response, 'relatorio-metricas.pdf');
 };
 
-export const checkMetricsExportStatus = (exportId: string): Promise<MetricsExportJob> => json(`/api/metrics/exports/${exportId}`);
+export const checkMetricsExportStatus = (exportId: string, signal?: AbortSignal): Promise<MetricsExportJob> => json(`/api/metrics/exports/${exportId}`, { signal });
 
-export const downloadCompletedMetricsExport = async (exportId: string): Promise<void> => {
-  const response = await fetchWithAuthRetry(`/api/metrics/exports/${exportId}/download`);
+export const downloadCompletedMetricsExport = async (exportId: string, signal?: AbortSignal): Promise<void> => {
+  const response = await fetchWithAuthRetry(`/api/metrics/exports/${exportId}/download`, true, signal);
   await throwIfError(response, 'Não foi possível baixar a exportação');
   await triggerBlobDownload(response, `export-${exportId}.csv`);
 };

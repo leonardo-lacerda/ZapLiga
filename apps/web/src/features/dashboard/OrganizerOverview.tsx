@@ -7,6 +7,7 @@ import { navigateToTab } from '../../app/routes';
 import { OnboardingChecklist } from '../onboarding/OnboardingChecklist';
 import { OperationsNowPanel } from './OperationsNowPanel';
 import { json } from '../../services/api';
+import { useSingleFlight } from '../../shared/useSingleFlight';
 
 const requiredDialerSettings = ['global_max_concurrent_calls', 'max_attempts_per_lead', 'retry_delay_minutes', 'ring_timeout_seconds', 'default_number_cooldown_seconds'];
 
@@ -152,14 +153,15 @@ const operationHealthReason = (reason: string) => ({ no_connected_number: 'nenhu
 function OperationHealthCard({ tenantId, enabled }: { tenantId: string; enabled: boolean }) {
   const [health, setHealth] = useState<AnyRow | null>(null);
   const [loading, setLoading] = useState(enabled);
+  const singleFlight = useSingleFlight();
   useEffect(() => {
     if (!enabled || !tenantId) { setHealth(null); setLoading(false); return; }
     let cancelled = false;
-    const refresh = async () => { try { const result = await json(`/api/tenants/${tenantId}/operation-health`); if (!cancelled) setHealth(result); } catch { /* o dashboard continua funcional se o módulo estiver indisponível */ } finally { if (!cancelled) setLoading(false); } };
+    const refresh = () => singleFlight(`overview-health:${tenantId}`, async () => { try { const result = await json(`/api/tenants/${tenantId}/operation-health`); if (!cancelled) setHealth(result); } catch { /* o dashboard continua funcional se o módulo estiver indisponível */ } finally { if (!cancelled) setLoading(false); } });
     void refresh();
     const timer = window.setInterval(() => { if (document.visibilityState === 'visible') void refresh(); }, 30000);
     return () => { cancelled = true; window.clearInterval(timer); };
-  }, [enabled, tenantId]);
+  }, [enabled, singleFlight, tenantId]);
   if (!enabled) return null;
   return <Panel className={`overview-operation-health${health ? ` overview-operation-health-${health.state}` : ''}`}><div className="overview-operation-health-heading"><div><span className="eyebrow">CONFIANÇA OPERACIONAL</span><h2>Saúde da operação</h2><p>O que merece atenção antes de aumentar o ritmo.</p></div>{health && <Badge tone={operationHealthTone(health.state)}><i className="badge-dot" />{operationHealthLabels[health.state] ?? health.state}</Badge>}</div>{loading && !health ? <div className="overview-operation-health-loading">Calculando sinais atuais…</div> : health ? <div className="overview-operation-health-body"><div className="overview-operation-health-score"><strong>{health.score}</strong><small>/100 · score interno</small></div><div className="overview-operation-health-copy"><strong>{health.nextSafeAction}</strong><span>{(health.reasonCodes ?? []).slice(0, 2).map((reason: string) => operationHealthReason(reason)).join(' · ') || 'Nenhum risco prioritário identificado.'}</span><small>Atualizado {health.collectedAt ? new Date(health.collectedAt).toLocaleTimeString('pt-BR') : 'agora'} · fórmula {health.formulaVersion}</small></div><Button variant="secondary" onClick={() => navigateToTab('operationHealth')}>Ver diagnóstico</Button></div> : <div className="overview-operation-health-empty"><Icon name="activity" size={18} /><span>Saúde temporariamente indisponível.</span><Button variant="ghost" onClick={() => navigateToTab('operationHealth')}>Abrir página</Button></div>}</Panel>;
 }

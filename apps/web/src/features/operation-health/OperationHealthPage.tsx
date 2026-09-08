@@ -1,9 +1,10 @@
-import { useEffect, useState, type CSSProperties } from 'react';
+import { useCallback, useEffect, useState, type CSSProperties } from 'react';
 import type { AnyRow } from '../../types';
 import { Badge, Button, Icon, Panel, SectionHeader } from '../../components/ui';
 import { EmptyGuide, FactGrid, FeatureOff, HowItWorks, LoadingBlock, Notice, PageIntro, TechnicalDetails } from '../../components/guide';
 import { navigateToTab } from '../../app/routes';
 import { json } from '../../services/api';
+import { useSingleFlight } from '../../shared/useSingleFlight';
 
 // Everything the API says in codes is said here in the operator's words.
 const componentCopy: Record<string, { label: string; meaning: string; unit: string }> = {
@@ -63,8 +64,9 @@ function OperationHealthPage({ tenantId, enabled }: { tenantId: string; enabled:
   const [events, setEvents] = useState<AnyRow[]>([]);
   const [loading, setLoading] = useState(enabled);
   const [error, setError] = useState('');
+  const singleFlight = useSingleFlight();
 
-  const load = async () => {
+  const loadOnce = useCallback(async () => {
     if (!enabled || !tenantId) return;
     setLoading(true);
     try {
@@ -73,9 +75,10 @@ function OperationHealthPage({ tenantId, enabled }: { tenantId: string; enabled:
       setSelectedNumberId((currentId) => currentId || numberPage.items?.[0]?.id || '');
     } catch (value) { setError(value instanceof Error ? value.message : 'Não foi possível carregar a saúde da operação.'); }
     finally { setLoading(false); }
-  };
+  }, [enabled, tenantId]);
+  const load = useCallback(() => singleFlight(`operation-health:${tenantId}:${enabled}`, loadOnce), [enabled, loadOnce, singleFlight, tenantId]);
 
-  useEffect(() => { void load(); const timer = window.setInterval(() => { if (document.visibilityState === 'visible') void load(); }, 30000); return () => window.clearInterval(timer); }, [enabled, tenantId]);
+  useEffect(() => { void load(); const timer = window.setInterval(() => { if (document.visibilityState === 'visible') void load(); }, 30000); return () => window.clearInterval(timer); }, [load]);
   useEffect(() => {
     if (!selectedNumberId || !enabled || !tenantId) { setNumberHealth(null); setEvents([]); return; }
     let cancelled = false;

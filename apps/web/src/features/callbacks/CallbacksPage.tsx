@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Badge, Button, EmptyState, Panel, SectionHeader } from '../../components/ui';
 import { ApiError, json } from '../../services/api';
+import { useSingleFlight } from '../../shared/useSingleFlight';
 import type { AnyRow } from '../../types';
 
 const activeStatuses = ['pending', 'due', 'reassigned'];
@@ -14,8 +15,9 @@ export function CallbacksPage({ sdrs, isSdr, featureEnabled = true }: { sdrs: An
   const [message, setMessage] = useState('');
   const [selected, setSelected] = useState<string[]>([]);
   const [disabled, setDisabled] = useState(!featureEnabled);
+  const singleFlight = useSingleFlight();
 
-  const load = useCallback(async () => {
+  const loadOnce = useCallback(async () => {
     if (!featureEnabled) { setDisabled(true); setItems([]); return; }
     try {
       const params = new URLSearchParams();
@@ -34,6 +36,7 @@ export function CallbacksPage({ sdrs, isSdr, featureEnabled = true }: { sdrs: An
       setMessage(error instanceof Error ? error.message : String(error));
     }
   }, [status, assignedSdrId, featureEnabled]);
+  const load = useCallback(() => singleFlight(`callbacks:${status}:${assignedSdrId}:${featureEnabled}`, loadOnce), [assignedSdrId, featureEnabled, loadOnce, singleFlight, status]);
 
   useEffect(() => { void load(); const timer = window.setInterval(() => void load(), 30_000); return () => clearInterval(timer); }, [load]);
 

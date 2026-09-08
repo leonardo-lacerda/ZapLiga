@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { fetchMetricsFolderRanking, fetchMetricsNumberRanking, fetchMetricsSdrRanking, fetchMetricsSummary, MetricsQueryParams } from './metrics.api';
 import type { MetricsFolderRanking, MetricsNumberRanking, MetricsSdrRanking, MetricsSource, MetricsSummaryResponse } from './metrics.types';
+import { useSingleFlight } from '../../shared/useSingleFlight';
 
 const REFRESH_INTERVAL_MS = 30_000;
 
@@ -82,13 +83,16 @@ export function useMetrics(tenantId: string) {
   const query = useMemo(() => toQueryParams(filters), [filters]);
   const queryKey = JSON.stringify(query);
   const hasLoadedOnce = useRef(false);
-  const loadedRankingKeys = useRef(new Set<string>());
+  const loadedRankingKeys = useRef<Set<string> | null>(null);
+  if (loadedRankingKeys.current === null) loadedRankingKeys.current = new Set();
+  const rankingKeys = loadedRankingKeys.current;
   const currentQueryKey = useRef(queryKey);
   const summaryRequestId = useRef(0);
   const rankingRequestId = useRef(0);
+  const singleFlight = useSingleFlight();
   currentQueryKey.current = queryKey;
 
-  const loadSummary = useCallback(async (background: boolean) => {
+  const loadSummaryOnce = useCallback(async (background: boolean) => {
     if (!tenantId) return;
     const requestId = ++summaryRequestId.current;
     if (background) setRefreshing(true); else setLoading(true);
@@ -108,11 +112,12 @@ export function useMetrics(tenantId: string) {
       }
     }
   }, [tenantId, query, queryKey]);
+  const loadSummary = useCallback((background: boolean) => singleFlight(`metrics-summary:${tenantId}:${queryKey}`, () => loadSummaryOnce(background)), [loadSummaryOnce, queryKey, singleFlight, tenantId]);
 
   const loadRanking = useCallback(async (key: MetricsRankingKey) => {
     if (!tenantId) return;
     const requestKey = `${queryKey}:${key}`;
-    if (loadedRankingKeys.current.has(requestKey)) return;
+    if (rankingKeys.has(requestKey)) return;
 
     const requestId = ++rankingRequestId.current;
     setRankingsLoading(true);
@@ -131,24 +136,24 @@ export function useMetrics(tenantId: string) {
         if (currentQueryKey.current === queryKey && requestId === rankingRequestId.current) setNumberRanking(result);
       }
       if (currentQueryKey.current === queryKey && requestId === rankingRequestId.current) {
-        loadedRankingKeys.current.add(requestKey);
+        rankingKeys.add(requestKey);
       }
     } catch (reason) {
       if (currentQueryKey.current === queryKey && requestId === rankingRequestId.current) setRankingsError(errorMessage(reason));
     } finally {
       if (requestId === rankingRequestId.current) setRankingsLoading(false);
     }
-  }, [tenantId, query, queryKey]);
+  }, [query, queryKey, rankingKeys, tenantId]);
 
   useEffect(() => {
     rankingRequestId.current += 1;
-    loadedRankingKeys.current.clear();
+    rankingKeys.clear();
     setSdrRanking(null);
     setFolderRanking(null);
     setNumberRanking(null);
     setRankingsError('');
     void loadSummary(hasLoadedOnce.current);
-  }, [tenantId, queryKey, loadSummary]);
+  }, [tenantId, queryKey, loadSummary, rankingKeys]);
 
   useEffect(() => {
     const interval = window.setInterval(() => { void loadSummary(true); }, REFRESH_INTERVAL_MS);

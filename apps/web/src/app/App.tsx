@@ -6,6 +6,7 @@ import { json, wsUrl } from '../services/api';
 import type { AnyRow, TabKey } from '../types';
 import { Badge, Button, Icon } from '../components/ui';
 import { PAGE_SIZE } from '../shared/format';
+import { useSingleFlight } from '../shared/useSingleFlight';
 import { DateRangePopover } from '../components/DateRangePopover';
 import { Dashboard } from '../features/dashboard/Dashboard';
 import { MetricsPage } from '../features/metrics/MetricsPage';
@@ -51,7 +52,7 @@ function AuthenticatedApp() {
   const [leadFolders, setLeadFolders] = useState<AnyRow[]>([]);
   const [selectedFolderId, setSelectedFolderId] = useState('');
   const [folderMetrics, setFolderMetrics] = useState<AnyRow | null>(null);
-  const [dateRange, setDateRange] = useState({ from: isoDate(new Date(Date.now() - 29 * 24 * 60 * 60 * 1000)), to: isoDate(new Date()) });
+  const [dateRange, setDateRange] = useState(() => ({ from: isoDate(new Date(Date.now() - 29 * 24 * 60 * 60 * 1000)), to: isoDate(new Date()) }));
   const [sdrs, setSdrs] = useState<AnyRow[]>([]);
   const [calls, setCalls] = useState<AnyRow[]>([]);
   const [callsTotal, setCallsTotal] = useState(0);
@@ -103,11 +104,12 @@ function AuthenticatedApp() {
   const reconnectAttempt = useRef(0);
   const manualDisconnect = useRef(false);
   const desiredAvailable = useRef(false);
+  const singleFlight = useSingleFlight();
   const activeTenant = session?.tenants.find((tenant) => tenant.id === activeTenantId);
   const isSdr = activeTenant?.role === 'sdr';
   const isSuperAdmin = session?.user.platformRole === 'super_admin';
 
-  const load = useCallback(async () => {
+  const loadOnce = useCallback(async () => {
     try {
       const callsParams = new URLSearchParams({ from: dateRange.from, to: dateRange.to, limit: String(PAGE_SIZE), offset: String(callsOffset) });
       if (callsSearch.trim()) callsParams.set('search', callsSearch.trim());
@@ -134,6 +136,8 @@ function AuthenticatedApp() {
       setStatusError(e instanceof TypeError ? 'API temporariamente indisponível. Tentando reconectar...' : (e instanceof Error ? e.message : String(e)));
     }
   }, [sdrId, postCall, activeTenantId, isSdr, selectedFolderId, dateRange.from, dateRange.to, leadsOffset, callsOffset, callsSearch, callsStatus, callsResult, numbersOffset]);
+  const loadKey = JSON.stringify([activeTenantId, selectedFolderId, dateRange.from, dateRange.to, leadsOffset, callsOffset, callsSearch, callsStatus, callsResult, numbersOffset, isSdr ? 'sdr' : 'leader']);
+  const load = useCallback(() => singleFlight(`app:${loadKey}`, loadOnce), [loadKey, loadOnce, singleFlight]);
 
   useEffect(() => { if (!isSdr) { if (sdrId) setSdrId(''); return; } if (!sdrId && sdrs[0]?.id) setSdrId(sdrs[0].id); }, [isSdr, sdrId, sdrs]);
   useEffect(() => {
@@ -344,17 +348,18 @@ function AuthenticatedApp() {
   const suppressLead = async (phone: string, name: string) => { if (!window.confirm(`Adicionar ${name || phone} à lista de não contato? O telefone não poderá receber chamadas manuais ou automáticas.`)) return; const notes = window.prompt('Observação opcional sobre a solicitação de não contato:') ?? ''; try { await json(`/api/tenants/${activeTenantId}/contact-suppressions`, { method: 'POST', body: JSON.stringify({ phone, reason: 'requested_opt_out', source: 'lead_action', notes: notes.trim() || undefined }) }); await load(); } catch (e) { setError(e instanceof Error ? e.message : String(e)); } };
   const removeLead = async (id: string, name: string, phone: string) => { if (!window.confirm(`Remover o lead ${name || phone}? O contato e seu histórico de chamadas serão excluídos.`)) return; try { await json(`/api/leads/${id}`, { method: 'DELETE' }); await load(); } catch (e) { setError(String(e)); } };
   const clearLeads = async () => { if (!window.confirm('Limpar todos os contatos e o histórico de chamadas? Esta ação não pode ser desfeita.')) return; try { await json('/api/leads', { method: 'DELETE' }); await load(); } catch (e) { setError(String(e)); } };
-  const navItems: { key: TabKey; label: string; icon: string; group: 'Operação' | 'Configuração' | 'Conta' | 'Administração' }[] = [
+  const navItems: { key: TabKey; label: string; icon: string; group: 'Operação' | 'Análises' | 'Configuração' | 'Conta' | 'Administração' }[] = [
     { key: 'dashboard', label: isSdr ? 'Minha estação' : 'Visão geral', icon: 'dashboard', group: 'Operação' },
     ...(isSdr ? [{ key: 'sdrMetrics' as TabKey, label: 'Meus resultados', icon: 'chart', group: 'Operação' as const }] : []),
     { key: 'leads', label: 'Leads', icon: 'users', group: 'Operação' },
+    { key: 'campaigns', label: 'Campanhas', icon: 'sparkles', group: 'Operação' },
     { key: 'callbacks', label: 'Retornos', icon: 'calendar', group: 'Operação' },
     { key: 'calls', label: 'Histórico', icon: 'history', group: 'Operação' },
-    { key: 'metrics', label: 'Métricas', icon: 'chart', group: 'Operação' },
-    { key: 'operationHealth', label: 'Saúde da operação', icon: 'activity', group: 'Operação' },
-    { key: 'learning', label: 'Aprendizado', icon: 'sparkles', group: 'Operação' },
-    { key: 'experiments', label: 'Experimentos', icon: 'flask', group: 'Operação' },
-    { key: 'benchmarks', label: 'Benchmarks', icon: 'chart', group: 'Operação' },
+    { key: 'metrics', label: 'Métricas', icon: 'chart', group: 'Análises' },
+    { key: 'operationHealth', label: 'Saúde da operação', icon: 'activity', group: 'Análises' },
+    { key: 'learning', label: 'Aprendizado', icon: 'sparkles', group: 'Análises' },
+    { key: 'experiments', label: 'Experimentos', icon: 'flask', group: 'Análises' },
+    { key: 'benchmarks', label: 'Benchmarks', icon: 'chart', group: 'Análises' },
     { key: 'settings', label: 'Discador', icon: 'settings', group: 'Configuração' },
     { key: 'integrations', label: 'Integrações', icon: 'plug', group: 'Configuração' },
     { key: 'numbers', label: 'Números', icon: 'phone', group: 'Configuração' },
@@ -365,7 +370,6 @@ function AuthenticatedApp() {
     { key: 'profile', label: 'Meu perfil', icon: 'user', group: 'Conta' },
   ];
   if (isSuperAdmin) navItems.push({ key: 'admin', label: 'Admin', icon: 'settings', group: 'Administração' });
-  navItems.splice(3, 0, { key: 'campaigns', label: 'Campanhas', icon: 'sparkles', group: navItems[0].group });
   const gatedTabs: Partial<Record<TabKey, boolean>> = {
     campaigns: Boolean(featureFlags?.campaigns),
     operationHealth: Boolean(featureFlags?.operation_health),
@@ -377,7 +381,7 @@ function AuthenticatedApp() {
   };
   const visibleNavItems = navItems.filter((item) => gatedTabs[item.key] !== false);
   const connectedNumbers = (status.numbers ?? []).filter((number: AnyRow) => ['connected', 'online', 'ready', 'authenticated'].includes(String(number.status).toLowerCase())).length;
-  const navigationGroups = (['Operação', 'Configuração', 'Conta', 'Administração'] as const).map((group) => ({ label: group, items: visibleNavItems.filter((item) => item.group === group && (!isSdr || ['dashboard', 'sdrMetrics', 'callbacks', 'profile'].includes(item.key))) })).filter((group) => group.items.length > 0);
+  const navigationGroups = (['Operação', 'Análises', 'Configuração', 'Conta', 'Administração'] as const).map((group) => ({ label: group, items: visibleNavItems.filter((item) => item.group === group && (!isSdr || ['dashboard', 'sdrMetrics', 'callbacks', 'profile'].includes(item.key))) })).filter((group) => group.items.length > 0);
   const moduleTitle = visibleNavItems.find((item) => item.key === tab)?.label ?? navItems.find((item) => item.key === tab)?.label ?? 'Visão geral';
   const queuedLeads = isSdr ? (status.queue?.total ?? 0) : (status.lead_counts?.queued ?? 0);
   const availableSdrs = isSdr ? (status.sdr?.available ? 1 : 0) : (status.available_sdrs ?? 0);

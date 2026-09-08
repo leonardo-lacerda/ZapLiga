@@ -52,6 +52,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [activeTenantId, setActiveTenantState] = useState('');
   const [loading, setLoading] = useState(true);
   const sessionRef = useRef<AuthSession | null>(null);
+  const reloadInFlight = useRef<Promise<void> | null>(null);
 
   useEffect(() => { sessionRef.current = session; }, [session]);
 
@@ -89,8 +90,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
   }, []);
 
-  const reload = useCallback(async () => {
-    return runAuthTransition(async () => {
+  const reload = useCallback(() => {
+    if (reloadInFlight.current) return reloadInFlight.current;
+    const operation = runAuthTransition(async () => {
       try {
         if (!await refreshAccessToken(true)) {
           // Keep an already authenticated session during a transient network or
@@ -107,6 +109,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         setSession(null); setSavedAccounts([]);
       }
     });
+    const flight = operation.finally(() => {
+      if (reloadInFlight.current === flight) reloadInFlight.current = null;
+    });
+    reloadInFlight.current = flight;
+    return flight;
   }, [applySession, loadSavedAccounts]);
 
   useEffect(() => { void reload().finally(() => setLoading(false)); }, [reload]);

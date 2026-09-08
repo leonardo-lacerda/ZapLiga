@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { json, wsUrl } from '../../services/api';
+import { useSingleFlight } from '../../shared/useSingleFlight';
 import type { AnyRow } from '../../types';
 
 export type OperationsConnection = 'connecting' | 'connected' | 'fallback' | 'offline';
@@ -26,8 +27,9 @@ export function useOperationsRealtime(tenantId: string, enabled = true): Operati
   const refreshTimer = useRef<number>();
   const activityTimer = useRef<number>();
   const reconnectAttempt = useRef(0);
+  const singleFlight = useSingleFlight();
 
-  const refresh = useCallback(async () => {
+  const refreshOnce = useCallback(async () => {
     if (!enabled || !tenantId) return;
     try {
       const next = await json('/api/dialer/operations');
@@ -38,6 +40,7 @@ export function useOperationsRealtime(tenantId: string, enabled = true): Operati
       setConnection((current) => current === 'connected' ? current : 'fallback');
     }
   }, [enabled, tenantId]);
+  const refresh = useCallback(() => singleFlight(`operations:${tenantId}:${enabled}`, refreshOnce), [enabled, refreshOnce, singleFlight, tenantId]);
 
   useEffect(() => {
     let disposed = false;

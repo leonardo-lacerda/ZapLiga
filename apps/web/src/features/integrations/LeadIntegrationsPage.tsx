@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type React from 'react';
 import { Badge, Button, EmptyState, Icon, Panel } from '../../components/ui';
 import { apiBaseUrl, json } from '../../services/api';
@@ -40,6 +40,8 @@ export function LeadIntegrationsPage({ tenantId, folders }: LeadIntegrationsPage
   const [busy, setBusy] = useState(false);
   const [credentials, setCredentials] = useState<Credentials>(null);
   const [copied, setCopied] = useState('');
+  const copyTimer = useRef<number>();
+  useEffect(() => () => { if (copyTimer.current) window.clearTimeout(copyTimer.current); }, []);
   const [step, setStep] = useState<SetupStep>(1);
   const [showTutorial, setShowTutorial] = useState(false);
   const [showIntegrations, setShowIntegrations] = useState(false);
@@ -70,7 +72,8 @@ export function LeadIntegrationsPage({ tenantId, folders }: LeadIntegrationsPage
   const handleCopy = async (label: string, value: string) => {
     await copy(value);
     setCopied(label);
-    window.setTimeout(() => setCopied((current) => current === label ? '' : current), 1800);
+    if (copyTimer.current) window.clearTimeout(copyTimer.current);
+    copyTimer.current = window.setTimeout(() => { copyTimer.current = undefined; setCopied((current) => current === label ? '' : current); }, 1800);
   };
 
   const goNext = () => {
