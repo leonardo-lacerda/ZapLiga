@@ -49,6 +49,33 @@ describe('FeatureFlagsService', () => {
     expect(flags.benchmarks).toBe(false);
   });
 
+  it('discards an oversized cache entry and only returns known boolean flags', async () => {
+    const redis = { client: { get: jest.fn().mockResolvedValue('x'.repeat(4097)), set: jest.fn().mockResolvedValue('OK'), del: jest.fn().mockResolvedValue(1) } };
+    const db = { query: jest.fn().mockResolvedValue({ rows: [{ callbacks: false, campaigns: true, unexpected: 'never expose this' }] }) };
+    const service = new FeatureFlagsService(db as any, redis as any, { record: jest.fn() } as any);
+
+    const flags = await service.get('tenant-corrupted');
+
+    expect(redis.client.del).toHaveBeenCalledWith('zapcall:tenant:tenant-corrupted:feature-flags');
+    expect(db.query).toHaveBeenCalledTimes(1);
+    expect(flags.callbacks).toBe(false);
+    expect(flags.campaigns).toBe(true);
+    expect(flags).not.toHaveProperty('unexpected');
+    expect(Object.keys(flags)).toEqual(TENANT_FEATURES);
+  });
+
+  it('does not spread a cached primitive into an unbounded response object', async () => {
+    const redis = { client: { get: jest.fn().mockResolvedValue(JSON.stringify('corrupted-cache-value')), set: jest.fn().mockResolvedValue('OK'), del: jest.fn().mockResolvedValue(1) } };
+    const db = { query: jest.fn().mockResolvedValue({ rows: [] }) };
+    const service = new FeatureFlagsService(db as any, redis as any, { record: jest.fn() } as any);
+
+    const flags = await service.get('tenant-primitive-cache');
+
+    expect(redis.client.del).toHaveBeenCalled();
+    expect(flags).toEqual(defaultTenantFeatureFlags());
+    expect(Object.keys(flags)).toEqual(TENANT_FEATURES);
+  });
+
   it('ignores undefined optional DTO fields when updating flags', async () => {
     const db = { query: jest.fn().mockResolvedValueOnce({ rows: [] }).mockResolvedValueOnce({ rows: [] }) };
     const redis = { client: { get: jest.fn().mockResolvedValue(null), set: jest.fn().mockResolvedValue('OK'), del: jest.fn().mockResolvedValue(1) } };

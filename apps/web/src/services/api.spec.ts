@@ -1,5 +1,5 @@
 import { vi } from 'vitest';
-import { ApiError, apiFetch, clearAccessToken, clearActiveTenantId, json, runAuthTransition, setAccessToken, setActiveTenantId } from './api';
+import { ApiError, apiFetch, clearAccessToken, clearActiveTenantId, json, readJsonBody, runAuthTransition, setAccessToken, setActiveTenantId } from './api';
 
 describe('tenant request lifecycle', () => {
   afterEach(() => { clearAccessToken(); clearActiveTenantId(); vi.unstubAllGlobals(); });
@@ -86,5 +86,23 @@ describe('tenant request lifecycle', () => {
       'http://localhost:3000/api/numbers',
       'http://localhost:3000/api/numbers',
     ]);
+  });
+
+  it('cancels a streamed JSON response before it can exhaust browser memory', async () => {
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode('{"payload":"'));
+        controller.enqueue(new Uint8Array(32));
+        controller.close();
+      },
+    });
+
+    await expect(readJsonBody(new Response(stream), 16)).rejects.toThrow('excedeu o limite seguro');
+  });
+
+  it('rejects a declared oversized response without reading its body', async () => {
+    const response = new Response('{"ok":true}', { headers: { 'content-length': '1000' } });
+    await expect(readJsonBody(response, 100)).rejects.toThrow('excedeu o limite seguro');
+    expect(response.bodyUsed).toBe(true);
   });
 });

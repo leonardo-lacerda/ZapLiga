@@ -18,6 +18,7 @@ export const TENANT_FEATURES = [
 ] as const;
 export type TenantFeature = typeof TENANT_FEATURES[number];
 export type TenantFeatureFlags = Record<TenantFeature, boolean>;
+const FEATURE_FLAGS_CACHE_MAX_BYTES = 4 * 1024;
 export const defaultTenantFeatureFlags = (): TenantFeatureFlags => ({
   // Launch features stay on by default; super admin can still disable per tenant.
   schedule_enforcement: true,
@@ -34,15 +35,31 @@ export const defaultTenantFeatureFlags = (): TenantFeatureFlags => ({
   benchmarks: false,
 });
 
+const normalizeFeatureFlags = (value: unknown): TenantFeatureFlags => {
+  const flags = defaultTenantFeatureFlags();
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return flags;
+  const source = value as Record<string, unknown>;
+  for (const feature of TENANT_FEATURES) {
+    if (typeof source[feature] === 'boolean') flags[feature] = source[feature];
+  }
+  return flags;
+};
+
 @Injectable()
 export class FeatureFlagsService {
   constructor(private readonly db: DatabaseService, private readonly redis: RedisService, private readonly audit: AuditService) {}
   private key(tenantId: string) { return `zapcall:tenant:${tenantId}:feature-flags`; }
   async get(tenantId: string): Promise<TenantFeatureFlags> {
     const cached = await this.redis.client.get(this.key(tenantId)).catch(() => null);
-    if (cached) { try { return { ...defaultTenantFeatureFlags(), ...JSON.parse(cached) }; } catch { await this.redis.client.del(this.key(tenantId)).catch(() => undefined); } }
+    if (cached && Buffer.byteLength(cached, 'utf8') <= FEATURE_FLAGS_CACHE_MAX_BYTES) {
+      try {
+        const parsed = JSON.parse(cached);
+        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) return normalizeFeatureFlags(parsed);
+      } catch { /* descarta o cache inválido abaixo */ }
+    }
+    if (cached) await this.redis.client.del(this.key(tenantId)).catch(() => undefined);
     const row = (await this.db.query(`SELECT ${TENANT_FEATURES.join(', ')} FROM tenant_feature_flags WHERE tenant_id = $1`, [tenantId])).rows[0];
-    const flags = { ...defaultTenantFeatureFlags(), ...(row ?? {}) };
+    const flags = normalizeFeatureFlags(row);
     await this.redis.client.set(this.key(tenantId), JSON.stringify(flags), 'EX', 60).catch(() => undefined);
     return flags;
   }

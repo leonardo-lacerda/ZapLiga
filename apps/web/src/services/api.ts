@@ -1,4 +1,5 @@
 const API = import.meta.env.VITE_API_URL ?? 'http://localhost:3000';
+export const MAX_JSON_RESPONSE_BYTES = 10 * 1024 * 1024;
 let accessToken = '';
 let activeTenantId = '';
 let tenantRequestController = new AbortController();
@@ -158,6 +159,38 @@ export class ApiError extends Error {
   }
 }
 
+export const readJsonBody = async (response: Response, maxBytes = MAX_JSON_RESPONSE_BYTES): Promise<any> => {
+  const declaredLength = Number(response.headers.get('content-length'));
+  if (Number.isFinite(declaredLength) && declaredLength > maxBytes) {
+    await response.body?.cancel().catch(() => undefined);
+    throw new Error('Resposta da API excedeu o limite seguro. Tente novamente ou contate o suporte.');
+  }
+  if (!response.body) return {};
+
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    if (!value) continue;
+    total += value.byteLength;
+    if (total > maxBytes) {
+      await reader.cancel().catch(() => undefined);
+      throw new Error('Resposta da API excedeu o limite seguro. Tente novamente ou contate o suporte.');
+    }
+    chunks.push(value);
+  }
+
+  if (!total) return {};
+  const bytes = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.byteLength; }
+  const text = new TextDecoder().decode(bytes);
+  if (!text.trim()) return {};
+  try { return JSON.parse(text); } catch { return {}; }
+};
+
 export const json = async (path: string, init?: RequestInit, retry = true): Promise<any> => {
   // Do not knowingly send an expired access token. This is especially
   // important when a suspended/mobile tab becomes visible again: its polling
@@ -174,7 +207,7 @@ export const json = async (path: string, init?: RequestInit, retry = true): Prom
     if (tokenAtRequest !== accessToken && accessToken) return json(path, init, false);
     if (await refreshAccessToken()) return json(path, init, false);
   }
-  const body = await response.json().catch(() => ({}));
+  const body = await readJsonBody(response);
   if (response.status === 401 && typeof window !== 'undefined') window.dispatchEvent(new CustomEvent('zapliga:access-changed'));
   if (!response.ok) throw new ApiError(response.status, body);
   return body;
