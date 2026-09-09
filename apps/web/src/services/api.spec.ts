@@ -88,6 +88,25 @@ describe('tenant request lifecycle', () => {
     ]);
   });
 
+  it('refreshes normally after a completed auth transition instead of recursing forever', async () => {
+    const futurePayload = btoa(JSON.stringify({ exp: Math.floor(Date.now() / 1000) + 900 }));
+    const urls: string[] = [];
+    vi.stubGlobal('fetch', vi.fn(async (url: string | URL) => {
+      urls.push(String(url));
+      if (String(url).endsWith('/api/auth/refresh')) {
+        return new Response(JSON.stringify({ accessToken: `next.${futurePayload}.token` }), { status: 200 });
+      }
+      return new Response(JSON.stringify({ ok: true }), { status: 200 });
+    }));
+
+    await runAuthTransition(async () => { setAccessToken('expired.eyJleHAiOjF9.token'); });
+    await expect(json('/api/numbers')).resolves.toEqual({ ok: true });
+    expect(urls).toEqual([
+      'http://localhost:3000/api/auth/refresh',
+      'http://localhost:3000/api/numbers',
+    ]);
+  });
+
   it('cancels a streamed JSON response before it can exhaust browser memory', async () => {
     const stream = new ReadableStream<Uint8Array>({
       start(controller) {

@@ -67,7 +67,11 @@ export const apiFetch = fetchJson;
 export const runAuthTransition = <T,>(operation: () => Promise<T>) => {
   const previous = authTransitionInFlight ?? Promise.resolve();
   const current = previous.catch(() => undefined).then(operation);
-  authTransitionInFlight = current.then(() => undefined, () => undefined);
+  const transition = current.then(() => undefined, () => undefined);
+  authTransitionInFlight = transition;
+  void transition.then(() => {
+    if (authTransitionInFlight === transition) authTransitionInFlight = null;
+  });
   return current;
 };
 
