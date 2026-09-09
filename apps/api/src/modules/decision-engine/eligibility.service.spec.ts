@@ -49,8 +49,10 @@ describe('eligibility contract', () => {
   });
 
   it('preserves the explicit manual redial override while retaining safety barriers', () => {
-    const allowed = evaluateLeadEligibility({ ...base, mode: 'manual', manualQueueOverride: true, lead: { ...base.lead, status: 'completed', attempts: 99, nextEligibleAt: '2099-01-01T00:00:00.000Z' } });
+    const allowed = evaluateLeadEligibility({ ...base, mode: 'manual', manualQueueOverride: true, folderActive: false, lead: { ...base.lead, status: 'completed', attempts: 99, nextEligibleAt: '2099-01-01T00:00:00.000Z' } });
     expect(allowed.eligible).toBe(true);
+    expect(allowed.blockedBy).not.toContain('folder_inactive');
+    expect(allowed.reasonCodes).toContain('manual_queue_override');
     const blocked = evaluateLeadEligibility({ ...base, mode: 'manual', manualQueueOverride: true, contactSuppressed: true });
     expect(blocked.blockedBy).toContain('contact_suppressed');
   });

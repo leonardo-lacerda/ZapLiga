@@ -72,6 +72,8 @@ const digits = (value: unknown) => String(value ?? '').replace(/\D/g, '');
 export function evaluateLeadEligibility(input: LeadEligibilityInput): EligibilityResult {
   const now = input.now ?? new Date();
   const reasons: EligibilityReason[] = [];
+  const queueOverride = input.mode === 'manual' && input.manualQueueOverride === true;
+  const enforceQueue = automaticModes.has(input.mode) || !queueOverride;
   const add = (code: RoadmapReasonCode, allowed: boolean, metadata?: Record<string, unknown>) => {
     reasons.push({ code, allowed, ...(metadata ? { metadata } : {}) });
   };
@@ -82,7 +84,10 @@ export function evaluateLeadEligibility(input: LeadEligibilityInput): Eligibilit
   if (input.scheduleAllowed !== undefined && input.scheduleAllowed !== null) {
     add(input.scheduleAllowed ? 'within_schedule' : 'outside_schedule', Boolean(input.scheduleAllowed));
   }
-  if (input.folderActive !== undefined && input.folderActive !== null) {
+  // An inactive folder pauses the automatic queue, not an explicit call made
+  // by a person. This is part of the same manual queue override as status,
+  // attempt budget and next-attempt pacing.
+  if (enforceQueue && input.folderActive !== undefined && input.folderActive !== null) {
     add(input.folderActive ? 'folder_active' : 'folder_inactive', Boolean(input.folderActive));
   }
 
@@ -108,8 +113,6 @@ export function evaluateLeadEligibility(input: LeadEligibilityInput): Eligibilit
     add('callback_due', true);
   }
 
-  const queueOverride = input.mode === 'manual' && input.manualQueueOverride === true;
-  const enforceQueue = automaticModes.has(input.mode) || !queueOverride;
   if (queueOverride) add('manual_queue_override', true);
   if (enforceQueue) {
     const status = String(input.lead.status ?? '');
