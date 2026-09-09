@@ -143,7 +143,7 @@ export function AdminPage({ onChanged, onOpenTenant }: { onChanged?: () => Promi
         json(`/api/admin/tenants/${tenantId}/summary`),
         json(`/api/admin/tenants/${tenantId}/numbers?limit=50`),
         json(`/api/admin/audit?tenantId=${encodeURIComponent(tenantId)}&limit=20`),
-        json(`/api/tenants/${tenantId}/feature-flags`),
+        tenantJson(tenantId, `/api/tenants/${tenantId}/feature-flags`),
       ]);
       setSelectedTenant(detail);
       setTenantNumbers(numbers);
@@ -157,7 +157,7 @@ export function AdminPage({ onChanged, onOpenTenant }: { onChanged?: () => Promi
   const toggleTenantFlag = async (tenantId: string, feature: string, enabled: boolean) => {
     await act(
       `flag-${tenantId}-${feature}`,
-      () => json(`/api/tenants/${tenantId}/feature-flags`, { method: 'PATCH', body: JSON.stringify({ [feature]: enabled }) }),
+      () => tenantJson(tenantId, `/api/tenants/${tenantId}/feature-flags`, { method: 'PATCH', body: JSON.stringify({ [feature]: enabled }) }),
       `${enabled ? 'Recurso habilitado' : 'Recurso desabilitado'}: ${feature}.`,
     );
     setTenantFlags((current) => ({ ...current, [feature]: enabled }));
