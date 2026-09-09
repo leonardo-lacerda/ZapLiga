@@ -26,6 +26,9 @@ está em [`docs/postmortem-audio-unidirecional.md`](../../docs/postmortem-audio-
    mesclamos o downlink de qualquer um — como o cliente oficial.
 2. Preferência de relay na porta web-client / FNA para o endpoint primário
    (`get_media_relay_endpoint`) e telemetria dos candidatos (`voip: outgoing relay candidates`).
+   Quando a oferta anuncia apenas `3478`, a conexão em `3480` recebe 2 s de
+   vantagem antes do fallback: `3478` pode completar o handshake e aceitar o
+   uplink sem encaminhar o áudio do telefone de volta.
 3. Chamada multi-device: um companion que rejeita com `reason=enc` não derruba a
    chamada enquanto o telefone principal ainda toca (`src/handlers/call.rs`,
    `wacore/src/stanza/call.rs`).
@@ -34,8 +37,8 @@ está em [`docs/postmortem-audio-unidirecional.md`](../../docs/postmortem-audio-
 
 ```bash
 # na sua maquina (nunca na VPS):
-infra/waxum/build.sh 0.12.6-multirelay-v1
-docker save zapliga-waxum:0.12.6-multirelay-v1 | gzip \
+infra/waxum/build.sh 0.12.6-multirelay-v3
+docker save zapliga-waxum:0.12.6-multirelay-v3 | gzip \
   | ssh -i ~/.ssh/zapliga_actions root@209.50.229.249 'gunzip | docker load'
 ```
 

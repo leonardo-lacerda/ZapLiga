@@ -13,12 +13,12 @@
 #   docker save zapliga-waxum:<tag> | gzip | ssh root@<vps> 'gunzip | docker load'
 #
 # Usage:
-#   infra/waxum/build.sh [tag]            # default tag: 0.12.6-multirelay-v1
+#   infra/waxum/build.sh [tag]            # default tag: 0.12.6-multirelay-v3
 #   WORKDIR=/some/dir infra/waxum/build.sh # keep the assembled source around
 #
 set -euo pipefail
 
-TAG="${1:-0.12.6-multirelay-v1}"
+TAG="${1:-0.12.6-multirelay-v3}"
 IMAGE="zapliga-waxum:${TAG}"
 
 # Pinned upstream sources. Bumping either means regenerating the patches:
@@ -50,6 +50,10 @@ rm -rf "${SRC}/.git"
 
 git init -q "${SRC}/whatsapp-rust"
 git -C "${SRC}/whatsapp-rust" remote add origin "${WHATSAPP_RUST_REPO}"
+# The versioned Rust patch uses LF. Force the same checkout on Windows/Git Bash,
+# where the system git config otherwise converts upstream Rust files to CRLF and
+# makes `patch --binary` reject every hunk as "different line endings".
+git -C "${SRC}/whatsapp-rust" config core.autocrlf false
 git -C "${SRC}/whatsapp-rust" fetch -q --depth 1 origin "${WHATSAPP_RUST_REF}"
 git -C "${SRC}/whatsapp-rust" checkout -q FETCH_HEAD
 rm -rf "${SRC}/whatsapp-rust/.git"

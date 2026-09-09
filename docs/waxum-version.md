@@ -2,11 +2,11 @@
 
 ## Versão em produção
 
-- Imagem: `zapliga-waxum:0.12.6-multirelay-v1` (construída por nós — **não** é a `fdciabdul/waxum`)
+- Imagem: `zapliga-waxum:0.12.6-multirelay-v3` (construída por nós — **não** é a `fdciabdul/waxum`)
 - Base Waxum: `imtaqin/waxum` `v0.12.5` (`c673e9867216d3448339db90a0b16509a567dae1`)
 - Base whatsapp-rust: `oxidezap/whatsapp-rust` `9be10573aa47bc8dcae42918c553250879383d67` (main, 2026-09-01)
 - Patches e build reproduzível: [`infra/waxum/`](../infra/waxum/README.md)
-- Validada em produção: `2026-09-04` (chamada real, `cliente→servidor pico>0`, sem `AudioReceptionStalled`)
+- Build e healthcheck da v3 em produção: `2026-09-09`; validação final de áudio exige uma chamada real com voz.
 - Rollback disponível no host: `zapliga-waxum:0.12.6-rollback`
 
 ## Por que não a imagem oficial

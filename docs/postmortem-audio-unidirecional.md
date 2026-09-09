@@ -56,7 +56,7 @@ Quem atende roda a própria eleição de relay depois do accept (mede RTT para c
 
 A causa foi confirmada por uma implementação independente do mesmo protocolo (meowcaller, PR [#26](https://github.com/purpshell/meowcaller/pull/26)), que a diagnosticou e validou contra Android, iPhone, WhatsApp Business e WhatsApp Web — e é como o cliente oficial se comporta (`ConfigureRelays`/`Broadcast` no WaCalls).
 
-**Correção (whatsapp-rust vendorizado, imagem `zapliga-waxum:0.12.6-multirelay-v1`):**
+**Correção (whatsapp-rust vendorizado; imagem atual `zapliga-waxum:0.12.6-multirelay-v3`):**
 - `relay_parse.rs`: `get_usable_relay_endpoints()` — todos os endpoints dialáveis e com token.
 - `native.rs`: `MultiRelayMediaChannelFactory` / `MultiRelayTransport` / `drive_extra_relay` — conecta e aloca em **todos** os relays (cada um com o próprio token), faz broadcast do RTP/RTCP de saída e mescla o que chegar de qualquer um. O relay primário e a máquina de estados STUN do engine ficam intactos; os extras são loops independentes, best-effort.
 - `facade.rs`: `relay_extras_from_data()` alimenta os extras em `build_engine` (resposta) e `attach_outgoing_relay` (chamada de saída — o caminho do ZapCall).
@@ -64,6 +64,20 @@ A causa foi confirmada por uma implementação independente do mesmo protocolo (
 **Validação:** primeira chamada após o deploy (2026-09-04 00:32 UTC): `cliente→servidor pico=28343, 272107/670720 não-zero`, sem `AudioReceptionStalled`. Confirmado de novo às 01:31 UTC (`pico=13282`) com o usuário ouvindo.
 
 O patch completo e o processo de rebuild estão em [`infra/waxum/`](../infra/waxum/README.md).
+
+### Regressão de 2026-09-09: a porta errada ganhava a corrida
+
+Duas chamadas reais conectaram e foram encerradas exatamente aos 10 s com
+`waxum_inbound_audio_stalled`. Nas duas, todos os hosts da oferta anunciavam
+`3478`; o Waxum abriu o primário e os extras nessa porta, recebeu resposta ao
+allocate, mas nenhum deles registrou o primeiro pacote de mídia de entrada.
+
+A corrida simultânea entre `3478` e `3480`, introduzida na imagem v2, permitia
+que `3478` ganhasse em poucos milissegundos. Isso não prova um caminho de mídia
+bidirecional: conforme documentado no upstream (`whatsapp-rust` #1098), essa
+porta pode aceitar o handshake/uplink sem devolver o stream do peer. A imagem
+v3 tenta `3480` primeiro e só inicia `3478` 2 s depois, como fallback de
+compatibilidade. A regra vale para o relay primário e para todos os extras.
 
 ---
 

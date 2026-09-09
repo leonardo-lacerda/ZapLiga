@@ -1,6 +1,6 @@
-diff -ruN '--exclude=target' '--exclude=.git' whatsapp-rust/src/client/voip.rs ../zapliga-waxum-encfix-v2/whatsapp-rust/src/client/voip.rs
---- whatsapp-rust/src/client/voip.rs	2026-09-03 22:36:25.875350200 -0300
-+++ ../zapliga-waxum-encfix-v2/whatsapp-rust/src/client/voip.rs	2026-09-03 18:11:52.547979600 -0300
+diff -ruN -U0 '--exclude=target' '--exclude=.git' base/src/client/voip.rs modified/whatsapp-rust/src/client/voip.rs
+--- base/src/client/voip.rs	2026-09-09 11:50:45.022941117 -0300
++++ modified/whatsapp-rust/src/client/voip.rs	2026-09-09 11:50:45.337612530 -0300
 @@ -445,6 +445,8 @@
      pub(crate) async fn relay_transport_factory(
          &self,
@@ -34,9 +34,9 @@ diff -ruN '--exclude=target' '--exclude=.git' whatsapp-rust/src/client/voip.rs .
          }
          #[cfg(not(feature = "voip-relay-native"))]
          {
-diff -ruN '--exclude=target' '--exclude=.git' whatsapp-rust/src/handlers/call.rs ../zapliga-waxum-encfix-v2/whatsapp-rust/src/handlers/call.rs
---- whatsapp-rust/src/handlers/call.rs	2026-09-03 22:38:51.345638500 -0300
-+++ ../zapliga-waxum-encfix-v2/whatsapp-rust/src/handlers/call.rs	2026-09-02 00:07:54.000000000 -0300
+diff -ruN -U0 '--exclude=target' '--exclude=.git' base/src/handlers/call.rs modified/whatsapp-rust/src/handlers/call.rs
+--- base/src/handlers/call.rs	2026-09-09 11:50:45.031149006 -0300
++++ modified/whatsapp-rust/src/handlers/call.rs	2026-09-09 11:50:45.338563789 -0300
 @@ -8,7 +8,7 @@
  use wacore::messages::MessageUtils;
  #[cfg(feature = "voip-runtime")]
@@ -67,9 +67,9 @@ diff -ruN '--exclude=target' '--exclude=.git' whatsapp-rust/src/handlers/call.rs
      )
  }
  
-diff -ruN '--exclude=target' '--exclude=.git' whatsapp-rust/src/voip/facade.rs ../zapliga-waxum-encfix-v2/whatsapp-rust/src/voip/facade.rs
---- whatsapp-rust/src/voip/facade.rs	2026-09-03 22:38:59.436064200 -0300
-+++ ../zapliga-waxum-encfix-v2/whatsapp-rust/src/voip/facade.rs	2026-09-03 18:28:08.676914800 -0300
+diff -ruN -U0 '--exclude=target' '--exclude=.git' base/src/voip/facade.rs modified/whatsapp-rust/src/voip/facade.rs
+--- base/src/voip/facade.rs	2026-09-09 11:50:45.050087572 -0300
++++ modified/whatsapp-rust/src/voip/facade.rs	2026-09-09 11:50:45.340210757 -0300
 @@ -356,7 +356,7 @@
              &preaccept_id,
              &accept_id,
@@ -366,9 +366,9 @@ diff -ruN '--exclude=target' '--exclude=.git' whatsapp-rust/src/voip/facade.rs .
              Ok(_) => panic!("a refusing provider must not fall through to the native dialer"),
              Err(error) => error,
          };
-diff -ruN '--exclude=target' '--exclude=.git' whatsapp-rust/src/voip/transport/mod.rs ../zapliga-waxum-encfix-v2/whatsapp-rust/src/voip/transport/mod.rs
---- whatsapp-rust/src/voip/transport/mod.rs	2026-09-03 22:36:25.993858100 -0300
-+++ ../zapliga-waxum-encfix-v2/whatsapp-rust/src/voip/transport/mod.rs	2026-09-03 18:11:17.218861200 -0300
+diff -ruN -U0 '--exclude=target' '--exclude=.git' base/src/voip/transport/mod.rs modified/whatsapp-rust/src/voip/transport/mod.rs
+--- base/src/voip/transport/mod.rs	2026-09-09 11:50:45.050087572 -0300
++++ modified/whatsapp-rust/src/voip/transport/mod.rs	2026-09-09 11:50:45.342208053 -0300
 @@ -24,3 +24,25 @@
  // `whatsapp_rust::voip::transport::{classify_relay_packet, RelayPacketKind}` paths stay stable on
  // every build that has ever had them.
@@ -395,9 +395,9 @@ diff -ruN '--exclude=target' '--exclude=.git' whatsapp-rust/src/voip/transport/m
 +    pub self_participant_id: String,
 +    pub integrity_key: Vec<u8>,
 +}
-diff -ruN '--exclude=target' '--exclude=.git' whatsapp-rust/src/voip/transport/native.rs ../zapliga-waxum-encfix-v2/whatsapp-rust/src/voip/transport/native.rs
---- whatsapp-rust/src/voip/transport/native.rs	2026-09-03 22:36:25.995869900 -0300
-+++ ../zapliga-waxum-encfix-v2/whatsapp-rust/src/voip/transport/native.rs	2026-09-04 10:25:31.756797500 -0300
+diff -ruN -U0 '--exclude=target' '--exclude=.git' base/src/voip/transport/native.rs modified/whatsapp-rust/src/voip/transport/native.rs
+--- base/src/voip/transport/native.rs	2026-09-09 11:50:45.052568106 -0300
++++ modified/whatsapp-rust/src/voip/transport/native.rs	2026-09-09 11:50:45.370584600 -0300
 @@ -63,6 +63,8 @@
  
  use wacore::voip::demux::{RelayPacketKind, classify_relay_packet};
@@ -407,7 +407,75 @@ diff -ruN '--exclude=target' '--exclude=.git' whatsapp-rust/src/voip/transport/n
  /// Why the media stack stopped. The driver branches on the variant: a peer close ends the call the
  /// way hanging up does, anything else is a transport failure the call surfaces as a read error.
  #[derive(Debug, thiserror::Error)]
-@@ -744,8 +746,9 @@
+@@ -667,23 +669,29 @@
+     }
+ }
+ 
+-/// The relay addresses to dial concurrently for `advertised`.
++/// The relay addresses to dial for `advertised`, in preference order.
+ ///
+-/// Which of the two media ports a relay serves is NOT derivable from the offer, and it varies per
+-/// relay host AND per session: a host may advertise 3478 and answer only on
+-/// [`WEB_CLIENT_RELAY_PORT`], or advertise and honour the same port. So either choice alone
+-/// black-holes for some relays, costing a full `RELAY_CONNECT_TIMEOUT` and failing the call.
++/// A relay on 3478 may complete DTLS/SCTP and accept our uplink while never forwarding the peer's
++/// media back (issue #1098). That makes a raw connection race unsafe: 3478 normally wins by a few
++/// milliseconds and leaves the call connected but deaf. Always give [`WEB_CLIENT_RELAY_PORT`] the
++/// first chance, then start the advertised-port dial as a compatibility fallback.
+ ///
+-/// The advertised port comes first so a relay that honours it is dialled on the port it asked for.
+ /// Never yields a duplicate, which would double-dial the same endpoint for nothing.
+ fn dial_candidates(advertised: SocketAddr) -> Vec<SocketAddr> {
+-    let mut out = vec![advertised];
+-    if advertised.port() != WEB_CLIENT_RELAY_PORT {
+-        out.push(SocketAddr::new(advertised.ip(), WEB_CLIENT_RELAY_PORT));
++    let preferred = SocketAddr::new(advertised.ip(), WEB_CLIENT_RELAY_PORT);
++    let mut out = vec![preferred];
++    if advertised != preferred {
++        out.push(advertised);
+     }
+     out
+ }
+ 
++/// Head start for the only port known to carry media in both directions. The fallback preserves
++/// compatibility with relay families that really serve only their advertised port without letting
++/// a fast-but-one-way 3478 handshake win the normal case.
++const WEB_CLIENT_RELAY_HEAD_START: std::time::Duration =
++    std::time::Duration::from_millis(2_000);
++
+ /// One candidate dial's result: the address that answered, its channel, and its event stream.
+ type DialedRelay = (
+     SocketAddr,
+@@ -699,11 +707,8 @@
+         Arc<dyn RelayTransport>,
+         async_channel::Receiver<RelayTransportEvent>,
+     )> {
+-        // Race every candidate port (see `dial_candidates`) and keep whichever completes the
+-        // handshake. `select_ok` discards the losers' errors and drops their futures, aborting those
+-        // dials. Cost when the advertised port is the right one is a second UDP socket for the
+-        // duration of the handshake; trying serially would instead add a full RELAY_CONNECT_TIMEOUT
+-        // to every call on the other relay family.
++        // Give the bidirectional web-client port a head start, then race the advertised port as a
++        // compatibility fallback. `select_ok` discards the loser's future once one dial completes.
+         let dialed = dial_candidates(self.addr);
+         // Whichever candidate wins is the only record of whether this relay honoured the port it
+         // advertised, and `select_ok` yields just the winner's output - so carry the address through
+@@ -711,9 +716,13 @@
+         // only the LAST error, which without this would name no endpoint at all.
+         let candidates: Vec<Pin<Box<dyn Future<Output = Result<DialedRelay>> + Send>>> = dialed
+             .iter()
+-            .map(|&addr| {
++            .enumerate()
++            .map(|(index, &addr)| {
+                 let runtime = self.runtime.clone();
+                 Box::pin(async move {
++                    if index > 0 {
++                        runtime.sleep(WEB_CLIENT_RELAY_HEAD_START).await;
++                    }
+                     match connect_relay_media(addr, runtime).await {
+                         Ok((chan, events)) => Ok((addr, chan, events)),
+                         Err(e) => Err(anyhow!("{addr}: {e}")),
+@@ -744,8 +753,9 @@
          .map_err(|e| anyhow!("relay connect: {e}; tried {tried}"))?
          .0;
          // The advertised port and the port that answered diverge per host and per session, so this
@@ -419,7 +487,7 @@ diff -ruN '--exclude=target' '--exclude=.git' whatsapp-rust/src/voip/transport/n
              "voip: relay media connected on {winner} (advertised {}){}",
              self.addr,
              if winner == self.addr {
-@@ -928,6 +931,291 @@
+@@ -928,22 +938,307 @@
      }
  }
  
@@ -711,24 +779,43 @@ diff -ruN '--exclude=target' '--exclude=.git' whatsapp-rust/src/voip/transport/n
  #[cfg(test)]
  mod tests {
      use super::*;
-diff -ruN '--exclude=target' '--exclude=.git' whatsapp-rust/wacore/src/stanza/call.rs ../zapliga-waxum-encfix-v2/whatsapp-rust/wacore/src/stanza/call.rs
---- whatsapp-rust/wacore/src/stanza/call.rs	2026-09-03 22:36:26.270833600 -0300
-+++ ../zapliga-waxum-encfix-v2/whatsapp-rust/wacore/src/stanza/call.rs	2026-09-02 00:07:54.000000000 -0300
-@@ -652,7 +652,10 @@
- /// `<reject reason>` wire token for a device that cannot take the call - already in a call, or a
+ 
+-    /// A relay that advertises 3478 must still be tried on the web client port, since which of the
+-    /// two a host actually serves is not visible in the offer.
++    /// A relay that advertises 3478 must try the bidirectional web-client port first, keeping the
++    /// advertised port only as a delayed compatibility fallback.
+     #[test]
+     fn dial_candidates_adds_the_web_client_port() {
+         let advertised: SocketAddr = "57.144.43.57:3478".parse().unwrap();
+         assert_eq!(
+             dial_candidates(advertised),
+             vec![
+-                advertised,
+-                "57.144.43.57:3480".parse::<SocketAddr>().unwrap()
++                "57.144.43.57:3480".parse::<SocketAddr>().unwrap(),
++                advertised
+             ],
+-            "the advertised port is dialled first, with 3480 raced alongside it"
++            "3480 must get the head start so a faster one-way 3478 handshake cannot win"
+         );
+     }
+ 
+diff -ruN -U0 '--exclude=target' '--exclude=.git' base/wacore/src/stanza/call.rs modified/whatsapp-rust/wacore/src/stanza/call.rs
+--- base/wacore/src/stanza/call.rs	2026-09-09 11:50:45.127883682 -0300
++++ modified/whatsapp-rust/wacore/src/stanza/call.rs	2026-09-09 11:50:45.346325288 -0300
+@@ -653,6 +653,9 @@
  /// companion that does not do voice at all. It is a statement about ONE DEVICE, not the callee's
  /// decision: the peer's remaining devices go on ringing and may still answer.
--pub const REJECT_REASON_BUSY: &str = "busy";
-+pub const REJECT_REASON_BUSY: &str = "busy";
+ pub const REJECT_REASON_BUSY: &str = "busy";
 +/// The device could not decrypt the offer. This is a per-device transport/key
 +/// failure, not a user decline; companion devices may still accept the call.
 +pub const REJECT_REASON_ENC: &str = "enc";
  
  /// Relay latency wire encoding: `0x2000000 + rtt_ms`.
  pub fn encode_latency(rtt_ms: u32) -> String {
-diff -ruN '--exclude=target' '--exclude=.git' whatsapp-rust/wacore/src/voip/relay_parse.rs ../zapliga-waxum-encfix-v2/whatsapp-rust/wacore/src/voip/relay_parse.rs
---- whatsapp-rust/wacore/src/voip/relay_parse.rs	2026-09-03 22:36:26.460122700 -0300
-+++ ../zapliga-waxum-encfix-v2/whatsapp-rust/wacore/src/voip/relay_parse.rs	2026-09-03 21:00:58.830956800 -0300
+diff -ruN -U0 '--exclude=target' '--exclude=.git' base/wacore/src/voip/relay_parse.rs modified/whatsapp-rust/wacore/src/voip/relay_parse.rs
+--- base/wacore/src/voip/relay_parse.rs	2026-09-09 11:50:45.220929181 -0300
++++ modified/whatsapp-rust/wacore/src/voip/relay_parse.rs	2026-09-09 11:50:45.347975005 -0300
 @@ -340,6 +340,28 @@
      !endpoint.is_fna && endpoint.auth_token_id != 0
  }
