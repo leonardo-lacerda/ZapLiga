@@ -160,6 +160,32 @@ jobs:
             exit 1
           fi
 
+          # Billing is fail-closed in production. Validate the presence and
+          # mode of its runtime configuration before touching infrastructure or
+          # building images, while never printing secret values to the log.
+          env_value() { grep -m1 "^$1=" .env 2>/dev/null | cut -d= -f2- || true; }
+          stripe_secret_key="$(env_value STRIPE_SECRET_KEY)"
+          stripe_webhook_secret="$(env_value STRIPE_WEBHOOK_SECRET)"
+          stripe_livemode="$(env_value STRIPE_LIVEMODE)"
+          stripe_portal_configuration="$(env_value STRIPE_PORTAL_CONFIGURATION_ID)"
+          billing_enforcement="$(env_value BILLING_ENFORCEMENT_MODE)"
+          if [ -z "$stripe_secret_key" ] || [ -z "$stripe_webhook_secret" ] || [ -z "$stripe_portal_configuration" ]; then
+            echo "Billing Stripe incompleto no .env: STRIPE_SECRET_KEY, STRIPE_WEBHOOK_SECRET e STRIPE_PORTAL_CONFIGURATION_ID são obrigatórios" >&2
+            exit 1
+          fi
+          if [ "$stripe_livemode" != "true" ]; then
+            echo "STRIPE_LIVEMODE precisa ser true no deploy de produção" >&2
+            exit 1
+          fi
+          case "$stripe_secret_key" in
+            sk_live_*|rk_live_*) ;;
+            *) echo "A chave Stripe de produção não é uma chave Live" >&2; exit 1 ;;
+          esac
+          case "$billing_enforcement" in
+            ""|enforce|shadow) ;;
+            *) echo "BILLING_ENFORCEMENT_MODE inválido (use enforce ou shadow)" >&2; exit 1 ;;
+          esac
+
           COMPOSE=(docker compose -f docker-compose.yml)
           # The Waxum image is pinned in docker-compose.yml itself (a locally
           # built zapliga-waxum:<tag> that must already exist on the host --
@@ -209,6 +235,14 @@ jobs:
           done
 
           "${COMPOSE[@]}" build api-a api-b web
+
+          # Apply the database schema and register the versioned Stripe
+          # Products/Prices before either API replica receives traffic. The
+          # command is idempotent and reuses lookup keys, so every deploy keeps
+          # the local catalog convergent with the configured Live account.
+          "${COMPOSE[@]}" run --rm --no-deps api-a node apps/api/dist/scripts/migrate.js
+          "${COMPOSE[@]}" run --rm --no-deps api-a node apps/api/dist/scripts/sync-stripe-catalog.js
+
           "${COMPOSE[@]}" stop api >/dev/null 2>&1 || true
           "${COMPOSE[@]}" rm -sf api >/dev/null 2>&1 || true
 

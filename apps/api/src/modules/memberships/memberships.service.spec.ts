@@ -94,3 +94,29 @@ describe('MembershipsService access removal', () => {
     expect(client.query.mock.calls.some(([sql]: [string]) => sql.includes('UPDATE user_sessions'))).toBe(true);
   });
 });
+
+describe('MembershipsService role promotion', () => {
+  it('cria o perfil operacional ao promover um membro ativo para SDR', async () => {
+    const client = {
+      query: jest.fn(async (sql: string) => {
+        if (sql.includes('SELECT count(*)')) return { rows: [{ count: 2 }] };
+        if (sql.startsWith('UPDATE tenant_memberships')) return { rows: [{ role: 'sdr', status: 'active' }] };
+        if (sql.startsWith('SELECT id FROM sdrs')) return { rows: [] };
+        if (sql.startsWith('SELECT name FROM users')) return { rows: [{ name: 'Ana' }] };
+        if (sql.startsWith('INSERT INTO sdrs')) return { rows: [] };
+        return { rows: [] };
+      }),
+    };
+    const db = {
+      query: jest.fn(async (sql: string) => sql.includes('SELECT count(*)')
+        ? { rows: [{ count: 2 }] }
+        : { rows: [{ role: 'leader', status: 'active' }] }),
+      transaction: jest.fn(async (callback: any) => callback(client)),
+    };
+    const service = new MembershipsService(db as any);
+
+    await service.setRole('tenant-a', 'user-1', 'sdr');
+
+    expect(client.query).toHaveBeenCalledWith(expect.stringContaining('INSERT INTO sdrs'), [expect.any(String), 'tenant-a', 'user-1', 'Ana']);
+  });
+});

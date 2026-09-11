@@ -92,4 +92,20 @@ describe('FeatureFlagsService', () => {
     expect(db.query.mock.calls[1][1]).not.toContain(undefined);
     expect(audit.record).toHaveBeenCalledWith(expect.objectContaining({ metadata: { changed: ['callbacks'] } }));
   });
+
+  it('treats plan entitlements as commercial access and keeps expired tenants read-only', async () => {
+    const db = { query: jest.fn().mockResolvedValue({ rows: [{ access_mode: 'read_only', access_until: new Date(Date.now() - 1000), feature_entitlements: { campaigns: 'full' }, last_active_feature_entitlements: { campaigns: 'full' }, operational_flags: {} }] }) };
+    const service = new FeatureFlagsService(db as any, { client: { get: jest.fn(), set: jest.fn(), del: jest.fn() } } as any, { record: jest.fn() } as any);
+    await expect(service.assertEnabled('tenant-1', 'campaigns', 'POST')).rejects.toMatchObject({ response: expect.objectContaining({ code: 'feature_disabled', level: 'read_only' }) });
+    await expect(service.assertEnabled('tenant-1', 'campaigns', 'GET')).resolves.toBeUndefined();
+  });
+
+  it('does not let the legacy admin flag grant a feature excluded by an active plan', async () => {
+    const db = { query: jest.fn()
+      .mockResolvedValueOnce({ rows: [{ access_mode: 'full', access_until: new Date(Date.now() + 60_000), feature_entitlements: { campaigns: 'none' }, last_active_feature_entitlements: {}, operational_flags: {} }] })
+      .mockResolvedValueOnce({ rows: [] }) };
+    const service = new FeatureFlagsService(db as any, { client: { get: jest.fn().mockResolvedValue(null), set: jest.fn(), del: jest.fn() } } as any, { record: jest.fn() } as any);
+
+    await expect(service.assertEnabled('tenant-1', 'campaigns', 'POST')).rejects.toMatchObject({ response: expect.objectContaining({ code: 'feature_disabled', level: 'none' }) });
+  });
 });

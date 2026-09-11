@@ -1,4 +1,4 @@
-import { BadRequestException, ConflictException, HttpException, HttpStatus, Injectable, NotFoundException, UnauthorizedException } from '@nestjs/common';
+import { BadRequestException, ConflictException, HttpException, HttpStatus, Injectable, NotFoundException, Optional, UnauthorizedException } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { randomBytes, randomUUID, createHash } from 'node:crypto';
 import { Request, Response } from 'express';
@@ -9,6 +9,7 @@ import { publicUser, normalizeEmail } from '../users/users.utils';
 import { RedisService } from '../../infrastructure/redis/redis.service';
 import { slugifyTenant } from '../tenants/tenants.service';
 import { AccountMailer } from './account-mailer';
+import { EntitlementService } from '../billing/entitlement.service';
 
 export const REFRESH_COOKIE = 'zapcall_refresh';
 
@@ -21,7 +22,7 @@ export class AuthService {
   private readonly accessTtlSeconds = Math.max(60, Number(process.env.JWT_ACCESS_TTL_SECONDS ?? 900));
   private readonly refreshTtlSeconds = Math.max(300, Number(process.env.REFRESH_TOKEN_TTL_SECONDS ?? 2592000));
   private readonly refreshRotationGraceSeconds = Math.min(120, Math.max(5, Number(process.env.AUTH_REFRESH_ROTATION_GRACE_SECONDS ?? 60)));
-  constructor(private readonly db: DatabaseService, private readonly jwt: JwtService, private readonly users: UsersService, private readonly audit: AuditService, private readonly redis: RedisService, private readonly mailer: AccountMailer) {}
+  constructor(private readonly db: DatabaseService, private readonly jwt: JwtService, private readonly users: UsersService, private readonly audit: AuditService, private readonly redis: RedisService, private readonly mailer: AccountMailer, @Optional() private readonly entitlement?: EntitlementService) {}
 
   private async enforceRateLimit(scope: string, identity: string, limit: number, ttlSeconds: number) {
     const key = `zapcall:security:${scope}:${sha256(identity)}`;
@@ -276,7 +277,8 @@ export class AuthService {
     return { ok: true };
   }
 
-  async createWebsocketTicket(userId: string, tenantId: string) {
+  async createWebsocketTicket(userId: string, tenantId: string, requireOperate = false) {
+    if (requireOperate) await this.entitlement?.assertCanOperate(tenantId, userId);
     const token = randomBytes(32).toString('base64url');
     const expiresAt = new Date(Date.now() + 60_000);
     await this.db.query(`
@@ -318,7 +320,8 @@ export class AuthService {
       ORDER BY t.name
     `, [userId, user.platform_role]);
     const missingLegal = await this.db.query(`SELECT d.id, d.document_type, d.version, d.title, d.url FROM legal_document_versions d WHERE d.retired_at IS NULL AND d.effective_at <= now() AND NOT EXISTS (SELECT 1 FROM user_legal_acceptances a WHERE a.user_id = $1 AND a.legal_document_version_id = d.id) ORDER BY d.document_type`, [userId]);
-    return { user: publicUser(user), tenants: memberships.rows, legalAcceptanceRequired: missingLegal.rows.length > 0, pendingLegalDocuments: missingLegal.rows };
+    const tenants = this.entitlement ? await this.entitlement.decorateTenantRows(memberships.rows) : memberships.rows;
+    return { user: publicUser(user), tenants, legalAcceptanceRequired: missingLegal.rows.length > 0, pendingLegalDocuments: missingLegal.rows };
   }
 
   verifyAccessToken(token: string) { return this.jwt.verifyAsync(token); }

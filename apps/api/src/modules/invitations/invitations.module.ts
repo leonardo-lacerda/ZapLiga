@@ -7,6 +7,7 @@ import { UsersModule } from '../users/users.module';
 import { InvitationMailer } from './invitation-mailer';
 import { InvitationsController } from './invitations.controller';
 import { InvitationsService } from './invitations.service';
+import { BillingModule } from '../billing/billing.module';
 
-@Module({ imports: [AuthModule, AuditModule, MembershipsModule, TenantsModule, UsersModule], controllers: [InvitationsController], providers: [InvitationsService, InvitationMailer], exports: [InvitationsService] })
+@Module({ imports: [AuthModule, AuditModule, MembershipsModule, TenantsModule, UsersModule, BillingModule], controllers: [InvitationsController], providers: [InvitationsService, InvitationMailer], exports: [InvitationsService] })
 export class InvitationsModule {}

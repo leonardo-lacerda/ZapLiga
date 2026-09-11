@@ -38,7 +38,8 @@ export function Dashboard(props: AnyRow) {
   return <OrganizerOverview {...props} />;
 }
 
-function SdrWorkspace({ status, available, connected, connecting, sdrReady, sdrs, connectSdr, disconnectSdr, setAvailability, manualDial, manualPhone, setManualPhone, manualName, setManualName, manualCalling, activeCall, postCall, finishPostCall, finishingPause, hangup, micMuted, toggleMicMute, audioReady, connectionNotice, presence, presenceInfo, presenceStep, audioDevices, selectInputDevice, selectOutputDevice, testSpeaker, inboundAudio }: AnyRow) {
+function SdrWorkspace(props: AnyRow) {
+  const { status, available, connected, connecting, sdrReady, sdrs, connectSdr, disconnectSdr, setAvailability, manualDial, manualPhone, setManualPhone, manualName, setManualName, manualCalling, activeCall, postCall, finishPostCall, finishingPause, hangup, micMuted, toggleMicMute, audioReady, connectionNotice, presence, presenceInfo, presenceStep, audioDevices, selectInputDevice, selectOutputDevice, testSpeaker, inboundAudio } = props;
   const answered = activeCall && (activeCall.phase === 'answered' || activeCall.mediaActive);
   const personal = status.personal ?? {};
   const devices = audioDevices as AudioDeviceState | undefined;
@@ -54,8 +55,9 @@ function SdrWorkspace({ status, available, connected, connecting, sdrReady, sdrs
       <div className="sdr-command-main"><div className="sdr-presence-icon"><Icon name={presence === 'post-call' ? 'check' : presence === 'offline' ? 'headset' : 'phone'} size={22} /></div><div><span className="eyebrow">STATUS AGORA</span><h2>{presenceInfo.label}</h2><p>{connectionNotice || status.next_action || presenceInfo.description}</p></div></div>
       <div className="sdr-command-health"><Badge tone={status.line_ready ? 'success' : 'warning'}><Icon name="phone" size={13} />{status.line_ready ? 'Linha pronta' : 'Linha indisponível'}</Badge><Badge tone={audioReady ? 'success' : 'neutral'}><Icon name={audioReady ? 'mic' : 'mic-off'} size={13} />{audioReady ? 'Áudio verificado' : 'Áudio não verificado'}</Badge></div>
       <div className="sdr-command-actions">
-        {!connected ? <Button icon="plug" disabled={connecting} onClick={() => void connectSdr()}>{connecting ? 'Conectando...' : 'Conectar e testar áudio'}</Button> : <>
-          <Button variant={available ? 'success' : 'primary'} icon={available ? 'check' : 'headset'} onClick={() => void setAvailability(!available)} disabled={!sdrReady || Boolean(postCall)}>{available ? 'Disponível · pausar' : 'Ficar disponível'}</Button>
+        {props.billingRestricted && <div className="alert" role="status"><Icon name="lock" size={15} /><span>Assinatura inativa ({props.billingReason ?? 'sem plano'}). Operação e discagem estão bloqueadas.</span></div>}
+        {!connected ? <Button icon="plug" disabled={connecting || Boolean(props.billingRestricted)} onClick={() => void connectSdr()}>{connecting ? 'Conectando...' : 'Conectar e testar áudio'}</Button> : <>
+          <Button variant={available ? 'success' : 'primary'} icon={available ? 'pause' : 'headset'} onClick={() => void setAvailability(!available)} disabled={Boolean(props.billingRestricted) || !sdrReady || Boolean(postCall)}>{available ? 'Pausar atendimento' : 'Ficar disponível'}</Button>
           <Button variant="ghost" onClick={() => void disconnectSdr()}>Desconectar</Button>
         </>}
       </div>
@@ -90,7 +92,7 @@ function SdrWorkspace({ status, available, connected, connecting, sdrReady, sdrs
 
     {!activeCall && !postCall && <div className="sdr-secondary-grid"><Panel>
       <SectionHeader eyebrow="DISCAGEM MANUAL" title="Ligar para um telefone" description="Use apenas quando precisar ligar fora da fila automática." />
-      <form className="form-row" onSubmit={(event) => void manualDial(event)}><input type="tel" placeholder="Telefone com DDD" value={manualPhone} onChange={(event) => setManualPhone(event.target.value)} aria-label="Telefone para discagem manual" required /><input placeholder="Nome do contato (opcional)" value={manualName} onChange={(event) => setManualName(event.target.value)} aria-label="Nome do contato" /><Button variant="success" icon="phone" disabled={manualCalling || !connected || !sdrReady}>{manualCalling ? 'Iniciando...' : 'Ligar agora'}</Button></form>
+      <form className="form-row" onSubmit={(event) => void manualDial(event)}><input type="tel" placeholder="Telefone com DDD" value={manualPhone} onChange={(event) => setManualPhone(event.target.value)} aria-label="Telefone para discagem manual" required /><input placeholder="Nome do contato (opcional)" value={manualName} onChange={(event) => setManualName(event.target.value)} aria-label="Nome do contato" /><Button variant="success" icon="phone" disabled={Boolean(props.billingRestricted) || manualCalling || !connected || !sdrReady}>{manualCalling ? 'Iniciando...' : 'Ligar agora'}</Button></form>
     </Panel><Panel className="sdr-readiness"><SectionHeader eyebrow="PRONTIDÃO" title="Antes da próxima conversa" /><ul><li className={status.line_ready ? 'done' : ''}><Icon name={status.line_ready ? 'check' : 'alert'} size={15} />Linha do WhatsApp disponível</li><li className={audioReady ? 'done' : ''}><Icon name={audioReady ? 'check' : 'mic'} size={15} />Microfone permitido e verificado</li><li className={available ? 'done' : ''}><Icon name={available ? 'check' : 'headset'} size={15} />Você está disponível na fila</li></ul></Panel></div>}
   </div>;
 }

@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { AuditModule } from '../audit/audit.module';
+import { BillingModule } from '../billing/billing.module';
 import { MetricsConsistencyService } from './metrics-consistency.service';
 import { MetricsExportRepository } from './metrics-export.repository';
 import { MetricsExportService } from './metrics-export.service';
@@ -16,7 +17,7 @@ import { MetricsRepository } from './metrics.repository';
 import { MetricsService } from './metrics.service';
 
 @Module({
-  imports: [AuditModule],
+  imports: [AuditModule, BillingModule],
   controllers: [MetricsController],
   providers: [
     MetricsService, MetricsRepository, MetricsConsistencyService, MetricsQueryGuardService,

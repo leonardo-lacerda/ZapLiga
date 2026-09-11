@@ -1,6 +1,7 @@
 import { Body, Controller, Delete, Get, Param, Patch, Post, Query, Res, UseGuards, UseInterceptors } from '@nestjs/common';
 import type { Response } from 'express';
-import { AuthGuard, CurrentTenant, CurrentUser, Roles, RolesGuard, TenantMembershipGuard } from '../auth/auth.guards';
+import { AuthGuard, CurrentTenant, CurrentUser, Roles, RolesGuard, TenantAction, TenantMembershipGuard } from '../auth/auth.guards';
+import { FeatureFlagGuard, RequiresFeature } from '../feature-flags/feature-flags.guard';
 import { CreateGoalDto } from './dto/create-goal.dto';
 import { ExportCsvQueryDto, ExportPdfQueryDto } from './dto/export-query.dto';
 import { MetricsDrilldownQueryDto } from './dto/metrics-drilldown-query.dto';
@@ -124,6 +125,8 @@ export class MetricsController {
   // Exportação (plano seção 6.8) — sem cache: sempre reflete o estado atual
   // no momento do pedido, e cada exportação já fica registrada na auditoria.
   @Get(['/api/metrics/export.csv', '/api/tenants/:tenantId/metrics/export.csv'])
+  @UseGuards(FeatureFlagGuard)
+  @RequiresFeature('advanced_reports')
   async exportCsv(@Query() query: ExportCsvQueryDto, @CurrentTenant() tenantId: string, @CurrentUser() user: any, @Res() response: Response) {
     await this.guard.enforceRateLimit(tenantId, user.id);
     const result = await this.exportService.exportCsv(tenantId, user.id, query.dataset, query);
@@ -133,6 +136,8 @@ export class MetricsController {
   }
 
   @Get(['/api/metrics/export.pdf', '/api/tenants/:tenantId/metrics/export.pdf'])
+  @UseGuards(FeatureFlagGuard)
+  @RequiresFeature('advanced_reports')
   async exportPdf(@Query() query: ExportPdfQueryDto, @CurrentTenant() tenantId: string, @CurrentUser() user: any, @Res() response: Response) {
     await this.guard.enforceRateLimit(tenantId, user.id);
     const { fileName, content } = await this.exportService.exportPdf(tenantId, user.id, query, query.period ?? 'custom');
@@ -185,6 +190,7 @@ export class MetricsController {
   }
 
   @Patch(['/api/metrics/retention', '/api/tenants/:tenantId/metrics/retention'])
+  @TenantAction('write')
   setRetentionPolicy(@Body() body: SetRetentionPolicyDto, @CurrentTenant() tenantId: string, @CurrentUser() user: any) {
     return this.retention.setPolicy(tenantId, user.id, body.retentionDays ?? null);
   }
@@ -193,6 +199,7 @@ export class MetricsController {
   // o que seria removido (plano seção 11: apagar dados de produção nunca
   // deve ser o comportamento padrão de uma chamada).
   @Post(['/api/metrics/retention/purge', '/api/tenants/:tenantId/metrics/retention/purge'])
+  @TenantAction('write')
   purgeExpired(@Query('confirm') confirm: string | undefined, @CurrentTenant() tenantId: string, @CurrentUser() user: any) {
     return this.retention.purge(tenantId, user.id, confirm === 'true');
   }

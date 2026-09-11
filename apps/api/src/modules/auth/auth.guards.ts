@@ -1,13 +1,18 @@
 import { CanActivate, ExecutionContext, ForbiddenException, Injectable, Optional, SetMetadata, UnauthorizedException, createParamDecorator } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
-import { AuthenticatedUser, TenantRole } from './auth.types';
+import { AuthenticatedUser, TenantAccessContext, TenantRole } from './auth.types';
 import { AuthService } from './auth.service';
 import { DatabaseService } from '../../database/database.service';
 import { AuditService } from '../audit/audit.service';
 import { RedisService } from '../../infrastructure/redis/redis.service';
+import { EntitlementService } from '../billing/entitlement.service';
+import { BillingAction } from '../billing/billing.types';
 
 export const ROLES_KEY = 'zapcall_roles';
 export const Roles = (...roles: Array<TenantRole | 'super_admin'>) => SetMetadata(ROLES_KEY, roles);
+
+export const TENANT_ACTION_KEY = 'zapcall_tenant_action';
+export const TenantAction = (...actions: BillingAction[]) => SetMetadata(TENANT_ACTION_KEY, actions);
 
 export const CurrentUser = createParamDecorator((_data: unknown, context: ExecutionContext) => {
   const request = context.switchToHttp().getRequest<{ user?: AuthenticatedUser }>();
@@ -17,6 +22,11 @@ export const CurrentUser = createParamDecorator((_data: unknown, context: Execut
 export const CurrentTenant = createParamDecorator((_data: unknown, context: ExecutionContext) => {
   const request = context.switchToHttp().getRequest<{ tenantId?: string }>();
   return request.tenantId;
+});
+
+export const CurrentTenantAccess = createParamDecorator((_data: unknown, context: ExecutionContext) => {
+  const request = context.switchToHttp().getRequest<{ tenantAccess?: TenantAccessContext }>();
+  return request.tenantAccess;
 });
 
 @Injectable()
@@ -51,7 +61,7 @@ export class AuthGuard implements CanActivate {
 
 @Injectable()
 export class TenantMembershipGuard implements CanActivate {
-  constructor(private readonly db: DatabaseService, private readonly audit: AuditService, private readonly redis: RedisService) {}
+  constructor(private readonly db: DatabaseService, private readonly audit: AuditService, private readonly redis: RedisService, @Optional() private readonly entitlement?: EntitlementService, @Optional() private readonly reflector?: Reflector) {}
 
   async canActivate(context: ExecutionContext) {
     const request = context.switchToHttp().getRequest<any>();
@@ -71,6 +81,11 @@ export class TenantMembershipGuard implements CanActivate {
       if (shouldAudit === 'OK') {
         await this.audit.record({ actorUserId: user.id, tenantId, action: 'tenant.admin_access', entityType: 'tenant', entityId: tenantId });
       }
+      if (!this.entitlement) return true;
+      const access = await this.entitlement.getAccess(tenantId);
+      request.user.tenantAccess = access;
+      request.tenantAccess = access;
+      await this.assertBillingAction(context, access, user);
       return true;
     }
     const result = await this.db.query(`
@@ -84,7 +99,20 @@ export class TenantMembershipGuard implements CanActivate {
     if (!membership || membership.status !== 'active' || membership.tenant_status !== 'active') throw new UnauthorizedException('Usuário sem acesso a esta empresa');
     request.user.tenantMembership = { tenantId: membership.tenant_id, role: membership.role, status: membership.status };
     request.tenantId = membership.tenant_id;
+    if (!this.entitlement) return true;
+    const access = await this.entitlement.getAccess(tenantId);
+    request.user.tenantAccess = access;
+    request.tenantAccess = access;
+    await this.assertBillingAction(context, access, user);
     return true;
+  }
+
+  private async assertBillingAction(context: ExecutionContext, access: TenantAccessContext, user: AuthenticatedUser) {
+    if (!this.entitlement) return;
+    const request = context.switchToHttp().getRequest<any>();
+    const explicit = this.reflector?.getAllAndOverride<BillingAction[]>(TENANT_ACTION_KEY, [context.getHandler(), context.getClass()]);
+    const action = explicit?.[0] ?? (['GET', 'HEAD', 'OPTIONS'].includes(String(request.method).toUpperCase()) ? 'read' : 'write');
+    await this.entitlement.assertAction(access.tenantId, action, user.id);
   }
 }
 

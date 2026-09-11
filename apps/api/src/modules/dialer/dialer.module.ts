@@ -8,9 +8,10 @@ import { AuditModule } from '../audit/audit.module';
 import { CampaignsModule } from '../campaigns/campaigns.module';
 import { DecisionEngineModule } from '../decision-engine/decision-engine.module';
 import { ExperimentsModule } from '../experiments/experiments.module';
+import { BillingModule } from '../billing/billing.module';
 
 @Module({
-  imports: [ContactComplianceModule, DialerScheduleModule, AuditModule, CampaignsModule, DecisionEngineModule, ExperimentsModule],
+  imports: [ContactComplianceModule, DialerScheduleModule, AuditModule, CampaignsModule, DecisionEngineModule, ExperimentsModule, BillingModule],
   providers: [WaxumClient, DialerService, SdrGateway],
   exports: [DialerService, SdrGateway, WaxumClient],
 })

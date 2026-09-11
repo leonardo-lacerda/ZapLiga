@@ -4,13 +4,14 @@ import { randomUUID } from 'node:crypto';
 import { DatabaseService } from '../../database/database.service';
 import { AuditService } from '../audit/audit.service';
 import { parseLeadCsvRow } from '../leads/lead-import';
+import { PlanLimitsService } from '../billing/plan-limits.service';
 
 const digits = (value: unknown) => String(value ?? '').replace(/\D/g, '');
 const activeCallStatuses = "('reserved', 'dialing', 'media_active')";
 
 @Injectable()
 export class LeadFoldersService {
-  constructor(private readonly db: DatabaseService, private readonly audit: AuditService) {}
+  constructor(private readonly db: DatabaseService, private readonly audit: AuditService, private readonly planLimits: PlanLimitsService) {}
 
   async list(tenantId: string) {
     const result = await this.db.query(`
@@ -151,13 +152,12 @@ export class LeadFoldersService {
     if (!name || phone.length < 10 || phone.length > 15) throw new BadRequestException('Informe nome e um telefone válido com DDD');
     await this.get(folderId, tenantId);
     const lead = await this.db.transaction(async (client) => {
+      await this.planLimits.acquireTenantLock(tenantId, client);
       await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [`lead-quota:${tenantId}`]);
       const existing = await client.query('SELECT id, folder_id FROM leads WHERE tenant_id = $1 AND phone = $2 LIMIT 1', [tenantId, phone]);
       if (existing.rows[0] && existing.rows[0].folder_id !== folderId) throw new ConflictException('Este telefone já está em outra pasta');
-      const tenant = await client.query('SELECT max_leads FROM tenants WHERE id = $1', [tenantId]);
       if (!existing.rows[0]) {
-        const count = await client.query('SELECT count(*)::int AS count FROM leads WHERE tenant_id = $1', [tenantId]);
-        if (Number(count.rows[0]?.count ?? 0) >= Number(tenant.rows[0]?.max_leads ?? 100000)) throw new ConflictException('O limite de leads desta empresa foi atingido');
+        await this.planLimits.assertCanAddLeads(tenantId, client, 1);
       }
       const saved = (await client.query(`
         INSERT INTO leads (id, tenant_id, folder_id, name, phone)
@@ -189,15 +189,12 @@ export class LeadFoldersService {
     }
     const validLeads = [...parsed.values()];
     const result = await this.db.transaction(async (client) => {
+      await this.planLimits.acquireTenantLock(tenantId, client);
       await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [`lead-quota:${tenantId}`]);
-      const [tenant, current, existing] = await Promise.all([
-        client.query('SELECT max_leads FROM tenants WHERE id = $1', [tenantId]),
-        client.query('SELECT count(*)::int AS count FROM leads WHERE tenant_id = $1', [tenantId]),
-        validLeads.length ? client.query('SELECT phone, folder_id FROM leads WHERE tenant_id = $1 AND phone = ANY($2::text[])', [tenantId, validLeads.map((lead) => lead.phone)]) : Promise.resolve({ rows: [] as any[] }),
-      ]);
+      const existing = validLeads.length ? await client.query('SELECT phone, folder_id FROM leads WHERE tenant_id = $1 AND phone = ANY($2::text[])', [tenantId, validLeads.map((lead) => lead.phone)]) : { rows: [] as any[] };
       const existingByPhone = new Map(existing.rows.map((row: any) => [row.phone, row]));
       const newLeads = validLeads.filter((lead) => !existingByPhone.has(lead.phone));
-      if (Number(current.rows[0]?.count ?? 0) + newLeads.length > Number(tenant.rows[0]?.max_leads ?? 100000)) throw new ConflictException('O CSV excede o limite de leads desta empresa');
+      if (newLeads.length) await this.planLimits.assertCanAddLeads(tenantId, client, newLeads.length);
       const sameFolderExisting = validLeads.filter((lead) => existingByPhone.get(lead.phone)?.folder_id === folderId);
       duplicated += validLeads.filter((lead) => existingByPhone.get(lead.phone)?.folder_id && existingByPhone.get(lead.phone)?.folder_id !== folderId).length;
       const insertLeads = newLeads;

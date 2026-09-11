@@ -49,7 +49,7 @@ function AttentionCard({ item }: { item: AttentionItem }) {
   </article>;
 }
 
-function OverviewHero({ status, dateRange, toggleDialer }: AnyRow) {
+function OverviewHero({ status, dateRange, toggleDialer, billingRestricted }: AnyRow) {
   const running = Boolean(status.running);
   const outsideSchedule = status.schedule?.allowed === false;
   const statusLabel = outsideSchedule ? 'Fora do horário' : running ? 'Discador operando' : 'Discador pausado';
@@ -70,12 +70,12 @@ function OverviewHero({ status, dateRange, toggleDialer }: AnyRow) {
       <span className="overview-hero-kicker">PRÓXIMA DECISÃO</span>
       <strong>{running ? 'A operação está rodando' : 'A operação está pausada'}</strong>
       <small>{outsideSchedule ? `Retoma dentro da agenda · ${status.schedule?.timezone ?? 'fuso não informado'}` : running ? 'Acompanhe os indicadores enquanto a fila avança.' : 'Inicie o discador quando SDRs, linhas e fila estiverem prontos.'}</small>
-      <Button variant={running ? 'danger' : 'primary'} icon={running ? 'pause' : 'play'} onClick={() => typeof toggleDialer === 'function' && void toggleDialer()}>{running ? 'Pausar discador' : 'Iniciar discador'}</Button>
+      <Button variant={running ? 'danger' : 'primary'} icon={running ? 'pause' : 'play'} disabled={Boolean(billingRestricted)} onClick={() => typeof toggleDialer === 'function' && void toggleDialer()}>{running ? 'Pausar discador' : 'Iniciar discador'}</Button>
     </div>
   </div>;
 }
 
-function AttentionSection({ status, connectedNumbers, toggleDialer, sdrs }: AnyRow) {
+function AttentionSection({ status, connectedNumbers, toggleDialer, sdrs, billingRestricted }: AnyRow) {
   const settingsLoaded = Boolean(status.settings && Object.keys(status.settings).length);
   const configurationIncomplete = settingsLoaded && (!status.schedule?.timezone || requiredDialerSettings.some((key) => !Number.isFinite(Number(status.settings[key]))));
   const totalSdrs = Array.isArray(sdrs) ? sdrs.length : 0;
@@ -86,7 +86,7 @@ function AttentionSection({ status, connectedNumbers, toggleDialer, sdrs }: AnyR
   if (!connectedNumbers) items.push({ tone: 'warning', icon: 'phone', title: 'Nenhuma linha disponível', description: 'Conecte um número de WhatsApp para liberar a discagem.', action: 'Conectar número', tab: 'numbers' });
   if (!totalSdrs) items.push({ tone: 'info', icon: 'users', title: 'Convide o primeiro SDR', description: 'Sua equipe aparecerá aqui assim que aceitar um convite.', action: 'Cadastrar SDR', tab: 'sdrs' });
   else if (!Number(status.available_sdrs ?? 0) && status.running) items.push({ tone: 'info', icon: 'headset', title: 'Nenhum SDR disponível', description: 'A fila está pronta, mas não há operador disponível agora.', action: 'Ver equipe', tab: 'sdrs' });
-  if (!status.running && connectedNumbers && totalSdrs) items.push({ tone: 'neutral', icon: 'play', title: 'Discador pausado', description: 'A operação só avança quando o discador estiver ativo.', action: 'Iniciar agora', run: () => typeof toggleDialer === 'function' && void toggleDialer() });
+  if (!billingRestricted && !status.running && connectedNumbers && totalSdrs) items.push({ tone: 'neutral', icon: 'play', title: 'Discador pausado', description: 'A operação só avança quando o discador estiver ativo.', action: 'Iniciar agora', run: () => typeof toggleDialer === 'function' && void toggleDialer() });
   if (status.running && !queued) items.push({ tone: 'neutral', icon: 'users', title: 'Fila sem leads prontos', description: 'Importe ou organize leads para manter o ritmo de chamadas.', action: 'Ver leads', tab: 'leads' });
 
   const visibleItems = items.slice(0, 3);
@@ -195,11 +195,11 @@ function RecentActivity({ logs }: AnyRow) {
 }
 
 export function OrganizerOverview(props: AnyRow) {
-  const { status, dateRange, logs, connectedNumbers, toggleDialer } = props;
+  const { status, dateRange, logs, connectedNumbers, toggleDialer, billingRestricted } = props;
   return <div className="organizer-overview">
-    <OverviewHero status={status} dateRange={dateRange} toggleDialer={toggleDialer} />
+    <OverviewHero status={status} dateRange={dateRange} toggleDialer={toggleDialer} billingRestricted={billingRestricted} />
     <OperationHealthCard tenantId={String(props.tenantId ?? '')} enabled={Boolean(props.featureFlags?.operation_health)} />
-    {props.featureFlags?.recommendations ? <RecommendationCenter tenantId={String(props.tenantId ?? '')} enabled /> : <AttentionSection status={status} connectedNumbers={connectedNumbers} sdrs={props.sdrs} toggleDialer={toggleDialer} />}
+    {props.featureFlags?.recommendations ? <RecommendationCenter tenantId={String(props.tenantId ?? '')} enabled /> : <AttentionSection status={status} connectedNumbers={connectedNumbers} sdrs={props.sdrs} toggleDialer={toggleDialer} billingRestricted={billingRestricted} />}
     <OnboardingChecklist enabled={Boolean(props.featureFlags?.onboarding)} />
     <OperationsNowPanel tenantId={String(props.tenantId ?? '')} fallbackStatus={status} />
     <div className="overview-lower-grid">

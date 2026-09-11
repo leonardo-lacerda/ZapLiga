@@ -2,7 +2,7 @@ import { BadRequestException, Body, Controller, Delete, Get, Param, Post, Query,
 import { FileInterceptor } from '@nestjs/platform-express';
 import type { Response } from 'express';
 import { parse } from 'csv-parse/sync';
-import { AuthGuard, CurrentTenant, CurrentUser, Roles, RolesGuard, TenantMembershipGuard } from '../auth/auth.guards';
+import { AuthGuard, CurrentTenant, CurrentUser, Roles, RolesGuard, TenantAction, TenantMembershipGuard } from '../auth/auth.guards';
 import { ContactComplianceService, normalizeContactPhone } from './contact-compliance.service';
 import { CreateSuppressionDto, SUPPRESSION_REASONS } from './dto/create-suppression.dto';
 import { LiftSuppressionDto } from './dto/lift-suppression.dto';
@@ -30,11 +30,13 @@ export class ContactComplianceController {
   }
 
   @Post('/api/tenants/:tenantId/contact-suppressions')
+  @TenantAction('legal_compliance')
   create(@CurrentTenant() tenantId: string, @CurrentUser() user: any, @Body() body: CreateSuppressionDto) {
     return this.compliance.suppress({ tenantId, phone: body.phone, reason: body.reason, source: body.source ?? 'lead_action', notes: body.notes, actorUserId: user.id });
   }
 
   @Post('/api/tenants/:tenantId/contact-suppressions/import')
+  @TenantAction('legal_compliance')
   @UseInterceptors(FileInterceptor('file', { limits: { fileSize: 5 * 1024 * 1024 } }))
   async import(@CurrentTenant() tenantId: string, @CurrentUser() user: any, @UploadedFile() file: Express.Multer.File) {
     if (!file?.buffer) throw new BadRequestException('Envie um CSV no campo file');

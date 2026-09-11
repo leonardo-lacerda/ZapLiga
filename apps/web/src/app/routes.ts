@@ -21,6 +21,7 @@ export const tabPaths: Record<TabKey, string> = {
   learning: '/app/aprendizado',
   experiments: '/app/experimentos',
   benchmarks: '/app/benchmarks',
+  billing: '/app/cobranca',
 };
 
 const tabPathEntries = Object.entries(tabPaths) as Array<[TabKey, string]>;

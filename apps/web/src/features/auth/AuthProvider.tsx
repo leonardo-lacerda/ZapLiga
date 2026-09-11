@@ -14,7 +14,7 @@ export type AuthUser = {
 
 export type AuthSession = {
   user: AuthUser;
-  tenants: Array<{ id: string; name: string; slug: string; status: string; role?: string; membership_status?: string }>;
+  tenants: Array<{ id: string; name: string; slug: string; status: string; role?: string; membership_status?: string; billing?: { mode: 'full' | 'read_only' | 'blocked'; reason: string; enforcementMode?: 'off' | 'shadow' | 'enforce'; planName?: string | null; maxSdrs?: number | null; planMaxSdrs?: number | null; usedSdrSeats?: number; reservedSdrSeats?: number; accessUntil?: string | null } }>;
   legalAcceptanceRequired?: boolean;
   pendingLegalDocuments?: Array<{ id: string; document_type: string; version: string; title: string; url: string }>;
 };

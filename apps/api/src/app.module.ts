@@ -33,9 +33,10 @@ import { AnalyticsEventsModule } from './modules/analytics-events/analytics-even
 import { AnalyticsLearningModule } from './modules/analytics-learning/analytics-learning.module';
 import { ExperimentsModule } from './modules/experiments/experiments.module';
 import { BenchmarksModule } from './modules/benchmarks/benchmarks.module';
+import { BillingModule } from './modules/billing/billing.module';
 
 @Module({
-  imports: [DatabaseModule, RedisModule, FeatureFlagsModule, AuthModule, AuditModule, InvitationsModule, MembershipsModule, TenantsModule, UsersModule, ContactComplianceModule, DialerScheduleModule, DialerModule, CallbacksModule, OnboardingModule, PrivacyModule, AdminModule, LeadFoldersModule, MetricsModule, LeadIngestionModule, CampaignsModule, RecommendationsModule, OperationHealthModule, AnalyticsEventsModule, AnalyticsLearningModule, ExperimentsModule, BenchmarksModule],
+  imports: [DatabaseModule, RedisModule, BillingModule, FeatureFlagsModule, AuthModule, AuditModule, InvitationsModule, MembershipsModule, TenantsModule, UsersModule, ContactComplianceModule, DialerScheduleModule, DialerModule, CallbacksModule, OnboardingModule, PrivacyModule, AdminModule, LeadFoldersModule, MetricsModule, LeadIngestionModule, CampaignsModule, RecommendationsModule, OperationHealthModule, AnalyticsEventsModule, AnalyticsLearningModule, ExperimentsModule, BenchmarksModule],
   controllers: [CallsController, DialerController, HealthController, LeadsController, NumbersController, SdrsController],
   providers: [{ provide: APP_INTERCEPTOR, useClass: OperationalMetricsInterceptor }],
 })

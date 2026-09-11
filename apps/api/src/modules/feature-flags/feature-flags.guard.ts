@@ -12,7 +12,7 @@ export class FeatureFlagGuard implements CanActivate {
     const feature = this.reflector.getAllAndOverride<TenantFeature>(FEATURE_KEY, [context.getHandler(), context.getClass()]);
     if (!feature) return true;
     const request = context.switchToHttp().getRequest<any>();
-    await this.flags.assertEnabled(String(request.tenantId ?? request.params?.tenantId ?? ''), feature);
+    await this.flags.assertEnabled(String(request.tenantId ?? request.params?.tenantId ?? ''), feature, request.method);
     return true;
   }
 }

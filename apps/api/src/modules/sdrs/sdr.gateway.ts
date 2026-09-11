@@ -1,4 +1,4 @@
-import { Inject, Injectable, Logger, OnModuleDestroy, forwardRef } from '@nestjs/common';
+import { Inject, Injectable, Logger, OnModuleDestroy, Optional, forwardRef } from '@nestjs/common';
 import { Server } from 'node:http';
 import { URL } from 'node:url';
 import WebSocket, { WebSocketServer } from 'ws';
@@ -10,6 +10,7 @@ import { AuthService } from '../auth/auth.service';
 import { runtimeInstanceId } from '../../infrastructure/runtime-instance';
 import { Sentry } from '../../infrastructure/sentry/sentry';
 import { parseSdrSocketPath } from './sdr-socket-path';
+import { EntitlementService } from '../billing/entitlement.service';
 
 @Injectable()
 export class SdrGateway implements OnModuleDestroy {
@@ -20,7 +21,7 @@ export class SdrGateway implements OnModuleDestroy {
   private readonly operations = new Map<WebSocket, { tenantId: string; userId: string }>();
   private server?: WebSocketServer;
 
-  constructor(private readonly db: DatabaseService, private readonly auth: AuthService, @Inject(forwardRef(() => DialerService)) private readonly dialer: DialerService) {}
+  constructor(private readonly db: DatabaseService, private readonly auth: AuthService, @Inject(forwardRef(() => DialerService)) private readonly dialer: DialerService, @Optional() private readonly entitlement?: EntitlementService) {}
 
   attach(httpServer: Server) {
     // Control/observer messages are small JSON frames and media frames are
@@ -37,11 +38,15 @@ export class SdrGateway implements OnModuleDestroy {
       void this.auth.consumeWebsocketTicket(ticket).then((identity) => {
         if (!identity) { socket.destroy(); return; }
         if (route.tenantId && decodeURIComponent(route.tenantId) !== identity.tenantId) { socket.destroy(); return; }
-        this.server?.handleUpgrade(request, socket, head, (ws) => {
-          if (route.kind === 'control') return this.handleControl(ws, identity);
-          if (route.kind === 'operations') return void this.handleOperations(ws, identity);
-          return this.handleMedia(ws, decodeURIComponent(route.sdrId), decodeURIComponent(route.callId), identity);
-        });
+        void (async () => {
+          const access = this.entitlement ? await this.entitlement.getAccess(identity.tenantId) : null;
+          if (route.kind === 'control' && this.entitlement?.enforcementMode === 'enforce' && access?.mode !== 'full') { socket.destroy(); return; }
+          this.server?.handleUpgrade(request, socket, head, (ws) => {
+            if (route.kind === 'control') return this.handleControl(ws, identity);
+            if (route.kind === 'operations') return void this.handleOperations(ws, identity);
+            return this.handleMedia(ws, decodeURIComponent(route.sdrId), decodeURIComponent(route.callId), identity);
+          });
+        })().catch(() => socket.destroy());
       }).catch(() => socket.destroy());
     });
   }
@@ -127,6 +132,9 @@ export class SdrGateway implements OnModuleDestroy {
         const membership = await this.db.query(`SELECT 1 FROM tenant_memberships WHERE tenant_id = $1 AND user_id = $2 AND status = 'active' LIMIT 1`, [identity.tenantId, identity.userId]);
         if (!membership.rows[0]) throw new Error('Acesso da empresa revogado');
       }
+      const tenantId = this.tenantBySdr.get(this.sessions.get(socket) ?? '') ?? identity.tenantId;
+      if (message.type === 'availability' || message.type === 'identify') await this.entitlement?.assertCanOperate(tenantId, identity.userId);
+      if (message.type === 'hangup' || message.type === 'outcome') await this.entitlement?.assertCanFinalize(tenantId);
       if (message.type === 'identify') {
         if (identity.platformRole !== 'super_admin') {
           const membership = await this.db.query(`SELECT role FROM tenant_memberships WHERE tenant_id = $1 AND user_id = $2 AND status = 'active' LIMIT 1`, [identity.tenantId, identity.userId]);
@@ -139,10 +147,8 @@ export class SdrGateway implements OnModuleDestroy {
           WHERE tenant_id = $1 AND user_id = $2
           LIMIT 1
         `, [identity.tenantId, identity.userId]);
-        const sdr = existing.rows[0] ?? (await this.db.query(`
-          INSERT INTO sdrs (id, tenant_id, user_id, name, session_id) VALUES ($1, $2, $3, $4, $5)
-          RETURNING id, name, available, state, current_pause_id
-        `, [randomUUID(), identity.tenantId, identity.userId, name, String(message.sessionId ?? '')])).rows[0];
+        const sdr = existing.rows[0];
+        if (!sdr) throw new Error('Perfil SDR ainda não foi criado');
         const claimed = await this.db.query(`
           UPDATE sdrs SET user_id = $1, session_id = $2, connection_instance_id = $5
           WHERE tenant_id = $3 AND id = $4

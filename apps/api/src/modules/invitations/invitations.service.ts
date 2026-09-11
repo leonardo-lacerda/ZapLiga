@@ -1,4 +1,4 @@
-import { ConflictException, Injectable, Logger, NotFoundException, OnModuleDestroy, OnModuleInit, UnauthorizedException } from '@nestjs/common';
+import { ConflictException, Injectable, Logger, NotFoundException, OnModuleDestroy, OnModuleInit, Optional, UnauthorizedException } from '@nestjs/common';
 import { createCipheriv, createDecipheriv, createHash, randomBytes, randomUUID } from 'node:crypto';
 import { DatabaseService } from '../../database/database.service';
 import { AuditService } from '../audit/audit.service';
@@ -7,6 +7,8 @@ import { TenantsService } from '../tenants/tenants.service';
 import { UsersService } from '../users/users.service';
 import { normalizeEmail } from '../users/users.utils';
 import { InvitationMailer } from './invitation-mailer';
+import { SdrCapacityService } from '../billing/sdr-capacity.service';
+import { EntitlementService } from '../billing/entitlement.service';
 
 const hashToken = (token: string) => createHash('sha256').update(token).digest('hex');
 type InvitationDelivery = 'email' | 'manual_link';
@@ -17,7 +19,7 @@ export class InvitationsService implements OnModuleInit, OnModuleDestroy {
   private readonly invitationTtlSeconds = Math.max(300, Number(process.env.INVITATION_TTL_SECONDS ?? 172800));
   private deliveryTimer?: NodeJS.Timeout;
 
-  constructor(private readonly db: DatabaseService, private readonly tenants: TenantsService, private readonly users: UsersService, private readonly memberships: MembershipsService, private readonly audit: AuditService, private readonly mailer: InvitationMailer) {}
+  constructor(private readonly db: DatabaseService, private readonly tenants: TenantsService, private readonly users: UsersService, private readonly memberships: MembershipsService, private readonly audit: AuditService, private readonly mailer: InvitationMailer, private readonly capacity: SdrCapacityService, @Optional() private readonly entitlement?: EntitlementService) {}
 
   onModuleInit() { const run = () => void this.processDeliveryQueue().catch(() => this.logger.error('Falha ao processar fila de convites')); this.deliveryTimer = setInterval(run, 30_000); run(); }
   onModuleDestroy() { if (this.deliveryTimer) clearInterval(this.deliveryTimer); }
@@ -39,7 +41,14 @@ export class InvitationsService implements OnModuleInit, OnModuleDestroy {
     const token = randomBytes(32).toString('base64url');
     const invitationId = randomUUID();
     const expiresAt = new Date(Date.now() + this.invitationTtlSeconds * 1000);
-    await this.db.query(`INSERT INTO invitations (id, tenant_id, invited_email, invitee_name, role, token_hash, invited_by, expires_at, delivery_token_encrypted, next_delivery_attempt_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, now())`, [invitationId, tenantId, normalizedEmail, normalizedName, role, hashToken(token), invitedBy, expiresAt, delivery === 'email' ? this.protectToken(token) : null]);
+    const insertInvitation = (executor: { query: (text: string, params?: unknown[]) => Promise<any> }) => executor.query(`INSERT INTO invitations (id, tenant_id, invited_email, invitee_name, role, token_hash, invited_by, expires_at, delivery_token_encrypted, next_delivery_attempt_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, now())`, [invitationId, tenantId, normalizedEmail, normalizedName, role, hashToken(token), invitedBy, expiresAt, delivery === 'email' ? this.protectToken(token) : null]);
+    try {
+      if (role === 'sdr' && this.capacity && typeof (this.db as any).transaction === 'function') await this.db.transaction(async (client) => { await this.capacity!.assertCanAdd(tenantId, client); await insertInvitation(client); });
+      else await insertInvitation(this.db);
+    } catch (error) {
+      if ((error as any)?.code === '23505') throw new ConflictException('Ja existe um convite pendente para este e-mail');
+      throw error;
+    }
     const origin = (process.env.WEB_ORIGIN ?? 'http://localhost:5173').split(',')[0].replace(/\/$/, '');
     const invitationUrl = `${origin}/convite/${encodeURIComponent(token)}`;
     if (delivery === 'email') await this.deliver(invitationId, { email: normalizedEmail, tenantName: tenant.name, role, invitationUrl });
@@ -61,7 +70,18 @@ export class InvitationsService implements OnModuleInit, OnModuleDestroy {
     if (!invitation) throw new NotFoundException('Convite não encontrado ou já encerrado');
     const token = randomBytes(32).toString('base64url');
     const expiresAt = new Date(Date.now() + this.invitationTtlSeconds * 1000);
-    await this.db.query(`UPDATE invitations SET token_hash = $1, expires_at = $2, delivery_status = 'queued', delivery_attempts = 0, delivery_error = NULL, delivery_token_encrypted = $4, next_delivery_attempt_at = now() WHERE id = $3`, [hashToken(token), expiresAt, invitationId, this.protectToken(token)]);
+    const update = (executor: { query: (text: string, params?: unknown[]) => Promise<any> }) => executor.query(`UPDATE invitations SET token_hash = $1, expires_at = $2, delivery_status = 'queued', delivery_attempts = 0, delivery_error = NULL, delivery_token_encrypted = $4, next_delivery_attempt_at = now() WHERE id = $3`, [hashToken(token), expiresAt, invitationId, this.protectToken(token)]);
+    if (invitation.role === 'sdr' && this.capacity && typeof (this.db as any).transaction === 'function') {
+      // A resend of an expired SDR invitation creates a new reservation. The
+      // old invitation is ignored while the tenant lock serializes it with
+      // other invites, memberships and acceptances.
+      await this.db.transaction(async (client) => {
+        await this.capacity!.assertCanAdd(tenantId, client, { ignoreInvitationId: invitationId });
+        await update(client);
+      });
+    } else {
+      await update(this.db);
+    }
     const origin = (process.env.WEB_ORIGIN ?? 'http://localhost:5173').split(',')[0].replace(/\/$/, '');
     const invitationUrl = `${origin}/convite/${encodeURIComponent(token)}`;
     await this.deliver(invitationId, { email: invitation.invited_email, tenantName: invitation.tenant_name, role: invitation.role, invitationUrl });
@@ -94,9 +114,13 @@ export class InvitationsService implements OnModuleInit, OnModuleDestroy {
       `, [tokenHash]);
       const invitation = result.rows[0];
       if (!invitation || invitation.tenant_status !== 'active' || new Date(invitation.expires_at).getTime() <= Date.now()) throw new NotFoundException('Convite inválido, expirado ou revogado');
+      // Invitation acceptance is a membership/data mutation too. A pending
+      // invite created before a billing lapse must not become a write bypass.
+      await this.entitlement?.assertAction(invitation.tenant_id, 'write');
       const existing = await client.query('SELECT * FROM users WHERE lower(email) = lower($1) LIMIT 1', [invitation.invited_email]);
       if (existing.rows[0] && !(await this.users.comparePassword(password, existing.rows[0].password_hash))) throw new ConflictException('A senha da conta existente está incorreta');
       const user = existing.rows[0] ?? (await client.query(`INSERT INTO users (id, name, email, password_hash, email_verified_at) VALUES ($1, $2, $3, $4, now()) RETURNING *`, [randomUUID(), name.trim(), invitation.invited_email, passwordHash])).rows[0];
+      if (invitation.role === 'sdr') await this.capacity.assertCanAdd(invitation.tenant_id, client, { ignoreInvitationId: invitation.id });
       const existingMembership = await client.query('SELECT * FROM tenant_memberships WHERE tenant_id = $1 AND user_id = $2 LIMIT 1 FOR UPDATE', [invitation.tenant_id, user.id]);
       let membership;
       if (existingMembership.rows[0]) {
@@ -106,16 +130,8 @@ export class InvitationsService implements OnModuleInit, OnModuleDestroy {
         membership = await client.query(`INSERT INTO tenant_memberships (id, tenant_id, user_id, role) VALUES ($1, $2, $3, $4) RETURNING *`, [randomUUID(), invitation.tenant_id, user.id, invitation.role]);
       }
       if (invitation.role === 'sdr') {
-        await client.query('SELECT id FROM tenants WHERE id = $1 FOR UPDATE', [invitation.tenant_id]);
-        const quota = await client.query(`
-          SELECT t.max_sdrs, count(tm.user_id)::int AS current
-          FROM tenants t LEFT JOIN sdrs s ON s.tenant_id = t.id
-            LEFT JOIN tenant_memberships tm ON tm.tenant_id = s.tenant_id AND tm.user_id = s.user_id AND tm.role = 'sdr' AND tm.status = 'active'
-          WHERE t.id = $1
-          GROUP BY t.id, t.max_sdrs
-        `, [invitation.tenant_id]);
-        if (Number(quota.rows[0]?.current ?? 0) >= Number(quota.rows[0]?.max_sdrs ?? 500)) throw new ConflictException('O limite de SDRs desta empresa foi atingido');
-        await client.query('INSERT INTO sdrs (id, tenant_id, user_id, name) VALUES ($1, $2, $3, $4)', [randomUUID(), invitation.tenant_id, user.id, user.name]);
+        const existingSdr = await client.query('SELECT id FROM sdrs WHERE tenant_id = $1 AND user_id = $2 LIMIT 1', [invitation.tenant_id, user.id]);
+        if (!existingSdr.rows[0]) await client.query('INSERT INTO sdrs (id, tenant_id, user_id, name) VALUES ($1, $2, $3, $4)', [randomUUID(), invitation.tenant_id, user.id, user.name]);
       }
       await client.query('UPDATE invitations SET accepted_at = now(), delivery_token_encrypted = NULL, next_delivery_attempt_at = NULL WHERE id = $1', [invitation.id]);
       return { user, membership: membership.rows[0], invitation };

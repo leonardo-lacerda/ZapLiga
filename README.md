@@ -113,8 +113,25 @@ Comece sempre por `.env.example`. As variáveis mais importantes são:
 | `RESEND_API_KEY` / `RESEND_FROM` | E-mails de convite, verificação e recuperação |
 | `DATA_PROTECTION_SECRET` | Criptografia/HMAC das solicitações LGPD |
 | `METRICS_TOKEN` | Bearer token de coleta em `/internal/metrics` |
+| `STRIPE_SECRET_KEY` / `STRIPE_WEBHOOK_SECRET` | Credenciais do Stripe e assinatura dos webhooks |
+| `STRIPE_LIVEMODE` / `STRIPE_PORTAL_CONFIGURATION_ID` | Seleciona o ambiente e a configuração segura do Customer Portal |
+| `BILLING_ENFORCEMENT_MODE` | `off`, `shadow` ou `enforce`; use `shadow` antes do bloqueio efetivo |
+| `BILLING_WORKER_ENABLED` / `BILLING_WORKER_INTERVAL_MS` / `BILLING_RECONCILE_INTERVAL_MS` / `BILLING_STALE_AFTER_MS` | Fila de webhooks, periodicidade e limiar de reconciliação |
 | `PUBLIC_REGISTRATION_ENABLED` | Libera cadastro público somente após Gate B |
 | `SENTRY_DSN` / `SENTRY_ENVIRONMENT` | Monitoramento opcional de erros |
+
+Na implantação de cobrança, use `npm --workspace apps/api run billing:sync-catalog`
+com `STRIPE_SECRET_KEY`, `DATABASE_URL` e `STRIPE_LIVEMODE` definidos. O comando
+cria/reutiliza os Products/Prices versionados (Starter, Growth, Pro e SDR
+adicional), grava os Price IDs no catálogo local e só então deixa os planos
+ativos para o Checkout. No Live do ZapLiga, esse catálogo e o endpoint
+`https://api.zapliga.com/api/billing/stripe/webhook` já foram criados; falta
+somente configurar os secrets no ambiente de execução. Valide primeiro com
+`BILLING_ENFORCEMENT_MODE=shadow`.
+O deploy de produção também aplica as migrations e sincroniza esse catálogo
+antes de subir as réplicas da API.
+Depois do backfill e da conferência dos tenants, use `enforce`; em produção, a
+ausência dessa variável já assume `enforce` por segurança.
 
 Antes de compartilhar ou publicar um ambiente, substitua todos os segredos padrão do `.env.example`, especialmente `WAXUM_API_KEY`, `WAXUM_JWT_SECRET`, `JWT_ACCESS_SECRET` e `SUPERADMIN_PASSWORD`.
 
@@ -208,6 +225,8 @@ As migrations são de ida e rodam no boot da API. Se uma migration causar proble
 - [Troubleshooting](docs/troubleshooting.md)
 - [Versão validada do Waxum](docs/waxum-version.md)
 - [Plano de prontidão das features de usuário para lançamento](docs/plano-lancamento-features-usuarios.md)
+- [Plano de integração Stripe, assinaturas e limites por organização](docs/plano-integracao-stripe.md)
+- [Plano de planos, recursos automáticos e seats de SDR](docs/plano-planos-entitlements-seats.md)
 - [Runbook de lançamento, rollout, incidente e LGPD](docs/launch-runbook.md)
 - [Catálogo de eventos de auditoria](docs/audit-events.md)
 - [Roadmap de vantagens defensáveis](docs/roadmap-diferenciais/README.md)

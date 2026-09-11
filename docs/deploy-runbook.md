@@ -6,9 +6,12 @@ Todo push em `main` dispara `.github/workflows/deploy.yml`:
 
 1. **`validate`**: `npm ci` → `typecheck` → `test -- --runInBand` → `build`. Qualquer falha aqui impede o deploy.
 2. **`deploy`**: envia o repositório para `/opt/zapliga` no servidor via SSH e roda o script remoto, que:
+   - valida antes de qualquer alteração que o `.env` de produção contém os secrets Stripe, está em Live mode e usa `enforce`/`shadow` válidos, sem imprimir valores sensíveis;
    - sobe `postgres`, `postgres-backup`, `redis`, `nats`, `waxum` (infraestrutura compartilhada);
    - só prossegue quando o Waxum confirma simultaneamente `/livez` e uma conexão Rust ativa no NATS; o container aguarda o NATS antes do boot e seu healthcheck encerra o processo após três falhas consecutivas dessa integração, permitindo que a política de restart o reconecte;
    - builda as imagens de `api-a`, `api-b` e `web`;
+   - aplica as migrations e executa `sync-stripe-catalog` na imagem pronta antes
+     de liberar tráfego, garantindo que o catálogo Live esteja no banco;
    - **antes de buildar**, marca a imagem atualmente rodando de cada instância com a tag `:rollback` (é o alvo do rollback automático abaixo);
    - sobe **`api-a` sozinho**, espera `http://127.0.0.1:3000/health` responder (até 60s); só então sobe **`api-b`** e espera `:3001/health`;
    - se uma instância ficar saudável, sua imagem também recebe a tag do commit (`:<sha curto>`) — histórico dos últimos 5 builds fica disponível para rollback manual;

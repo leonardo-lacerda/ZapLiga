@@ -1,35 +1,39 @@
-import { BadRequestException, Body, ConflictException, Controller, ForbiddenException, Get, Param, Post, Query, UseGuards } from '@nestjs/common';
+import { BadRequestException, Body, Controller, ConflictException, ForbiddenException, Get, HttpException, NotFoundException, Param, Post, Query, UseGuards } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
 import { DatabaseService } from '../../database/database.service';
-import { AuthGuard, CurrentTenant, CurrentUser, Roles, RolesGuard, TenantMembershipGuard } from '../auth/auth.guards';
+import { AuthGuard, CurrentTenant, CurrentUser, Roles, RolesGuard, TenantAction, TenantMembershipGuard } from '../auth/auth.guards';
 import { DialerService } from '../dialer/dialer.service';
 import { FinishPauseDto } from './dto/finish-pause.dto';
 import { AuditService } from '../audit/audit.service';
+import { EntitlementService } from '../billing/entitlement.service';
 
 @Controller()
 @UseGuards(AuthGuard, TenantMembershipGuard, RolesGuard)
 @Roles('leader', 'super_admin')
 export class SdrsController {
-  constructor(private readonly db: DatabaseService, private readonly dialer: DialerService, private readonly audit: AuditService) {}
+  constructor(private readonly db: DatabaseService, private readonly dialer: DialerService, private readonly audit: AuditService, private readonly entitlement: EntitlementService) {}
 
   @Get(['/api/me/sdr', '/api/tenants/:tenantId/me/sdr'])
   @Roles('sdr')
   async own(@CurrentTenant() tenantId: string, @CurrentUser() user: any) {
     const existing = await this.db.query('SELECT id FROM sdrs WHERE tenant_id = $1 AND user_id = $2 LIMIT 1', [tenantId, user.id]);
     if (existing.rows[0]) return this.dialer.getSdrState(existing.rows[0].id, tenantId);
-    await this.assertSdrQuota(tenantId);
-    const profile = await this.db.query('SELECT name FROM users WHERE id = $1', [user.id]);
-    const created = await this.db.query(`INSERT INTO sdrs (id, tenant_id, user_id, name) VALUES ($1, $2, $3, $4) RETURNING *`, [randomUUID(), tenantId, user.id, profile.rows[0]?.name ?? 'SDR']);
-    return this.dialer.getSdrState(created.rows[0].id, tenantId);
+    throw new NotFoundException('Perfil SDR ainda não foi criado');
   }
 
-  private async assertSdrQuota(tenantId: string) {
-    const quota = await this.db.query(`SELECT t.max_sdrs, count(tm.user_id)::int AS current
-      FROM tenants t
-      LEFT JOIN sdrs s ON s.tenant_id = t.id
-      LEFT JOIN tenant_memberships tm ON tm.tenant_id = s.tenant_id AND tm.user_id = s.user_id AND tm.role = 'sdr' AND tm.status = 'active'
-      WHERE t.id = $1 GROUP BY t.id, t.max_sdrs`, [tenantId]);
-    if (Number(quota.rows[0]?.current ?? 0) >= Number(quota.rows[0]?.max_sdrs ?? 500)) throw new ConflictException('O limite de SDRs desta empresa foi atingido');
+  @Post(['/api/me/sdr', '/api/tenants/:tenantId/me/sdr'])
+  @Roles('sdr')
+  @TenantAction('write')
+  async createOwn(@CurrentTenant() tenantId: string, @CurrentUser() user: any) {
+    await this.entitlement.assertAction(tenantId, 'write', user.id);
+    const result = await this.db.transaction(async (client) => {
+      await this.entitlement.acquireTenantLock(tenantId, client);
+      const existing = await client.query('SELECT id FROM sdrs WHERE tenant_id = $1 AND user_id = $2 LIMIT 1', [tenantId, user.id]);
+      if (existing.rows[0]) return existing.rows[0];
+      const profile = await client.query('SELECT name FROM users WHERE id = $1', [user.id]);
+      return (await client.query(`INSERT INTO sdrs (id, tenant_id, user_id, name) VALUES ($1, $2, $3, $4) RETURNING id`, [randomUUID(), tenantId, user.id, profile.rows[0]?.name ?? 'SDR'])).rows[0];
+    });
+    return this.dialer.getSdrState(result.id, tenantId);
   }
 
   @Get(['/api/sdrs', '/api/tenants/:tenantId/sdrs'])
@@ -65,6 +69,7 @@ export class SdrsController {
   }
 
   @Post(['/api/sdrs/:id/pauses/:pauseId/finish', '/api/tenants/:tenantId/sdrs/:id/pauses/:pauseId/finish'])
+  @TenantAction('call_finalize')
   @Roles('leader', 'super_admin', 'sdr')
   async finishPause(@Param('id') id: string, @Param('pauseId') pauseId: string, @Body() body: FinishPauseDto, @CurrentTenant() tenantId: string, @CurrentUser() user: any) {
     if (user.platformRole !== 'super_admin' && user.tenantMembership?.role === 'sdr') {
@@ -76,6 +81,6 @@ export class SdrsController {
       if (body.callResult === 'nao_ligar_novamente') await this.audit.record({ actorUserId: user.id, tenantId, action: 'contact.suppressed', entityType: 'lead', metadata: { source: 'post_call', reason: 'requested_opt_out' } });
       return result;
     }
-    catch (error) { throw new BadRequestException(String((error as Error).message ?? error)); }
+    catch (error) { if (error instanceof HttpException) throw error; throw new BadRequestException(String((error as Error).message ?? error)); }
   }
 }

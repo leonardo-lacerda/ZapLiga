@@ -1,30 +1,38 @@
-import { ConflictException, Injectable, NotFoundException } from '@nestjs/common';
+import { ConflictException, Injectable, NotFoundException, Optional } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
 import { DatabaseService } from '../../database/database.service';
+import { SdrCapacityService } from '../billing/sdr-capacity.service';
 
 export type MembershipRole = 'leader' | 'sdr';
 export type MembershipStatus = 'active' | 'blocked' | 'removed';
 
 @Injectable()
 export class MembershipsService {
-  constructor(private readonly db: DatabaseService) {}
+  constructor(private readonly db: DatabaseService, @Optional() private readonly capacity?: SdrCapacityService) {}
 
   async create(tenantId: string, userId: string, role: MembershipRole) {
     return this.db.transaction(async (client) => {
       const existing = await client.query('SELECT * FROM tenant_memberships WHERE tenant_id = $1 AND user_id = $2 LIMIT 1 FOR UPDATE', [tenantId, userId]);
       if (existing.rows[0] && existing.rows[0].status !== 'removed') throw new ConflictException('Este usuário já possui uma membership nesta empresa');
+      if (role === 'sdr' && (!existing.rows[0] || existing.rows[0].status === 'removed')) {
+        if (this.capacity) await this.capacity.assertCanAdd(tenantId, client);
+      }
       const membership = existing.rows[0]
         ? (await client.query('UPDATE tenant_memberships SET role = $1, status = \'active\', updated_at = now() WHERE tenant_id = $2 AND user_id = $3 RETURNING *', [role, tenantId, userId])).rows[0]
         : (await client.query('INSERT INTO tenant_memberships (id, tenant_id, user_id, role) VALUES ($1, $2, $3, $4) RETURNING *', [randomUUID(), tenantId, userId, role])).rows[0];
       if (role === 'sdr') {
         const sdr = await client.query('SELECT id FROM sdrs WHERE tenant_id = $1 AND user_id = $2 LIMIT 1', [tenantId, userId]);
         if (!sdr.rows[0]) {
-          const quota = await client.query(`SELECT t.max_sdrs, count(tm.user_id)::int AS current
-            FROM tenants t
-            LEFT JOIN sdrs s ON s.tenant_id = t.id
-            LEFT JOIN tenant_memberships tm ON tm.tenant_id = s.tenant_id AND tm.user_id = s.user_id AND tm.role = 'sdr' AND tm.status = 'active'
-            WHERE t.id = $1 GROUP BY t.id, t.max_sdrs`, [tenantId]);
-          if (Number(quota.rows[0]?.current ?? 0) >= Number(quota.rows[0]?.max_sdrs ?? 500)) throw new ConflictException('O limite de SDRs desta empresa foi atingido');
+          // Keep the legacy fallback for isolated service tests and partial
+          // deployments where BillingModule has not been wired yet. Normal
+          // application requests always use SdrCapacityService above.
+          if (!this.capacity) {
+            const quota = await client.query(`SELECT t.max_sdrs, count(tm.user_id)::int AS current
+              FROM tenants t LEFT JOIN sdrs s ON s.tenant_id = t.id
+              LEFT JOIN tenant_memberships tm ON tm.tenant_id = s.tenant_id AND tm.user_id = s.user_id AND tm.role = 'sdr' AND tm.status = 'active'
+              WHERE t.id = $1 GROUP BY t.id, t.max_sdrs`, [tenantId]);
+            if (Number(quota.rows[0]?.current ?? 0) >= Number(quota.rows[0]?.max_sdrs ?? 500)) throw new ConflictException('O limite de SDRs desta empresa foi atingido');
+          }
           const name = await client.query('SELECT name FROM users WHERE id = $1', [userId]);
           await client.query('INSERT INTO sdrs (id, tenant_id, user_id, name) VALUES ($1, $2, $3, $4)', [randomUUID(), tenantId, userId, name.rows[0]?.name ?? 'SDR']);
         }
@@ -99,6 +107,7 @@ export class MembershipsService {
         const leaders = await client.query(`SELECT count(*)::int AS count FROM tenant_memberships WHERE tenant_id = $1 AND role = 'leader' AND status = 'active'`, [tenantId]);
         if (Number(leaders.rows[0]?.count ?? 0) <= 1) throw new ConflictException('A empresa precisa manter pelo menos um líder ativo');
       }
+      if (membership.role === 'sdr' && status === 'active' && membership.status !== 'active') await this.capacity?.assertCanAdd(tenantId, client);
       const updated = await client.query('UPDATE tenant_memberships SET status = $1, updated_at = now() WHERE tenant_id = $2 AND user_id = $3 RETURNING *', [status, tenantId, userId]);
       if (status !== 'active') {
         const remaining = await client.query(`SELECT count(*)::int AS count FROM tenant_memberships tm JOIN tenants t ON t.id = tm.tenant_id WHERE tm.user_id = $1 AND tm.status = 'active' AND t.status = 'active'`, [userId]);
@@ -121,7 +130,16 @@ export class MembershipsService {
         const lockedLeaders = await client.query(`SELECT count(*)::int AS count FROM tenant_memberships WHERE tenant_id = $1 AND role = 'leader' AND status = 'active'`, [tenantId]);
         if (Number(lockedLeaders.rows[0]?.count ?? 0) <= 1) throw new ConflictException('A empresa precisa manter pelo menos um líder ativo');
       }
-      return client.query('UPDATE tenant_memberships SET role = $1, updated_at = now() WHERE tenant_id = $2 AND user_id = $3 RETURNING *', [role, tenantId, userId]);
+      if (role === 'sdr' && membership.role !== 'sdr' && membership.status === 'active') await this.capacity?.assertCanAdd(tenantId, client);
+      const updated = await client.query('UPDATE tenant_memberships SET role = $1, updated_at = now() WHERE tenant_id = $2 AND user_id = $3 RETURNING *', [role, tenantId, userId]);
+      if (role === 'sdr' && membership.role !== 'sdr') {
+        const existingSdr = await client.query('SELECT id FROM sdrs WHERE tenant_id = $1 AND user_id = $2 LIMIT 1', [tenantId, userId]);
+        if (!existingSdr.rows[0]) {
+          const user = await client.query('SELECT name FROM users WHERE id = $1 LIMIT 1', [userId]);
+          await client.query('INSERT INTO sdrs (id, tenant_id, user_id, name) VALUES ($1, $2, $3, $4)', [randomUUID(), tenantId, userId, user.rows[0]?.name ?? 'SDR']);
+        }
+      }
+      return updated;
     });
     return result.rows[0];
   }

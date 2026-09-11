@@ -5,6 +5,9 @@ import { DatabaseService } from '../../database/database.service';
 import { RedisService } from '../../infrastructure/redis/redis.service';
 import { AuditService } from '../audit/audit.service';
 import { CampaignEventsService } from '../campaigns/campaign-events.service';
+import { EntitlementService } from '../billing/entitlement.service';
+import { PlanLimitsService } from '../billing/plan-limits.service';
+import { FeatureFlagsService } from '../feature-flags/feature-flags.service';
 import { decryptSecret, encryptSecret, hashCredential, safeEqual, webhookSignature } from './lead-ingestion.crypto';
 
 type IntegrationType = 'webhook' | 'api' | 'automation';
@@ -34,6 +37,9 @@ export class LeadIngestionService implements OnModuleInit, OnModuleDestroy {
     private readonly redis: RedisService,
     private readonly audit: AuditService,
     @Optional() private readonly campaignEvents?: CampaignEventsService,
+    @Optional() private readonly entitlement?: EntitlementService,
+    @Optional() private readonly planLimits?: PlanLimitsService,
+    @Optional() private readonly featureFlags?: FeatureFlagsService,
   ) {}
 
   onModuleInit() {
@@ -200,6 +206,8 @@ export class LeadIngestionService implements OnModuleInit, OnModuleDestroy {
 
   async accept(publicId: string, request: any, batch = false) {
     const integration = await this.authenticate(publicId, request);
+    await this.entitlement?.assertCanOperate(integration.tenant_id);
+    await this.featureFlags?.assertEnabled(integration.tenant_id, 'lead_ingestion_api', 'POST');
     const raw = request.body;
     const items = batch ? (Array.isArray(raw) ? raw : isRecord(raw) && Array.isArray(raw.leads) ? raw.leads : null) : [raw];
     if (!items || !items.length || items.length > 100) throw new BadRequestException('Envie entre 1 e 100 leads no lote');
@@ -284,6 +292,8 @@ export class LeadIngestionService implements OnModuleInit, OnModuleDestroy {
     await this.db.query(`UPDATE lead_ingestion_events SET status='processing', attempts=attempts+1 WHERE id=$1`, [eventId]);
     try {
       if (event.integration_status !== 'active') throw new Error('integration_revoked');
+      await this.entitlement?.assertCanOperate(event.tenant_id);
+      await this.featureFlags?.assertEnabled(event.tenant_id, 'lead_ingestion_api', 'POST');
       const lead = this.normalizePayload(event.payload, event.field_mapping ?? {}, Number(event.default_priority ?? 0));
       const result = await this.upsertLead(event, lead);
       await this.db.query(`UPDATE lead_ingestion_events SET status=$2, lead_id=$3, processed_at=now(), error_code=NULL, error_message=NULL WHERE id=$1`, [eventId, result.status, result.leadId]);
@@ -301,7 +311,9 @@ export class LeadIngestionService implements OnModuleInit, OnModuleDestroy {
   }
 
   private async upsertLead(event: any, lead: CanonicalLead) {
+    await this.entitlement?.assertCanOperate(event.tenant_id);
     return this.db.transaction(async (client) => {
+      await this.planLimits?.acquireTenantLock(event.tenant_id, client);
       await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [`lead-quota:${event.tenant_id}`]);
       const assignedCampaign = event.campaign_id
         ? (await client.query(`SELECT id, status, current_version FROM campaigns WHERE tenant_id=$1 AND id=$2`, [event.tenant_id, event.campaign_id])).rows[0]
@@ -323,8 +335,7 @@ export class LeadIngestionService implements OnModuleInit, OnModuleDestroy {
         await this.campaignEvents?.record({ tenantId: event.tenant_id, campaignId: campaignId ?? null, campaignVersion, eventType: 'lead.received', aggregateType: 'lead', aggregateId: updated.rows[0].id, idempotencyKey: `lead.received:${event.id}`, payload: { eventId: event.id, status: 'updated' } }, client as any);
         return { status: 'updated', leadId: updated.rows[0].id };
       }
-      const quota = await client.query('SELECT t.max_leads, count(l.id)::int AS current FROM tenants t LEFT JOIN leads l ON l.tenant_id=t.id WHERE t.id=$1 GROUP BY t.max_leads', [event.tenant_id]);
-      if (Number(quota.rows[0]?.current ?? 0) >= Number(quota.rows[0]?.max_leads ?? 100000)) throw new Error('limite_de_leads_atingido');
+      if (this.planLimits) await this.planLimits.assertCanAddLeads(event.tenant_id, client, 1);
       const inserted = await client.query(`INSERT INTO leads (id,tenant_id,folder_id,name,phone,email,source_integration_id,external_id,campaign_id,campaign_version,queue_priority,queued_at,queue_sequence,last_ingestion_event_id)
         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,now(),nextval('lead_queue_sequence'),$12) RETURNING id`, [randomUUID(), event.tenant_id, event.default_folder_id, lead.name, lead.phone, lead.email ?? null, event.integration_id, lead.externalId ?? null, campaignId, campaignVersion, lead.priority, event.id]);
       await client.query(`UPDATE leads SET do_not_call=EXISTS (SELECT 1 FROM contact_suppressions s WHERE s.tenant_id=$1 AND s.phone=leads.phone AND s.lifted_at IS NULL) WHERE tenant_id=$1 AND id=$2`, [event.tenant_id, inserted.rows[0].id]);

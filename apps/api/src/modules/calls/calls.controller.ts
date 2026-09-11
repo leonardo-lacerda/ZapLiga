@@ -1,7 +1,7 @@
-import { BadRequestException, Body, Controller, Get, Param, Post, Query, UseGuards } from '@nestjs/common';
+import { BadRequestException, Body, Controller, Get, HttpException, Param, Post, Query, UseGuards } from '@nestjs/common';
 import { DialerService } from '../dialer/dialer.service';
 import { DatabaseService } from '../../database/database.service';
-import { AuthGuard, CurrentTenant, CurrentUser, Roles, RolesGuard, TenantMembershipGuard } from '../auth/auth.guards';
+import { AuthGuard, CurrentTenant, CurrentUser, Roles, RolesGuard, TenantAction, TenantMembershipGuard } from '../auth/auth.guards';
 import { ManualCallDto } from './dto/manual-call.dto';
 import { OutcomeDto } from './dto/outcome.dto';
 import { AuditService } from '../audit/audit.service';
@@ -58,9 +58,10 @@ export class CallsController {
       const result = await this.dialer.manualCallWithInput({ leadId: leadId || undefined, phone: phone || undefined, name: body.name }, tenantId, sdrUserId);
       await this.audit.record({ actorUserId: user.id, tenantId, action: 'call.manual_started', entityType: 'lead', entityId: leadId || String(result.leadId ?? ''), metadata: result });
       return result;
-    } catch (error) { throw new BadRequestException(String((error as Error).message ?? error)); }
+    } catch (error) { if (error instanceof HttpException) throw error; throw new BadRequestException(String((error as Error).message ?? error)); }
   }
 
   @Post(['/api/calls/:id/outcome', '/api/tenants/:tenantId/calls/:id/outcome'])
+  @TenantAction('call_finalize')
   async outcome(@Param('id') id: string, @Body() body: OutcomeDto, @CurrentTenant() tenantId: string, @CurrentUser() user: any) { const result = await this.dialer.recordOutcome(id, body.outcome, tenantId); await this.audit.record({ actorUserId: user.id, tenantId, action: 'call.outcome_recorded', entityType: 'call', entityId: id, metadata: { outcome: body.outcome } }); return result; }
 }

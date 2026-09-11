@@ -89,7 +89,7 @@ export class AuthController {
   @UseGuards(AuthGuard, TenantMembershipGuard, RolesGuard)
   @Roles('sdr')
   websocketTicket(@CurrentUser() user: any) {
-    return this.auth.createWebsocketTicket(user.id, user.tenantMembership.tenantId);
+    return this.auth.createWebsocketTicket(user.id, user.tenantMembership.tenantId, true);
   }
 
   @Post('/operations-ws-ticket')

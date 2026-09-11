@@ -8,6 +8,8 @@ import { normalizeWaxumStatus } from '../../infrastructure/waxum/waxum-status';
 import { CreateNumberDto } from './dto/create-number.dto';
 import { UpdateNumberDto } from './dto/update-number.dto';
 import { RedisService } from '../../infrastructure/redis/redis.service';
+import { EntitlementService } from '../billing/entitlement.service';
+import { PlanLimitsService } from '../billing/plan-limits.service';
 
 const digits = (value: unknown) => String(value ?? '').replace(/\D/g, '');
 
@@ -18,24 +20,34 @@ export class NumbersController {
   private readonly waxumCreateCooldownKey = 'zapcall:waxum:create-session:cooldown';
   private readonly waxumCreateLockKey = 'zapcall:waxum:create-session:lock';
 
-  constructor(private readonly db: DatabaseService, private readonly waxum: WaxumClient, private readonly audit: AuditService, private readonly redis: RedisService) {}
+  constructor(private readonly db: DatabaseService, private readonly waxum: WaxumClient, private readonly audit: AuditService, private readonly redis: RedisService, private readonly entitlement: EntitlementService, private readonly planLimits: PlanLimitsService) {}
 
   @Roles('leader', 'super_admin')
   @Post(['/api/numbers', '/api/tenants/:tenantId/numbers'])
   async create(@Body() body: CreateNumberDto, @CurrentTenant() tenantId: string, @CurrentUser() user: any) {
+    await this.entitlement.assertAction(tenantId, 'write', user.id);
     const label = String(body.label ?? '').trim();
     if (!label) throw new BadRequestException('label é obrigatório');
+    let createdSessionId: string | undefined;
+    let persisted = false;
     try {
       const session = await this.createWaxumSession(label);
+      createdSessionId = session.id;
       // A new line's cooldown defaults to the tenant's own "Proteção entre
       // chamadas" (Configurações do discador) instead of a hardcoded value,
       // so that setting stays the single place operators configure it.
       const dialerDefaults = await this.db.query('SELECT default_number_cooldown_seconds FROM dialer_settings WHERE tenant_id = $1', [tenantId]);
       const defaultCooldownSeconds = Number(dialerDefaults.rows[0]?.default_number_cooldown_seconds ?? 60);
-      const result = await this.db.query(`INSERT INTO whatsapp_numbers (id,tenant_id,label,phone,waxum_session_id,max_concurrent_calls,cooldown_seconds,max_calls_per_window,call_window_seconds) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING *`, [randomUUID(), tenantId, label, digits(body.phone) || null, session.id, Number(body.maxConcurrentCalls ?? 1), Number(body.cooldownSeconds ?? defaultCooldownSeconds), Number(body.maxCallsPerWindow ?? 3), Number(body.callWindowSeconds ?? 180)]);
+      const result = await this.db.transaction(async (client) => {
+        // Keep the advisory lock, count and INSERT on one transaction.
+        await this.planLimits.assertCanAddNumbers(tenantId, client, 1);
+        return client.query(`INSERT INTO whatsapp_numbers (id,tenant_id,label,phone,waxum_session_id,max_concurrent_calls,cooldown_seconds,max_calls_per_window,call_window_seconds) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING *`, [randomUUID(), tenantId, label, digits(body.phone) || null, session.id, Number(body.maxConcurrentCalls ?? 1), Number(body.cooldownSeconds ?? defaultCooldownSeconds), Number(body.maxCallsPerWindow ?? 3), Number(body.callWindowSeconds ?? 180)]);
+      });
+      persisted = true;
       await this.audit.record({ actorUserId: user.id, tenantId, action: 'number.created', entityType: 'whatsapp_number', entityId: result.rows[0].id });
       return result.rows[0];
     } catch (error) {
+      if (createdSessionId && !persisted) await this.waxum.deleteSession(createdSessionId).catch(() => undefined);
       if (error instanceof HttpException) throw error;
       throw new BadRequestException(`Não foi possível criar a sessão Waxum: ${String(error)}`);
     }
@@ -59,6 +71,7 @@ export class NumbersController {
   @Roles('leader', 'super_admin')
   @Delete(['/api/numbers/:id', '/api/tenants/:tenantId/numbers/:id'])
   async remove(@Param('id') id: string, @CurrentTenant() tenantId: string, @CurrentUser() user: any) {
+    await this.entitlement.assertAction(tenantId, 'write', user.id);
     const number = await this.find(id, tenantId);
     const active = await this.db.query("SELECT 1 FROM calls WHERE number_id = $1 AND status IN ('reserved', 'dialing', 'media_active') LIMIT 1", [id]);
     if (active.rows[0]) throw new BadRequestException('Nao e possivel remover um numero durante uma chamada');
@@ -89,6 +102,7 @@ export class NumbersController {
   @Roles('leader', 'super_admin')
   @Post(['/api/numbers/:id/reconnect', '/api/tenants/:tenantId/numbers/:id/reconnect'])
   async reconnect(@Param('id') id: string, @CurrentTenant() tenantId: string, @CurrentUser() user: any) {
+    await this.entitlement.assertAction(tenantId, 'write', user.id);
     let number = await this.find(id, tenantId);
     try {
       const result = await this.waxum.reconnect(number.waxum_session_id);
@@ -106,6 +120,7 @@ export class NumbersController {
   @Roles('leader', 'super_admin')
   @Patch(['/api/numbers/:id/settings', '/api/tenants/:tenantId/numbers/:id/settings'])
   async settings(@Param('id') id: string, @Body() body: UpdateNumberDto, @CurrentTenant() tenantId: string, @CurrentUser() user: any) {
+    await this.entitlement.assertAction(tenantId, 'write', user.id);
     const result = await this.db.query(`UPDATE whatsapp_numbers SET max_concurrent_calls = COALESCE($1,max_concurrent_calls), cooldown_seconds = COALESCE($2,cooldown_seconds), max_calls_per_window = COALESCE($3,max_calls_per_window), call_window_seconds = COALESCE($4,call_window_seconds), label = COALESCE($5,label) WHERE id = $6 AND tenant_id = $7 AND status <> 'removed' RETURNING *`, [body.maxConcurrentCalls == null ? null : Number(body.maxConcurrentCalls), body.cooldownSeconds == null ? null : Number(body.cooldownSeconds), body.maxCallsPerWindow == null ? null : Number(body.maxCallsPerWindow), body.callWindowSeconds == null ? null : Number(body.callWindowSeconds), body.label ? String(body.label) : null, id, tenantId]);
     if (!result.rows[0]) throw new NotFoundException('Número não encontrado');
     await this.audit.record({ actorUserId: user.id, tenantId, action: 'number.settings_changed', entityType: 'whatsapp_number', entityId: id });

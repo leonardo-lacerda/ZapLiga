@@ -19,6 +19,8 @@ import { EligibilityService, eligibilityErrorMessage, evaluateLeadEligibility } 
 import { DecisionShadowService } from '../decision-engine/decision-shadow.service';
 import { DecisionPolicyService } from '../decision-engine/decision-policy.service';
 import { ExperimentsService } from '../experiments/experiments.service';
+import { EntitlementService } from '../billing/entitlement.service';
+import { PlanLimitsService } from '../billing/plan-limits.service';
 import {
   analyzePcm16Le,
   computeCallOutcome,
@@ -165,6 +167,8 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
     @Optional() private readonly decisionShadow?: DecisionShadowService,
     @Optional() private readonly decisionPolicies?: DecisionPolicyService,
     @Optional() private readonly experiments?: ExperimentsService,
+    @Optional() private readonly entitlement?: EntitlementService,
+    @Optional() private readonly planLimits?: PlanLimitsService,
   ) {}
 
   onModuleInit() {
@@ -191,9 +195,22 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
   private heartbeat() { return this.redis.client.set(runtimeHeartbeatKey, runtimeInstanceId, 'EX', 30); }
 
   async getSettings(tenantId = legacyTenantId()) {
-    await this.db.query('INSERT INTO dialer_settings (tenant_id) VALUES ($1) ON CONFLICT (tenant_id) DO NOTHING', [tenantId]);
     const result = await this.db.query('SELECT * FROM dialer_settings WHERE tenant_id = $1', [tenantId]);
-    return result.rows[0];
+    // Tenant creation is backed by a database trigger, so normal rows already
+    // exist. Keep a read-only fallback for a partial/legacy database rather
+    // than turning a dashboard GET into a write.
+    return result.rows[0] ?? {
+      tenant_id: tenantId,
+      running: false,
+      global_max_concurrent_calls: 1,
+      max_calls_per_minute: 6,
+      min_seconds_between_calls: 10,
+      max_attempts_per_lead: 2,
+      retry_delay_minutes: 30,
+      ring_timeout_seconds: 30,
+      default_number_cooldown_seconds: 60,
+      queue_strategy: 'fifo',
+    };
   }
 
   async getLogs(tenantId = legacyTenantId()) {
@@ -274,6 +291,7 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
   }
 
   async setAvailability(sdrId: string, available: boolean, tenantId = legacyTenantId()) {
+    if (available) await this.entitlement?.assertCanOperate(tenantId);
     const sdr = await this.getSdrState(sdrId, tenantId);
     if (!sdr) throw new Error('SDR não encontrado');
     if (available && sdr.current_pause_id) throw new Error('Finalize o pós-atendimento antes de ficar disponível');
@@ -300,11 +318,12 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
   }
 
   async finishPause(sdrId: string, pauseId: string, input: { callResult?: string; pipelineStage?: string; notes?: string; continueAvailable?: boolean; callbackAt?: string; actorUserId?: string }, tenantId = legacyTenantId()) {
+    const access = await this.entitlement?.assertCanFinalize(tenantId);
     if (input.callResult === 'retornar') await this.featureFlags?.assertEnabled(tenantId, 'callbacks');
     const callResult = String(input.callResult ?? '').trim();
     const pipelineStage = String(input.pipelineStage ?? '').trim();
     const notes = String(input.notes ?? '').trim();
-    const continueAvailable = input.continueAvailable !== false;
+    const continueAvailable = input.continueAvailable !== false && (!access || access.mode === 'full' || this.entitlement?.enforcementMode !== 'enforce');
     const stageByResult: Record<string, string> = {
       interessado: 'qualificado',
       sem_interesse: 'perdido',
@@ -420,6 +439,7 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
   }
 
   async updateSettings(input: Record<string, unknown>, tenantId = legacyTenantId()) {
+    await this.entitlement?.assertAction(tenantId, 'write');
     const allowed = [
       'global_max_concurrent_calls', 'max_calls_per_minute', 'min_seconds_between_calls', 'max_attempts_per_lead', 'retry_delay_minutes',
       'ring_timeout_seconds', 'default_number_cooldown_seconds', 'queue_strategy',
@@ -439,6 +459,7 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
   }
 
   async start(tenantId = legacyTenantId()) {
+    await this.entitlement?.assertCanOperate(tenantId);
     if (this.schedule) await this.schedule.assertAllowed(tenantId);
     await this.db.query('UPDATE dialer_settings SET running = true WHERE tenant_id = $1', [tenantId]);
     this.log('Discador iniciado', 'info', undefined, tenantId);
@@ -448,6 +469,7 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
   }
 
   async pause(tenantId = legacyTenantId()) {
+    await this.entitlement?.assertCanOperate(tenantId);
     await this.db.query('UPDATE dialer_settings SET running = false WHERE tenant_id = $1', [tenantId]);
     this.log('Discador pausado', 'info', undefined, tenantId);
     this.notifyOperationsChanged(tenantId, 'dialer_status_changed', { kind: 'dialer_status_changed', running: false });
@@ -461,6 +483,7 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
   }
 
   async manualCall(leadId: string, tenantId = legacyTenantId()) {
+    await this.entitlement?.assertCanOperate(tenantId);
     if (this.schedule) await this.schedule.assertAllowed(tenantId);
     const settings = await this.getSettings(tenantId);
     const [sdrs, numbers, leads] = await Promise.all([
@@ -542,6 +565,7 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
   }
 
   async manualCallWithInput(input: { leadId?: string; phone?: string; name?: string }, tenantId = legacyTenantId(), sdrUserId?: string) {
+    await this.entitlement?.assertCanOperate(tenantId, sdrUserId);
     if (this.schedule) await this.schedule.assertAllowed(tenantId);
     const settings = await this.getSettings(tenantId);
     let lead: any;
@@ -574,7 +598,13 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
         if (lead.do_not_call || activeCall.rows[0]) lead = undefined;
       } else {
         lead = await this.db.transaction(async (client) => {
+          // A manual call may create a contact on the fly. It is still a lead
+          // creation and therefore must consume the plan's commercial lead
+          // quota. Keep the check in this transaction so the quota lock covers
+          // the subsequent INSERT as one atomic operation.
+          await this.planLimits?.acquireTenantLock(tenantId, client);
           await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [`lead-quota:${tenantId}`]);
+          await this.planLimits?.assertCanAddLeads(tenantId, client, 1);
           const [tenant, count] = await Promise.all([
             client.query('SELECT max_leads FROM tenants WHERE id = $1', [tenantId]),
             client.query('SELECT count(*)::int AS count FROM leads WHERE tenant_id = $1', [tenantId]),
@@ -999,6 +1029,14 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
     this.ticking.add(tenantId);
     try {
       await this.expireReservations(tenantId);
+      const access = await this.entitlement?.getAccess(tenantId);
+      if (this.entitlement?.enforcementMode === 'enforce' && access && access.mode !== 'full') {
+        const paused = await this.db.query("UPDATE dialer_settings SET running = false WHERE tenant_id = $1 AND running = true RETURNING tenant_id", [tenantId]);
+        if (paused.rows.length) await this.audit?.record({ tenantId, action: 'dialer.paused_by_billing', entityType: 'dialer', entityId: tenantId, metadata: { reason: access.reason } }).catch(() => undefined);
+        if (paused.rows.length) this.log('Discador pausado por restrição de cobrança', 'warning', undefined, tenantId);
+        if (paused.rows.length) this.notifyOperationsChanged(tenantId, 'billing_restricted', { kind: 'billing_restricted', running: false, reason: access.reason });
+        return;
+      }
       if (Date.now() - (this.lastCallbackNotificationAt.get(tenantId) ?? 0) >= 30_000) {
         this.lastCallbackNotificationAt.set(tenantId, Date.now());
         const dueTransition = await this.db.query(`UPDATE lead_callbacks SET status = 'due', updated_at = now() WHERE tenant_id = $1 AND status IN ('pending','reassigned') AND due_at <= now() RETURNING id`, [tenantId]);
@@ -1277,8 +1315,10 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
     try {
       // Última barreira antes de persistir a chamada. Protege chamadas já
       // reservadas quando a janela encerra entre a seleção e a transação.
+      await this.entitlement?.assertCanOperate(tenantId);
       if (this.schedule) await this.schedule.assertAllowed(tenantId);
       await this.db.transaction(async (client) => {
+        if (this.planLimits) await this.planLimits.assertCanReserveCall(tenantId, client);
         const folder = await client.query(`
           SELECT l.folder_id, l.status, l.attempts, l.next_eligible_at, l.do_not_call, l.campaign_id, l.campaign_version, f.is_active,
             (l.do_not_call = false AND NOT EXISTS (
@@ -1449,6 +1489,10 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
         return;
       }
       if (resource.finishing) return;
+      // The entitlement may have changed after the reservation was created.
+      // Re-check immediately before opening the external Waxum media call so
+      // a webhook/tick race cannot turn a stale reservation into a new call.
+      await this.entitlement?.assertCanOperate(tenantId);
       const media = this.waxum.openMedia(call.rows[0].waxum_session_id, recipient);
       resource.media = media;
       resource.recipient = recipient;
@@ -1666,6 +1710,7 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
   }
 
   async recordOutcome(callId: string, outcome: string, tenantId = legacyTenantId(), sdrId?: string) {
+    await this.entitlement?.assertCanFinalize(tenantId);
     const resource = this.active.get(callId);
     if (resource && (resource.tenantId !== tenantId || (sdrId && resource.sdrId !== sdrId))) throw new Error('Chamada não pertence ao SDR autenticado');
     const isBrowserAudioFailure = outcome === 'microphone_denied' || outcome === 'browser_error' || outcome.startsWith('audio_error:');
