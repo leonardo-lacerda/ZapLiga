@@ -310,7 +310,23 @@ jobs:
           deploy_instance api-a 3000 "$IMAGE_API_A"
           deploy_instance api-b 3001 "$IMAGE_API_B"
 
-          "${COMPOSE[@]}" up -d --remove-orphans web
+          # The web image is content-addressed by Vite asset hashes, but the
+          # Compose service itself has no config change when only frontend
+          # source changes. Force the container replacement so the host cannot
+          # keep serving the previous static bundle after a successful build.
+          "${COMPOSE[@]}" up -d --force-recreate --remove-orphans web
+
+          # Do not report a successful deploy while the local web endpoint is
+          # still serving a bundle that predates the billing route. Resolve the
+          # current hashed entrypoint from index.html and inspect that exact
+          # asset without printing its contents.
+          WEB_BASE="http://127.0.0.1:${WEB_HOST_PORT:-5173}"
+          web_index="$(curl -fsS "$WEB_BASE/app/")"
+          web_asset="$(printf '%s' "$web_index" | sed -n 's/.*src="\(\/app\/assets\/index-[^"]*\.js\)".*/\1/p')"
+          if [ -z "$web_asset" ] || ! curl -fsS "$WEB_BASE$web_asset" | grep -q '/app/cobranca'; then
+            echo "Frontend publicado sem a rota /app/cobranca" >&2
+            exit 1
+          fi
 
           # Keep the rollback tag plus the last 5 SHA tags per API image so the
           # host doesn't accumulate every build indefinitely.
