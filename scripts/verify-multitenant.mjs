@@ -15,6 +15,16 @@ const assert = (condition, message) => {
   if (!condition) throw new Error(message);
 };
 
+const waitFor = async (predicate, timeoutMs = 15_000) => {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const value = await predicate();
+    if (value) return value;
+    await new Promise((resolve) => setTimeout(resolve, 300));
+  }
+  return false;
+};
+
 const request = async (path, options = {}) => {
   const response = await fetch(`${baseUrl}${path}`, {
     ...options,
@@ -78,8 +88,11 @@ const activateTestPlan = async (tenantId, organizerAuth) => {
     const signature = createHmac('sha256', stripeWebhookSecret).update(`${timestamp}.${payload}`).digest('hex');
     const webhook = await request('/api/billing/stripe/webhook', { method: 'POST', headers: { 'stripe-signature': `t=${timestamp},v1=${signature}` }, body: payload });
     assert(webhook.response.ok, `ativação do plano de teste falhou: ${webhook.response.status}`);
-    const billing = await request(`/api/tenants/${tenantId}/billing`, { headers: organizerAuth });
-    assert(billing.response.ok && billing.body?.planCode === 'growth' && billing.body?.mode === 'full', 'plano Growth de teste não ficou ativo');
+    const billing = await waitFor(async () => {
+      const current = await request(`/api/tenants/${tenantId}/billing`, { headers: organizerAuth });
+      return current.response.ok && current.body?.planCode === 'growth' && current.body?.mode === 'full' ? current : false;
+    });
+    assert(billing, 'plano Growth de teste não ficou ativo após aguardar o webhook');
   } finally {
     await pool.end();
   }
