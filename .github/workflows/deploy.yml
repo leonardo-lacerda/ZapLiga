@@ -324,7 +324,17 @@ jobs:
           # current hashed entrypoint from index.html and inspect that exact
           # asset without printing its contents.
           WEB_BASE="http://127.0.0.1:${WEB_HOST_PORT:-5173}"
-          web_index="$(curl -fsS "$WEB_BASE/app/")"
+          web_index=""
+          for attempt in $(seq 1 30); do
+            if web_index="$(curl -fsS "$WEB_BASE/app/" 2>/dev/null)"; then
+              break
+            fi
+            if [ "$attempt" -eq 30 ]; then
+              echo "Frontend não respondeu na porta ${WEB_HOST_PORT:-5173}" >&2
+              exit 1
+            fi
+            sleep 2
+          done
           web_asset="$(printf '%s' "$web_index" | sed -n 's/.*src="\(\/app\/assets\/index-[^"]*\.js\)".*/\1/p')"
           if [ -z "$web_asset" ] || ! curl -fsS "$WEB_BASE$web_asset" | grep -q '/app/cobranca'; then
             echo "Frontend publicado sem a rota /app/cobranca" >&2
