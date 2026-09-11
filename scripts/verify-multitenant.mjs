@@ -1,3 +1,4 @@
+import { createHmac } from 'node:crypto';
 import pg from 'pg';
 
 const baseUrl = process.env.SMOKE_API_URL ?? 'http://localhost:3000';
@@ -8,6 +9,7 @@ const slug = `smoke-${Date.now()}`;
 let temporaryTenantId;
 const temporaryTenantIds = [];
 const temporaryUserIds = [];
+const stripeWebhookSecret = process.env.STRIPE_WEBHOOK_SECRET ?? 'whsec_local_e2e';
 
 const assert = (condition, message) => {
   if (!condition) throw new Error(message);
@@ -26,6 +28,61 @@ const request = async (path, options = {}) => {
 const cookieFrom = (response) => {
   const cookies = response.headers.getSetCookie?.() ?? [];
   return cookies.map((value) => value.split(';', 1)[0]).find((value) => value.startsWith('zapcall_refresh='));
+};
+
+const activateTestPlan = async (tenantId, organizerAuth) => {
+  if (process.env.BILLING_ENFORCEMENT_MODE !== 'enforce') return;
+  const pool = new pg.Pool({ connectionString: process.env.DATABASE_URL ?? 'postgres://zapcall:zapcall@localhost:5432/zapcall' });
+  try {
+    await pool.query("UPDATE billing_plan_versions SET status = 'active', effective_from = COALESCE(effective_from, now()) WHERE id = 'plan_growth_v1'");
+    await pool.query(`
+      INSERT INTO billing_plan_prices (id, plan_version_id, stripe_price_id, livemode, currency, unit_amount, billing_interval, interval_count, active)
+      VALUES ('smoke-growth-month', 'plan_growth_v1', 'price_smoke_growth_month', false, 'brl', 24990, 'month', 1, true)
+      ON CONFLICT (id) DO UPDATE SET active = true, stripe_price_id = EXCLUDED.stripe_price_id, unit_amount = EXCLUDED.unit_amount
+    `);
+    await pool.query(`
+      INSERT INTO billing_addon_prices (id, addon_code, version, display_name, stripe_price_id, livemode, currency, unit_amount, billing_interval, interval_count, active)
+      VALUES ('smoke-sdr-seat-month', 'sdr_seat', 1, 'SDR adicional', 'price_smoke_sdr_month', false, 'brl', 1990, 'month', 1, true)
+      ON CONFLICT (addon_code, version, billing_interval, livemode) DO UPDATE SET active = true, stripe_price_id = EXCLUDED.stripe_price_id, unit_amount = EXCLUDED.unit_amount
+    `);
+    const customerId = `cus_smoke_${tenantId}`;
+    await pool.query(`
+      INSERT INTO tenant_billing_accounts (tenant_id, stripe_customer_id, livemode)
+      VALUES ($1, $2, false)
+      ON CONFLICT (tenant_id, livemode) DO UPDATE SET stripe_customer_id = EXCLUDED.stripe_customer_id, updated_at = now()
+    `, [tenantId, customerId]);
+    const now = Math.floor(Date.now() / 1000);
+    const event = {
+      id: `evt_smoke_${tenantId}`,
+      type: 'customer.subscription.pending_update_applied',
+      livemode: false,
+      api_version: '2025-06-30.basil',
+      created: now,
+      data: { object: {
+        id: `sub_smoke_${tenantId}`,
+        customer: customerId,
+        status: 'active',
+        current_period_start: now,
+        current_period_end: now + 30 * 24 * 60 * 60,
+        trial_end: null,
+        cancel_at_period_end: false,
+        canceled_at: null,
+        ended_at: null,
+        latest_invoice: `in_smoke_${tenantId}`,
+        metadata: { tenant_id: tenantId },
+        items: { data: [{ id: `si_smoke_base_${tenantId}`, price: { id: 'price_smoke_growth_month' }, quantity: 1 }] },
+      } },
+    };
+    const payload = JSON.stringify(event);
+    const timestamp = Math.floor(Date.now() / 1000);
+    const signature = createHmac('sha256', stripeWebhookSecret).update(`${timestamp}.${payload}`).digest('hex');
+    const webhook = await request('/api/billing/stripe/webhook', { method: 'POST', headers: { 'stripe-signature': `t=${timestamp},v1=${signature}` }, body: payload });
+    assert(webhook.response.ok, `ativação do plano de teste falhou: ${webhook.response.status}`);
+    const billing = await request(`/api/tenants/${tenantId}/billing`, { headers: organizerAuth });
+    assert(billing.response.ok && billing.body?.planCode === 'growth' && billing.body?.mode === 'full', 'plano Growth de teste não ficou ativo');
+  } finally {
+    await pool.end();
+  }
 };
 
 const cleanup = async () => {
@@ -87,6 +144,7 @@ try {
   assert(verification.response.ok, `verificação de e-mail falhou: ${verification.response.status}`);
   const organizerMe = await request('/api/auth/me', { headers: organizerAuth });
   assert(organizerMe.response.ok && organizerMe.body?.tenants?.some((tenant) => tenant.id === registration.body.tenant.id && tenant.role === 'leader'), 'organizador não recebeu membership leader');
+  await activateTestPlan(registration.body.tenant.id, organizerAuth);
   const sdrInvite = await request(`/api/tenants/${registration.body.tenant.id}/sdrs/invitations`, { method: 'POST', headers: organizerAuth, body: JSON.stringify({ name: 'SDR Smoke', email: `sdr-${Date.now()}@zapliga-smoke.local` }) });
   assert(sdrInvite.response.status === 201 && sdrInvite.body?.role === 'sdr' && sdrInvite.body?.invitationUrl, `organizador não conseguiu gerar link de SDR: ${sdrInvite.response.status}`);
   const invitationToken = String(sdrInvite.body?.invitationUrl ?? '').split('/').pop();

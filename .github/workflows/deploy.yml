@@ -88,6 +88,8 @@ jobs:
           SMOKE_API_URL: http://127.0.0.1:3000
           SMOKE_ADMIN_EMAIL: admin@zapliga.local
           SMOKE_ADMIN_PASSWORD: ZapCall-Smoke-2026!
+          STRIPE_WEBHOOK_SECRET: whsec_local_e2e
+          BILLING_ENFORCEMENT_MODE: enforce
         run: |
           docker compose -f docker-compose.yml -f docker-compose.e2e.yml exec -T api-a node apps/api/dist/scripts/bootstrap-admin.js
           npm run verify:multitenant
