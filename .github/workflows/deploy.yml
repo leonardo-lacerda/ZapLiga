@@ -269,8 +269,11 @@ jobs:
           # Products/Prices before either API replica receives traffic. The
           # command is idempotent and reuses lookup keys, so every deploy keeps
           # the local catalog convergent with the configured Live account.
-          "${COMPOSE[@]}" run --rm --no-deps api-a node apps/api/dist/scripts/migrate.js
-          "${COMPOSE[@]}" run --rm --no-deps api-a node apps/api/dist/scripts/sync-stripe-catalog.js
+          # Close stdin explicitly: this script itself is fed to the remote
+          # bash through stdin, and `docker compose run` otherwise can consume
+          # the remaining commands instead of returning control to bash.
+          "${COMPOSE[@]}" run -T --rm --no-deps api-a node apps/api/dist/scripts/migrate.js </dev/null
+          "${COMPOSE[@]}" run -T --rm --no-deps api-a node apps/api/dist/scripts/sync-stripe-catalog.js </dev/null
 
           "${COMPOSE[@]}" stop api >/dev/null 2>&1 || true
           "${COMPOSE[@]}" rm -sf api >/dev/null 2>&1 || true
