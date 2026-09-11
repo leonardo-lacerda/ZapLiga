@@ -138,6 +138,11 @@ jobs:
           DEPLOY_PORT: ${{ secrets.DEPLOY_PORT }}
           DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
           DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          STRIPE_SECRET_KEY: ${{ secrets.STRIPE_SECRET_KEY }}
+          STRIPE_WEBHOOK_SECRET: ${{ secrets.STRIPE_WEBHOOK_SECRET }}
+          STRIPE_LIVEMODE: ${{ secrets.STRIPE_LIVEMODE }}
+          STRIPE_PORTAL_CONFIGURATION_ID: ${{ secrets.STRIPE_PORTAL_CONFIGURATION_ID }}
+          BILLING_ENFORCEMENT_MODE: ${{ secrets.BILLING_ENFORCEMENT_MODE }}
         run: |
           set -euo pipefail
           deploy_key="$RUNNER_TEMP/zapliga-deploy-key"
@@ -146,7 +151,7 @@ jobs:
 
           tar --exclude=.git --exclude=.env -czf - . | ssh -i "$deploy_key" -p "${DEPLOY_PORT:-22}" -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes "$DEPLOY_USER@$DEPLOY_HOST" 'mkdir -p /opt/zapliga && tar -xzf - -C /opt/zapliga'
 
-          ssh -i "$deploy_key" -p "${DEPLOY_PORT:-22}" -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes "$DEPLOY_USER@$DEPLOY_HOST" "GITHUB_SHA=$GITHUB_SHA bash -se" <<'REMOTE'
+          ssh -i "$deploy_key" -p "${DEPLOY_PORT:-22}" -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes "$DEPLOY_USER@$DEPLOY_HOST" "GITHUB_SHA='$GITHUB_SHA' STRIPE_SECRET_KEY='$STRIPE_SECRET_KEY' STRIPE_WEBHOOK_SECRET='$STRIPE_WEBHOOK_SECRET' STRIPE_LIVEMODE='$STRIPE_LIVEMODE' STRIPE_PORTAL_CONFIGURATION_ID='$STRIPE_PORTAL_CONFIGURATION_ID' BILLING_ENFORCEMENT_MODE='$BILLING_ENFORCEMENT_MODE' bash -se" <<'REMOTE'
           set -Eeuo pipefail
 
           APP_DIR=/opt/zapliga
@@ -157,12 +162,34 @@ jobs:
           fi
 
           cd "$APP_DIR"
-          if [ ! -f .env ]; then
-            echo "Crie /opt/zapliga/.env antes do primeiro deploy" >&2
-            exit 1
-          fi
+           if [ ! -f .env ]; then
+             echo "Crie /opt/zapliga/.env antes do primeiro deploy" >&2
+             exit 1
+           fi
 
-          # Billing is fail-closed in production. Validate the presence and
+           # The encrypted production environment secrets are synchronized into
+           # the host-managed .env without ever printing their values. Existing
+           # host values remain untouched when a secret is not configured yet.
+           upsert_env_value() {
+             local key="$1" value="$2" tmp
+             [ -n "$value" ] || return 0
+             tmp="$(mktemp)"
+             awk -v key="$key" -v value="$value" '
+               BEGIN { prefix = key "="; found = 0 }
+               index($0, prefix) == 1 { print prefix value; found = 1; next }
+               { print }
+               END { if (!found) print prefix value }
+             ' .env > "$tmp"
+             chmod --reference=.env "$tmp" 2>/dev/null || chmod 600 "$tmp"
+             mv "$tmp" .env
+           }
+           upsert_env_value STRIPE_SECRET_KEY "${STRIPE_SECRET_KEY:-}"
+           upsert_env_value STRIPE_WEBHOOK_SECRET "${STRIPE_WEBHOOK_SECRET:-}"
+           upsert_env_value STRIPE_LIVEMODE "${STRIPE_LIVEMODE:-}"
+           upsert_env_value STRIPE_PORTAL_CONFIGURATION_ID "${STRIPE_PORTAL_CONFIGURATION_ID:-}"
+           upsert_env_value BILLING_ENFORCEMENT_MODE "${BILLING_ENFORCEMENT_MODE:-}"
+
+           # Billing is fail-closed in production. Validate the presence and
           # mode of its runtime configuration before touching infrastructure or
           # building images, while never printing secret values to the log.
           env_value() { grep -m1 "^$1=" .env 2>/dev/null | cut -d= -f2- || true; }
