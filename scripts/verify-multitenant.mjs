@@ -196,6 +196,7 @@ try {
   const createdTenant = await request('/api/tenants', { method: 'POST', headers: auth, body: JSON.stringify({ name: 'Smoke Tenant', slug }) });
   assert(createdTenant.response.status === 201 && createdTenant.body?.id, `criação de tenant falhou: ${createdTenant.response.status}`);
   temporaryTenantId = createdTenant.body.id;
+  await activateTestPlan(temporaryTenantId, auth);
 
   for (const route of ['leads', 'callbacks', 'privacy/requests', 'dialer/schedule', 'feature-flags', 'onboarding', 'contact-suppressions']) {
     const isolated = await request(`/api/tenants/${temporaryTenantId}/${route}`, { headers: { ...organizerAuth, 'x-tenant-id': temporaryTenantId } });
