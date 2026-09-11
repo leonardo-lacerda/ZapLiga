@@ -27,6 +27,10 @@ services:
       SUPERADMIN_PASSWORD: ZapCall-Smoke-2026!
       WEB_ORIGIN: ${E2E_WEB_ORIGIN:-http://127.0.0.1:5173}
       PUBLIC_API_ORIGIN: ${E2E_API_ORIGIN:-http://127.0.0.1:3000}
+      STRIPE_SECRET_KEY: sk_test_local_e2e
+      STRIPE_WEBHOOK_SECRET: whsec_local_e2e
+      STRIPE_LIVEMODE: "false"
+      BILLING_ENFORCEMENT_MODE: enforce
   api-b:
     environment:
       NODE_ENV: test
@@ -37,6 +41,10 @@ services:
       SUPERADMIN_PASSWORD: ZapCall-Smoke-2026!
       WEB_ORIGIN: ${E2E_WEB_ORIGIN:-http://127.0.0.1:5173}
       PUBLIC_API_ORIGIN: ${E2E_API_ORIGIN:-http://127.0.0.1:3000}
+      STRIPE_SECRET_KEY: sk_test_local_e2e
+      STRIPE_WEBHOOK_SECRET: whsec_local_e2e
+      STRIPE_LIVEMODE: "false"
+      BILLING_ENFORCEMENT_MODE: enforce
   web:
     build:
       args:

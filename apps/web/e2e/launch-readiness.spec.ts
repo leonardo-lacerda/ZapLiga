@@ -1,3 +1,5 @@
+import { createHmac } from 'node:crypto';
+import { Pool } from 'pg';
 import { expect, request as playwrightRequest, test } from '@playwright/test';
 import WebSocket from 'ws';
 
@@ -8,6 +10,14 @@ const initialPassword = 'Launch!23456';
 const changedPassword = 'Changed!23456';
 const e2eAdminEmail = process.env.E2E_ADMIN_EMAIL ?? 'admin@zapliga.local';
 const e2eAdminPassword = process.env.E2E_ADMIN_PASSWORD ?? 'ZapCall-Smoke-2026!';
+const stripeWebhookSecret = process.env.STRIPE_WEBHOOK_SECRET ?? 'whsec_local_e2e';
+const billingPool = new Pool({
+  host: process.env.BILLING_PG_HOST ?? '127.0.0.1',
+  port: Number(process.env.BILLING_PG_PORT ?? process.env.POSTGRES_HOST_PORT ?? 5432),
+  database: 'zapcall',
+  user: 'zapcall',
+  password: 'zapcall',
+});
 
 let leaderToken = '';
 let adminToken = '';
@@ -31,8 +41,73 @@ const expectOk = async (response: any) => {
   return body;
 };
 const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+async function waitFor<T>(predicate: () => Promise<T | false>, label: string, timeoutMs = 15_000): Promise<T> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const value = await predicate();
+    if (value) return value as T;
+    await delay(500);
+  }
+  throw new Error(`Timeout: ${label}`);
+}
 
 async function context() { return playwrightRequest.newContext({ baseURL: apiBase }); }
+async function activateGrowthPlan(tenantId: string) {
+  await billingPool.query("UPDATE billing_plan_versions SET status = 'active', effective_from = COALESCE(effective_from, now()) WHERE id = 'plan_growth_v1'");
+  await billingPool.query(`
+    INSERT INTO billing_plan_prices (id, plan_version_id, stripe_price_id, livemode, currency, unit_amount, billing_interval, interval_count, active)
+    VALUES ('e2e-growth-month', 'plan_growth_v1', 'price_e2e_growth_month', false, 'brl', 24990, 'month', 1, true)
+    ON CONFLICT (id) DO UPDATE SET active = true, stripe_price_id = EXCLUDED.stripe_price_id, unit_amount = EXCLUDED.unit_amount
+  `);
+  await billingPool.query(`
+    INSERT INTO billing_addon_prices (id, addon_code, version, display_name, stripe_price_id, livemode, currency, unit_amount, billing_interval, interval_count, active)
+    VALUES ('e2e-sdr-seat-month', 'sdr_seat', 1, 'SDR adicional', 'price_e2e_sdr_month', false, 'brl', 1990, 'month', 1, true)
+    ON CONFLICT (addon_code, version, billing_interval, livemode) DO UPDATE SET active = true, stripe_price_id = EXCLUDED.stripe_price_id, unit_amount = EXCLUDED.unit_amount
+  `);
+  const customerId = `cus_e2e_${tenantId}`;
+  await billingPool.query(`
+    INSERT INTO tenant_billing_accounts (tenant_id, stripe_customer_id, livemode)
+    VALUES ($1, $2, false)
+    ON CONFLICT (tenant_id, livemode) DO UPDATE SET stripe_customer_id = EXCLUDED.stripe_customer_id, updated_at = now()
+  `, [tenantId, customerId]);
+  const now = Math.floor(Date.now() / 1000);
+  const event = {
+    id: `evt_e2e_${tenantId}`,
+    type: 'customer.subscription.pending_update_applied',
+    livemode: false,
+    api_version: '2025-06-30.basil',
+    created: now,
+    data: { object: {
+      id: `sub_e2e_${tenantId}`,
+      customer: customerId,
+      status: 'active',
+      current_period_start: now,
+      current_period_end: now + 30 * 24 * 60 * 60,
+      trial_end: null,
+      cancel_at_period_end: false,
+      canceled_at: null,
+      ended_at: null,
+      latest_invoice: `in_e2e_${tenantId}`,
+      metadata: { tenant_id: tenantId },
+      items: { data: [
+        { id: `si_e2e_base_${tenantId}`, price: { id: 'price_e2e_growth_month' }, quantity: 1 },
+        { id: `si_e2e_seat_${tenantId}`, price: { id: 'price_e2e_sdr_month' }, quantity: 2 },
+      ] },
+    } },
+  };
+  const payload = JSON.stringify(event);
+  const timestamp = Math.floor(Date.now() / 1000);
+  const signature = createHmac('sha256', stripeWebhookSecret).update(`${timestamp}.${payload}`).digest('hex');
+  const api = await context();
+  await expectOk(await api.post('/api/billing/stripe/webhook', { headers: { 'content-type': 'application/json', 'stripe-signature': `t=${timestamp},v1=${signature}` }, data: payload }));
+  await waitFor(async () => {
+    const current = await api.get(`/api/tenants/${tenantId}/billing`, { headers: headers(adminToken, tenantId) });
+    if (!current.ok()) return false;
+    const body = await current.json();
+    return body.mode === 'full' && body.planCode === 'growth';
+  }, `plano Growth ativo para ${tenantId}`);
+  await api.dispose();
+}
 async function register(email: string, companyName: string) {
   const api = await context();
   const body = await expectOk(await api.post('/api/auth/register', { data: { name: 'Lider E2E', email, password: initialPassword, companyName, companySlug: `${companyName}-${suffix}`.toLowerCase().replace(/[^a-z0-9]+/g, '-'), legalAccepted: true } }));
@@ -73,6 +148,8 @@ async function waitForPause(api: any) {
 }
 
 test.describe.serial('Gate B - jornadas criticas', () => {
+  test.afterAll(async () => { await billingPool.end(); });
+
   test('1. cadastro, aceite legal, verificacao e login pela interface', async ({ page }) => {
     await page.goto('/registro');
     await page.getByLabel('Seu nome').fill('Lider E2E');
@@ -115,6 +192,7 @@ test.describe.serial('Gate B - jornadas criticas', () => {
     const updatedFlags = await expectOk(await api.get(`/api/tenants/${tenantA}/feature-flags`, { headers: headers(adminToken, tenantA) }));
     for (const feature of roadmapFeatures) expect(updatedFlags[feature], `${feature} nao deve ser ativada por outra flag`).toBe(false);
     await expectOk(await api.patch(`/api/tenants/${tenantA}/feature-flags`, { headers: headers(adminToken, tenantA), data: { campaigns: true } }));
+    await activateGrowthPlan(tenantA);
     await api.dispose();
   });
 
@@ -153,6 +231,7 @@ test.describe.serial('Gate B - jornadas criticas', () => {
     const ownerBEmail = `owner-b-${suffix}@example.test`;
     const createdB = await register(ownerBEmail, 'Tenant B');
     tenantB = createdB.tenant.id; ownerBToken = createdB.accessToken;
+    await activateGrowthPlan(tenantB);
     const api = await context();
     await expectOk(await api.patch(`/api/tenants/${tenantB}/feature-flags`, { headers: headers(adminToken, tenantB), data: { campaigns: true } }));
     const invitation = await expectOk(await api.post(`/api/tenants/${tenantB}/invitations`, { headers: headers(ownerBToken, tenantB), data: { email: leaderEmail, role: 'leader' } }));
@@ -268,7 +347,7 @@ test.describe.serial('Gate B - jornadas criticas', () => {
     const api = await context();
     await expectOk(await api.put(`/api/tenants/${tenantA}/dialer/schedule`, { headers: headers(leaderToken, tenantA), data: { timezone: 'America/Sao_Paulo', windows: [], exceptions: [] } }));
     const blocked = await api.post(`/api/tenants/${tenantA}/calls/manual`, { headers: headers(leaderToken, tenantA), data: { phone: '5511988887777', name: 'Bloqueado' } });
-    expect(blocked.status()).toBe(400);
+    expect(blocked.status()).toBe(409);
     await expectOk(await api.put(`/api/tenants/${tenantA}/dialer/schedule`, { headers: headers(leaderToken, tenantA), data: { timezone: 'America/Sao_Paulo', windows: Array.from({ length: 7 }, (_, day_of_week) => ({ day_of_week, start_time: '00:00', end_time: '23:59' })), exceptions: [] } }));
     await api.dispose();
   });
