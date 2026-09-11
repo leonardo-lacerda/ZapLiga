@@ -146,6 +146,7 @@ try {
   const me = await request('/api/auth/me', { headers: auth });
   assert(me.response.ok && me.body?.user?.platformRole === 'super_admin', 'me não identificou o Admin supremo');
 
+  await activateTestPlan(legacyTenantId, auth);
   const registrationEmail = `organizer-${Date.now()}@zapliga-smoke.local`;
   const registration = await request('/api/auth/register', { method: 'POST', body: JSON.stringify({ name: 'Organizador Smoke', email: registrationEmail, password: 'OrganizerSmoke2026', companyName: 'Empresa Smoke Organizer', companySlug: `empresa-smoke-${Date.now()}`, legalAccepted: true }) });
   assert(registration.response.status === 201 && registration.body?.accessToken && registration.body?.user?.platformRole === 'user' && registration.body?.tenant?.role === 'leader', `cadastro de organizador falhou: ${registration.response.status}`);
