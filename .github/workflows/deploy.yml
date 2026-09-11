@@ -336,7 +336,7 @@ jobs:
             sleep 2
           done
           web_asset="$(printf '%s' "$web_index" | sed -n 's/.*src="\(\/app\/assets\/index-[^"]*\.js\)".*/\1/p')"
-          if [ -z "$web_asset" ] || ! curl -fsS "$WEB_BASE$web_asset" | grep -q '/app/cobranca'; then
+          if [ -z "$web_asset" ] || ! curl -fsS "$WEB_BASE$web_asset" | grep -F '/app/cobranca' >/dev/null; then
             echo "Frontend publicado sem a rota /app/cobranca" >&2
             exit 1
           fi
