@@ -1,6 +1,22 @@
 import { BillingService } from './billing.service';
 
 describe('BillingService subscription projection', () => {
+  it('uses the requested seat quantity when previewing a plan change', async () => {
+    const db = {
+      query: jest.fn().mockImplementation((sql: string) => {
+        if (sql.includes('SELECT ts.id, ts.stripe_subscription_id')) return Promise.resolve({ rows: [{ id: 'sub-row', stripe_subscription_id: 'sub-1', current_period_end: new Date(Date.now() + 86_400_000), sort_order: 1, billing_interval: 'month' }] });
+        if (sql.includes('SELECT pp.*')) return Promise.resolve({ rows: [{ plan_version_id: 'plan-growth-v1', code: 'growth', display_name: 'Growth', max_sdrs: 39, included_sdrs: 15, sort_order: 2, billing_interval: 'month', stripe_price_id: 'price-growth', unit_amount: 24990, currency: 'brl', limit_entitlements: { numbers: 10, leads: 250000 } }] });
+        if (sql.includes('SELECT (SELECT count(*)')) return Promise.resolve({ rows: [{ numbers: 0, leads: 0 }] });
+        return Promise.resolve({ rows: [] });
+      }),
+    };
+    const entitlement = { getAccess: jest.fn().mockResolvedValue({ planCode: 'starter', includedSdrs: 5, maxSdrs: 14, purchasedExtraSdrs: 1, usedSdrSeats: 4, reservedSdrSeats: 0 }) };
+    const service = new BillingService(db as any, { livemode: false } as any, entitlement as any, {} as any);
+
+    await expect(service.previewPlanChange('tenant-1', 'growth', 'month', 17)).resolves.toMatchObject({ currentTotalSeats: 6, targetTotalSeats: 17, extraSeats: 2 });
+    await expect(service.previewPlanChange('tenant-1', 'growth', 'month', 40)).rejects.toMatchObject({ response: expect.objectContaining({ code: 'seat_cap_exceeded' }) });
+  });
+
   it('allows purchasing an extra seat up to the plan commercial cap', async () => {
     const entitlement = {
       getAccess: jest.fn().mockResolvedValue({

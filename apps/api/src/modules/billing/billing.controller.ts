@@ -49,13 +49,13 @@ export class BillingController {
 
   @Post('/api/tenants/:tenantId/billing/plan-change/preview')
   planPreview(@CurrentTenant() tenantId: string, @Body() body: PlanChangeDto) {
-    return this.billing.previewPlanChange(tenantId, body.planCode, body.interval);
+    return this.billing.previewPlanChange(tenantId, body.planCode, body.interval, body.totalSdrSeats);
   }
 
   @Post('/api/tenants/:tenantId/billing/plan-change')
   @TenantAction('billing_recovery')
   planChange(@CurrentTenant() tenantId: string, @CurrentUser() user: any, @Body() body: PlanChangeDto, @Headers('idempotency-key') idempotencyKey?: string) {
-    return this.billing.changePlan(tenantId, user.id, body.planCode, body.interval, idempotencyKey);
+    return this.billing.changePlan(tenantId, user.id, body.planCode, body.interval, idempotencyKey, body.totalSdrSeats);
   }
 
   @Delete('/api/tenants/:tenantId/billing/changes/:changeId')

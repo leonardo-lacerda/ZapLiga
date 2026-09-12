@@ -175,6 +175,15 @@ test.describe.serial('Gate B - jornadas criticas', () => {
     await page.getByPlaceholder('Digite sua senha').fill(initialPassword);
     await page.getByRole('button', { name: 'Entrar na central' }).click();
     await expect(page).toHaveURL(/\/app\/?/);
+    await page.goto('/app/cobranca');
+    await expect(page.getByRole('heading', { name: 'Plano e cobrança' })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Adicionar mais SDR' }).first()).toBeVisible();
+    const starterPlan = page.locator('.billing-plan-card').filter({ has: page.getByRole('heading', { name: 'Starter', level: 3 }) });
+    await expect(starterPlan).toContainText('5 SDRs');
+    await starterPlan.getByRole('button', { name: 'Adicionar mais SDR' }).click();
+    await expect(starterPlan).toContainText('6 SDRs');
+    await expect(starterPlan).toContainText('R$ 109,80');
+    await page.goto('/app/');
     const api = await context();
     leaderToken = (await expectOk(await api.post('/api/auth/login', { data: { email: leaderEmail, password: initialPassword } }))).accessToken;
     adminToken = (await expectOk(await api.post('/api/auth/login', { data: { email: e2eAdminEmail, password: e2eAdminPassword } }))).accessToken;

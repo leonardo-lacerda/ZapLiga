@@ -24,10 +24,11 @@ export class BillingService {
     const subscription = await this.db.query(`
       SELECT ts.stripe_subscription_id, ts.stripe_price_id, ts.status, ts.current_period_start,
         ts.current_period_end, ts.trial_end, ts.cancel_at_period_end, ts.latest_invoice_id,
-        ts.latest_invoice_status, ts.access_until, ts.last_synced_at,
+        ts.latest_invoice_status, ts.access_until, ts.last_synced_at, pp.billing_interval,
         pv.code AS plan_code, pv.display_name AS plan_name, pv.max_sdrs
       FROM tenant_subscriptions ts
       LEFT JOIN billing_plan_versions pv ON pv.id = ts.plan_version_id
+      LEFT JOIN billing_plan_prices pp ON pp.stripe_price_id = ts.stripe_price_id AND pp.livemode = ts.livemode
       WHERE ts.tenant_id = $1 AND ts.livemode = $2
       ORDER BY ts.updated_at DESC LIMIT 1
     `, [tenantId, this.stripe.livemode]);
@@ -59,7 +60,7 @@ export class BillingService {
     return result.rows;
   }
 
-  async previewPlanChange(tenantId: string, toPlanCode: string, interval?: 'month' | 'year') {
+  async previewPlanChange(tenantId: string, toPlanCode: string, interval?: 'month' | 'year', requestedTotalSeats?: number) {
     const access = await this.entitlement.getAccess(tenantId);
     if (!access.planCode || access.includedSdrs == null || access.maxSdrs == null) throw new ConflictException('A organização ainda não possui uma assinatura ativa');
     const subscription = await this.db.query(`SELECT ts.id, ts.stripe_subscription_id, ts.current_period_end, pv.sort_order, pp.billing_interval FROM tenant_subscriptions ts JOIN billing_plan_versions pv ON pv.id = ts.plan_version_id LEFT JOIN billing_plan_prices pp ON pp.stripe_price_id = ts.stripe_price_id AND pp.livemode = ts.livemode WHERE ts.tenant_id = $1 AND ts.livemode = $2 AND ts.ended_at IS NULL ORDER BY ts.updated_at DESC LIMIT 1`, [tenantId, this.stripe.livemode]);
@@ -70,20 +71,25 @@ export class BillingService {
     }
     const targetPrice = await this.requirePrice(toPlanCode, interval ?? currentInterval ?? 'month');
     if (String(targetPrice.code) === String(access.planCode)) throw new ConflictException('O plano escolhido já está ativo');
-    const targetTotalSeats = Math.max(Number(access.includedSdrs) + Number(access.purchasedExtraSdrs ?? 0), Number(targetPrice.included_sdrs));
-    if (targetTotalSeats > Number(targetPrice.max_sdrs)) throw new ConflictException({ code: 'seat_cap_exceeded', message: `O plano ${targetPrice.code} não comporta os ${targetTotalSeats} SDRs atuais.`, currentTotalSeats: targetTotalSeats, limit: Number(targetPrice.max_sdrs) });
+    const currentTotalSeats = Number(access.includedSdrs) + Number(access.purchasedExtraSdrs ?? 0);
+    const targetTotalSeats = requestedTotalSeats == null
+      ? Math.max(currentTotalSeats, Number(targetPrice.included_sdrs))
+      : Math.floor(Number(requestedTotalSeats));
+    if (!Number.isInteger(targetTotalSeats) || targetTotalSeats < Number(targetPrice.included_sdrs)) throw new ConflictException(`O plano ${targetPrice.code} exige pelo menos ${targetPrice.included_sdrs} SDRs`);
+    if (targetTotalSeats < Number(access.usedSdrSeats ?? 0) + Number(access.reservedSdrSeats ?? 0)) throw new ConflictException(`Não é possível reduzir abaixo de ${Number(access.usedSdrSeats ?? 0) + Number(access.reservedSdrSeats ?? 0)} SDRs em uso ou convite pendente`);
+    if (targetTotalSeats > Number(targetPrice.max_sdrs)) throw new ConflictException({ code: 'seat_cap_exceeded', message: `O plano ${targetPrice.code} não comporta os ${targetTotalSeats} SDRs solicitados.`, currentTotalSeats, limit: Number(targetPrice.max_sdrs) });
     const usage = await this.db.query(`SELECT (SELECT count(*)::int FROM whatsapp_numbers WHERE tenant_id = $1 AND status <> 'removed') AS numbers, (SELECT count(*)::int FROM leads WHERE tenant_id = $1) AS leads`, [tenantId]);
     const limits = targetPrice.limit_entitlements ?? {};
     if (Number(usage.rows[0]?.numbers ?? 0) > Number(limits.numbers ?? Number.MAX_SAFE_INTEGER) || Number(usage.rows[0]?.leads ?? 0) > Number(limits.leads ?? Number.MAX_SAFE_INTEGER)) throw new ConflictException({ code: 'plan_limit_below_usage', message: 'O uso atual excede os limites do plano escolhido.', usage: usage.rows[0], limits });
     const currentSort = Number(subscription.rows[0].sort_order ?? 0);
     const targetSort = Number(targetPrice.sort_order ?? 0);
     const effectiveAt = targetSort < currentSort ? 'period_end' as const : 'immediate' as const;
-    return { currentPlanCode: access.planCode, currentTotalSeats: Number(access.includedSdrs) + Number(access.purchasedExtraSdrs ?? 0), targetPlanCode: targetPrice.code, targetPlanVersionId: targetPrice.plan_version_id, targetPlanName: targetPrice.display_name, targetPriceId: targetPrice.stripe_price_id, targetTotalSeats, extraSeats: Math.max(0, targetTotalSeats - Number(targetPrice.included_sdrs)), interval: targetPrice.billing_interval, effectiveAt, currentPeriodEnd: subscription.rows[0].current_period_end ?? null, price: { amount: Number(targetPrice.unit_amount), currency: targetPrice.currency } };
+    return { currentPlanCode: access.planCode, currentTotalSeats, targetPlanCode: targetPrice.code, targetPlanVersionId: targetPrice.plan_version_id, targetPlanName: targetPrice.display_name, targetPriceId: targetPrice.stripe_price_id, targetTotalSeats, extraSeats: Math.max(0, targetTotalSeats - Number(targetPrice.included_sdrs)), interval: targetPrice.billing_interval, effectiveAt, currentPeriodEnd: subscription.rows[0].current_period_end ?? null, price: { amount: Number(targetPrice.unit_amount), currency: targetPrice.currency } };
   }
 
-  async changePlan(tenantId: string, actorUserId: string, toPlanCode: string, interval?: 'month' | 'year', idempotencyKey?: string) {
+  async changePlan(tenantId: string, actorUserId: string, toPlanCode: string, interval?: 'month' | 'year', idempotencyKey?: string, requestedTotalSeats?: number) {
     await this.entitlement.assertAction(tenantId, 'billing_recovery', actorUserId);
-    const preview = await this.previewPlanChange(tenantId, toPlanCode, interval);
+    const preview = await this.previewPlanChange(tenantId, toPlanCode, interval, requestedTotalSeats);
     const pending = await this.db.query(`SELECT id FROM tenant_billing_changes WHERE tenant_id = $1 AND status IN ('pending_payment', 'scheduled') LIMIT 1`, [tenantId]);
     if (pending.rows[0]) throw new ConflictException({ code: 'billing_change_in_progress', message: 'Já existe uma alteração de cobrança pendente.' });
     const subscription = await this.db.query(`SELECT ts.id, ts.stripe_subscription_id, ts.current_period_end FROM tenant_subscriptions ts WHERE ts.tenant_id = $1 AND ts.livemode = $2 AND ts.ended_at IS NULL ORDER BY ts.updated_at DESC LIMIT 1`, [tenantId, this.stripe.livemode]);
