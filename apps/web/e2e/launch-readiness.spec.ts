@@ -52,6 +52,27 @@ async function waitFor<T>(predicate: () => Promise<T | false>, label: string, ti
 }
 
 async function context() { return playwrightRequest.newContext({ baseURL: apiBase }); }
+async function seedBillingCatalog() {
+  await billingPool.query("UPDATE billing_plan_versions SET status = 'active', effective_from = COALESCE(effective_from, now()) WHERE id IN ('plan_starter_v1', 'plan_growth_v1', 'plan_pro_v1')");
+  await billingPool.query(`
+    INSERT INTO billing_plan_prices (id, plan_version_id, stripe_price_id, livemode, currency, unit_amount, billing_interval, interval_count, active)
+    VALUES
+      ('e2e-starter-month', 'plan_starter_v1', 'price_e2e_starter_month', false, 'brl', 8990, 'month', 1, true),
+      ('e2e-starter-year', 'plan_starter_v1', 'price_e2e_starter_year', false, 'brl', 89900, 'year', 1, true),
+      ('e2e-growth-month', 'plan_growth_v1', 'price_e2e_growth_month', false, 'brl', 24990, 'month', 1, true),
+      ('e2e-growth-year', 'plan_growth_v1', 'price_e2e_growth_year', false, 'brl', 249900, 'year', 1, true),
+      ('e2e-pro-month', 'plan_pro_v1', 'price_e2e_pro_month', false, 'brl', 59990, 'month', 1, true),
+      ('e2e-pro-year', 'plan_pro_v1', 'price_e2e_pro_year', false, 'brl', 599900, 'year', 1, true)
+    ON CONFLICT (id) DO UPDATE SET active = true, stripe_price_id = EXCLUDED.stripe_price_id, unit_amount = EXCLUDED.unit_amount, billing_interval = EXCLUDED.billing_interval
+  `);
+  await billingPool.query(`
+    INSERT INTO billing_addon_prices (id, addon_code, version, display_name, stripe_price_id, livemode, currency, unit_amount, billing_interval, interval_count, active)
+    VALUES
+      ('e2e-sdr-seat-month', 'sdr_seat', 1, 'SDR adicional', 'price_e2e_sdr_month', false, 'brl', 1990, 'month', 1, true),
+      ('e2e-sdr-seat-year', 'sdr_seat', 1, 'SDR adicional', 'price_e2e_sdr_year', false, 'brl', 19900, 'year', 1, true)
+    ON CONFLICT (addon_code, version, billing_interval, livemode) DO UPDATE SET active = true, stripe_price_id = EXCLUDED.stripe_price_id, unit_amount = EXCLUDED.unit_amount, updated_at = now()
+  `);
+}
 async function activateGrowthPlan(tenantId: string) {
   await billingPool.query("UPDATE billing_plan_versions SET status = 'active', effective_from = COALESCE(effective_from, now()) WHERE id = 'plan_growth_v1'");
   await billingPool.query(`
@@ -148,6 +169,7 @@ async function waitForPause(api: any) {
 }
 
 test.describe.serial('Gate B - jornadas criticas', () => {
+  test.beforeAll(async () => { await seedBillingCatalog(); });
   test.afterAll(async () => { await billingPool.end(); });
 
   test('1. cadastro, aceite legal, verificacao e login pela interface', async ({ page }) => {
