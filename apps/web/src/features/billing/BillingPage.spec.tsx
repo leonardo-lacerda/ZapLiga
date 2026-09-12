@@ -10,7 +10,7 @@ const plans = [
     code: 'starter', display_name: 'Starter', included_sdrs: 5, max_sdrs: 14,
     description: 'Para equipes pequenas',
     feature_entitlements: { callbacks: 'full', operation_health: 'basic' },
-    limit_entitlements: { numbers: 3, leads: 25000 },
+    limit_entitlements: { numbers: 3, leads: 25000, retention_days: 90, max_concurrent_dialers: 1 },
     prices: [{ interval: 'month', amount: 8990, currency: 'brl' }, { interval: 'year', amount: 89900, currency: 'brl' }],
     seat_prices: [{ interval: 'month', amount: 1990, currency: 'brl' }, { interval: 'year', amount: 19900, currency: 'brl' }],
   },
@@ -18,7 +18,7 @@ const plans = [
     code: 'growth', display_name: 'Growth', included_sdrs: 15, max_sdrs: 39,
     description: 'Para operações em crescimento',
     feature_entitlements: { campaigns: 'full' },
-    limit_entitlements: { numbers: 10, leads: 250000 },
+    limit_entitlements: { numbers: 10, leads: 250000, retention_days: 365, max_concurrent_dialers: 3 },
     prices: [{ interval: 'month', amount: 24990, currency: 'brl' }, { interval: 'year', amount: 249900, currency: 'brl' }],
     seat_prices: [{ interval: 'month', amount: 1990, currency: 'brl' }, { interval: 'year', amount: 19900, currency: 'brl' }],
   },
@@ -42,7 +42,10 @@ it('mostra preços, recursos e limites do catálogo sem campo global de SDRs', a
   expect(screen.queryByLabelText('Quantidade inicial de SDRs')).not.toBeInTheDocument();
   expect(screen.getAllByRole('button', { name: 'Adicionar mais SDR' })).toHaveLength(2);
   expect(screen.getByText('Callbacks')).toBeInTheDocument();
-  expect(screen.getAllByText(/números:/).length).toBeGreaterThan(0);
+  expect(screen.queryByText(/números:/)).not.toBeInTheDocument();
+  expect(screen.queryByText(/discadores simultâneos:/)).not.toBeInTheDocument();
+  expect(screen.getAllByText(/Hist.rico de m.tricas:/).length).toBeGreaterThan(0);
+  expect(screen.getAllByText(/Per.odo do hist.rico de m.tricas/).length).toBeGreaterThan(0);
   expect(screen.getAllByText(/R\$ 89,90/).length).toBeGreaterThan(0);
   expect(screen.getAllByText(/R\$ 249,90/).length).toBeGreaterThan(0);
 });

@@ -18,7 +18,11 @@ const featureLabels: Record<string, string> = {
   analytics_learning: 'Aprendizado analítico', experiments: 'Experimentos', benchmarks: 'Benchmarks', lead_ingestion_api: 'API de leads', advanced_reports: 'Relatórios avançados',
 };
 const levelLabels: Record<string, string> = { full: 'Completo', basic: 'Básico', read_only: 'Consulta' };
-const limitLabels: Record<string, string> = { numbers: 'números', leads: 'leads', retention_days: 'dias de retenção', max_concurrent_dialers: 'discadores simultâneos' };
+const limitLabels: Record<string, string> = { leads: 'leads', retention_days: 'Histórico de métricas' };
+
+const limitValueLabel = (code: string, value: unknown) => code === 'retention_days'
+  ? `${Number(value).toLocaleString('pt-BR')} dias`
+  : Number(value).toLocaleString('pt-BR');
 
 const asInteger = (value: unknown, fallback = 0) => {
   const parsed = Number(value);
@@ -68,12 +72,13 @@ const clampSeats = (value: unknown, included: number, max: number) => Math.min(m
 function PlanEntitlements({ plan }: { plan: AnyRow }) {
   const [expanded, setExpanded] = useState(false);
   const features = Object.entries((plan.feature_entitlements ?? {}) as Record<string, unknown>).filter(([, level]) => level !== 'none');
-  const limits = Object.entries((plan.limit_entitlements ?? {}) as Record<string, unknown>);
+  const limits = Object.entries((plan.limit_entitlements ?? {}) as Record<string, unknown>)
+    .filter(([code]) => !['numbers', 'max_concurrent_dialers'].includes(code));
   const visibleFeatures = expanded ? features : features.slice(0, 6);
   return <div className="billing-entitlements">
     {visibleFeatures.length > 0 && <div><p className="billing-subheading">Incluído no plano</p><ul className="billing-feature-list">{visibleFeatures.map(([code, level]) => <li key={code}><Icon name="check" size={13} /><span>{featureLabels[code] ?? code}</span><small>{levelLabels[String(level)] ?? String(level)}</small></li>)}</ul></div>}
     {features.length > 6 && <button type="button" className="billing-link-button" onClick={() => setExpanded((current) => !current)}>{expanded ? 'Mostrar menos' : `Ver todos os recursos (${features.length})`}</button>}
-    {limits.length > 0 && <div className="billing-limits"><p className="billing-subheading">Limites do plano</p><div className="billing-limit-list">{limits.map(([code, value]) => <span key={code}>{limitLabels[code] ?? code}: <strong>{Number(value).toLocaleString('pt-BR')}</strong></span>)}</div></div>}
+    {limits.length > 0 && <div className="billing-limits"><p className="billing-subheading">Limites do plano</p><div className="billing-limit-list">{limits.map(([code, value]) => <span key={code}>{limitLabels[code] ?? code}: <strong>{limitValueLabel(code, value)}</strong></span>)}</div>{limits.some(([code]) => code === 'retention_days') && <small className="billing-retention-note">Período do histórico de métricas: etapas dos leads, disponibilidade dos SDRs, status das linhas e exportações. Leads e chamadas não são removidos por esta regra.</small>}</div>}
   </div>;
 }
 

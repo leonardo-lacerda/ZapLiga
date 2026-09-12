@@ -12,7 +12,7 @@ Fazer o plano contratado pela organização controlar automaticamente:
 - quais recursos do ZapLiga estão disponíveis;
 - quantos SDRs a organização pode manter ativos ou reservar por convite;
 - quantos seats adicionais foram contratados;
-- limites operacionais como números, leads, retenção e concorrência;
+- limites comerciais de leads e do histórico de métricas;
 - o que acontece em upgrade, downgrade, cancelamento ou falha de pagamento.
 
 Hoje os recursos são habilitados manualmente pelo super admin por meio de feature
@@ -114,9 +114,8 @@ trabalho humano.
 | --- | --- | --- | --- | --- |
 | SDRs incluídos | 5 | 15 | 40 | 100+ |
 | SDRs adicionais | até 14 no total | até 39 | até 99 | customizado |
-| Números WhatsApp | 3 | 10 | 30 | customizado |
 | Leads armazenados | 25 mil | 250 mil | 1 milhão | customizado |
-| Retenção operacional | 90 dias | 365 dias | 730 dias | customizada |
+| Histórico de métricas | 90 dias | 365 dias | 730 dias | customizado |
 | Campanhas versionadas | — | incluído | incluído | incluído |
 | Integração de leads por API/webhook | — | incluído | incluído | incluído |
 | Motor de decisão de fila | — | incluído | incluído | incluído |
@@ -128,10 +127,10 @@ trabalho humano.
 | Relatórios avançados | — | básico | completo | customizado |
 | Suporte | padrão | prioritário | prioritário | SLA dedicado |
 
-Os limites de chamadas simultâneas não devem ser publicados como promessa até o
-teste real de carga Waxum/WhatsApp. A configuração inicial permanece em uma
-chamada simultânea por organização. A proposta futura de 1/3/5/customizado para
-Starter/Growth/Pro/Enterprise só entra no catálogo após o gate de capacidade.
+Não há limite comercial fixo de chamadas simultâneas por plano. A capacidade real
+continua sujeita a teste de carga Waxum/WhatsApp, saúde das linhas, limites
+técnicos e fair use. Qualquer teto operacional temporário deve ser tratado como
+controle de infraestrutura e comunicado separadamente do catálogo comercial.
 
 ### 3.3 Mapeamento para capacidades existentes
 
@@ -295,13 +294,19 @@ Exemplo Starter:
   "limits": {
     "included_sdrs": 5,
     "hard_sdr_cap": 14,
-    "max_numbers": 3,
     "max_leads": 25000,
-    "retention_days": 90,
-    "max_concurrent_calls": 1
+    "retention_days": 90
   }
 }
 ```
+
+`retention_days` é o período em que o ZapLiga mantém o histórico usado para
+métricas e auditoria operacional: mudanças de etapa dos leads, disponibilidade
+dos SDRs, status das linhas, agregações e exportações. Ao fim do prazo, esses
+registros ficam elegíveis para expurgo conforme a política de retenção; leads e
+chamadas não são removidos por essa regra. Números WhatsApp e chamadas não têm
+limite comercial fixo por plano: a proteção da infraestrutura continua sendo
+feita por capacidade, saúde das linhas, limites técnicos e fair use.
 
 ### 5.2 `billing_addon_prices`
 
@@ -412,10 +417,8 @@ um único snapshot:
     includedSdrs: number,
     purchasedExtraSdrs: number,
     maxSdrs: number,
-    maxNumbers: number,
     maxLeads: number,
-    retentionDays: number,
-    maxConcurrentCalls: number
+    retentionDays: number
   },
   source: 'stripe' | 'manual_grant' | 'none',
   version: number
@@ -820,7 +823,7 @@ integralmente `docs/deploy-runbook.md`. Rust/Waxum nunca deve ser compilado na V
 5. Evoluir projeção de assinatura para múltiplos items.
 6. Adaptar Checkout para plano + quantidade de seats.
 7. Implementar prévia/alteração de seats e mudanças pendentes.
-8. Aplicar limites de números, leads, retenção e concorrência.
+8. Aplicar limites de leads e de retenção do histórico de métricas; capacidade de chamadas será governada por infraestrutura, saúde das linhas e fair use, não por um limite fixo do plano.
 9. Implementar UI de comparação, simulador e gestão de seats.
 10. Migrar flags manuais para plano/override.
 11. Rodar shadow, sandbox e Test Clocks.

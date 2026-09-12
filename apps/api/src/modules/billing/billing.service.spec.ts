@@ -5,8 +5,8 @@ describe('BillingService subscription projection', () => {
     const db = {
       query: jest.fn().mockImplementation((sql: string) => {
         if (sql.includes('SELECT ts.id, ts.stripe_subscription_id')) return Promise.resolve({ rows: [{ id: 'sub-row', stripe_subscription_id: 'sub-1', current_period_end: new Date(Date.now() + 86_400_000), sort_order: 1, billing_interval: 'month' }] });
-        if (sql.includes('SELECT pp.*')) return Promise.resolve({ rows: [{ plan_version_id: 'plan-growth-v1', code: 'growth', display_name: 'Growth', max_sdrs: 39, included_sdrs: 15, sort_order: 2, billing_interval: 'month', stripe_price_id: 'price-growth', unit_amount: 24990, currency: 'brl', limit_entitlements: { numbers: 10, leads: 250000 } }] });
-        if (sql.includes('SELECT (SELECT count(*)')) return Promise.resolve({ rows: [{ numbers: 0, leads: 0 }] });
+        if (sql.includes('SELECT pp.*')) return Promise.resolve({ rows: [{ plan_version_id: 'plan-growth-v1', code: 'growth', display_name: 'Growth', max_sdrs: 39, included_sdrs: 15, sort_order: 2, billing_interval: 'month', stripe_price_id: 'price-growth', unit_amount: 24990, currency: 'brl', limit_entitlements: { leads: 250000, retention_days: 365 } }] });
+        if (sql.includes('SELECT count(*)::int AS leads')) return Promise.resolve({ rows: [{ leads: 0 }] });
         return Promise.resolve({ rows: [] });
       }),
     };

@@ -8,15 +8,15 @@ describe('PlanLimitsService', () => {
     return { service: new PlanLimitsService(db as any, entitlement as any), db, entitlement };
   };
 
-  it('uses the plan snapshot instead of legacy tenant limits', async () => {
+  it('does not cap customer-owned numbers while still enforcing the lead limit', async () => {
     const { service } = make([]);
-    await expect(service.assertCanAddNumbers('tenant-1', undefined, 1)).resolves.toMatchObject({ used: 2, limit: 3 });
+    await expect(service.assertCanAddNumbers('tenant-1', undefined, 1)).resolves.toMatchObject({ used: 2, limit: null, available: null });
     await expect(service.assertCanAddLeads('tenant-1', undefined, 2)).rejects.toMatchObject({ response: expect.objectContaining({ code: 'lead_limit_reached', limit: 25 }) });
   });
 
-  it('blocks concurrent reservations at the plan limit', async () => {
+  it('does not cap concurrent reservations at a plan-level dialer limit', async () => {
     const { service } = make([]);
-    await expect(service.assertCanReserveCall('tenant-1')).rejects.toMatchObject({ response: expect.objectContaining({ code: 'concurrent_call_limit_reached', limit: 1 }) });
+    await expect(service.assertCanReserveCall('tenant-1')).resolves.toMatchObject({ used: 1, limit: null, available: null });
   });
 
   it('does not allow capacity mutations while the organization is read-only', async () => {

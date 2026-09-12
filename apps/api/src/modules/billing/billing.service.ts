@@ -78,9 +78,9 @@ export class BillingService {
     if (!Number.isInteger(targetTotalSeats) || targetTotalSeats < Number(targetPrice.included_sdrs)) throw new ConflictException(`O plano ${targetPrice.code} exige pelo menos ${targetPrice.included_sdrs} SDRs`);
     if (targetTotalSeats < Number(access.usedSdrSeats ?? 0) + Number(access.reservedSdrSeats ?? 0)) throw new ConflictException(`Não é possível reduzir abaixo de ${Number(access.usedSdrSeats ?? 0) + Number(access.reservedSdrSeats ?? 0)} SDRs em uso ou convite pendente`);
     if (targetTotalSeats > Number(targetPrice.max_sdrs)) throw new ConflictException({ code: 'seat_cap_exceeded', message: `O plano ${targetPrice.code} não comporta os ${targetTotalSeats} SDRs solicitados.`, currentTotalSeats, limit: Number(targetPrice.max_sdrs) });
-    const usage = await this.db.query(`SELECT (SELECT count(*)::int FROM whatsapp_numbers WHERE tenant_id = $1 AND status <> 'removed') AS numbers, (SELECT count(*)::int FROM leads WHERE tenant_id = $1) AS leads`, [tenantId]);
+    const usage = await this.db.query('SELECT count(*)::int AS leads FROM leads WHERE tenant_id = $1', [tenantId]);
     const limits = targetPrice.limit_entitlements ?? {};
-    if (Number(usage.rows[0]?.numbers ?? 0) > Number(limits.numbers ?? Number.MAX_SAFE_INTEGER) || Number(usage.rows[0]?.leads ?? 0) > Number(limits.leads ?? Number.MAX_SAFE_INTEGER)) throw new ConflictException({ code: 'plan_limit_below_usage', message: 'O uso atual excede os limites do plano escolhido.', usage: usage.rows[0], limits });
+    if (Number(usage.rows[0]?.leads ?? 0) > Number(limits.leads ?? Number.MAX_SAFE_INTEGER)) throw new ConflictException({ code: 'plan_limit_below_usage', message: 'O uso atual excede os limites do plano escolhido.', usage: usage.rows[0], limits });
     const currentSort = Number(subscription.rows[0].sort_order ?? 0);
     const targetSort = Number(targetPrice.sort_order ?? 0);
     const effectiveAt = targetSort < currentSort ? 'period_end' as const : 'immediate' as const;

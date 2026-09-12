@@ -18,9 +18,9 @@ O host atual tem **4 vCPU, 6 GB RAM e 100 GB** (**medido no material de produç�
 Não há evidência suficiente para afirmar que o host suporta 50 ou 100 organizações com chamadas reais. O material disponível mostra apenas uma sessão Waxum ativa e pico histórico pequeno; os testes sintéticos de WebSocket não exercitam a sinalização completa do WhatsApp. Portanto:
 
 - **limite comercial recomendado antes de teste ponta a ponta:** 20 chamadas simultâneas por host como teto de planejamento conservador, não como benchmark comprovado;
-- com o limite padrão de **1 chamada concorrente por organização**, isso equivale a **20 organizações**;
+- usando **1 chamada concorrente por organização apenas como cenário de planejamento**, isso equivale a **20 organizações**; esse número não é um limite comercial do plano;
 - 20 organizações × 3 SDRs = **60 seats**, porque seat conectado não equivale a chamada ativa;
-- se cada organização vender 3 chamadas simultâneas, o mesmo host deve ser planejado para apenas **6 organizações**;
+- se cada organização precisar de 3 chamadas simultâneas, o mesmo host deve ser planejado para apenas **6 organizações**;
 - o primeiro gargalo provável é **Waxum/WhatsApp e o limite operacional por linha**, antes de CPU, RAM ou banco.
 
 ## B. O que a aplicação realmente usa
@@ -70,7 +70,7 @@ Para operar com folga, reservei aproximadamente 25% do host para sistema, Docker
 | Grande | 10 | 100 mil | 30 mil | 1 | 20 | 200 |
 | Alta concorrência | 20 | 100 mil | 30 mil | 3 | 6 | 120 |
 
-Os números de leads e chamadas são **premissas de planejamento**, não limites do produto. Uma organização com 10 SDRs não consome 10 vezes mais infraestrutura se o plano permitir apenas uma chamada simultânea; consome mais polling, consultas, conexões e suporte. O plano deve limitar explicitamente concorrência e fair use.
+Os números de leads e chamadas são **premissas de planejamento**, não limites do produto. Uma organização com 10 SDRs não consome 10 vezes mais infraestrutura. A capacidade de chamadas deve ser protegida por saúde das linhas, limites técnicos e fair use, sem uma chave fixa de discadores simultâneos por plano.
 
 ### C.3 Números, cooldown e produtividade
 
@@ -214,11 +214,11 @@ Com churn de 5%, a vida média esperada é 20 meses. No ticket de R$ 348, a cont
 
 | Plano | Mensalidade | Inclui | Limite operacional |
 |---|---:|---|---|
-| Base | R$ 299 + R$ 49/SDR | painel, métricas e 1 número | 1 chamada concorrente |
-| Growth | R$ 499 + R$ 69/SDR | automações e suporte prioritário | 3 chamadas concorrentes |
-| Scale | R$ 999 + R$ 99/SDR | multi-equipe, SLA comercial e revisão de capacidade | 5 chamadas, sujeito a teste |
+| Base | R$ 299 + R$ 49/SDR | painel, métricas e operação de linhas | capacidade técnica e fair use |
+| Growth | R$ 499 + R$ 69/SDR | automações e suporte prioritário | capacidade técnica e fair use |
+| Scale | R$ 999 + R$ 99/SDR | multi-equipe, SLA comercial e revisão de capacidade | capacidade contratada e fair use |
 
-Cobrança mínima sugerida: **R$ 348/mês** (Base + 1 SDR). Setup: **R$ 149**, abatível em contrato anual. Para 3 SDRs, o Base fica em R$ 446; para 10 SDRs, R$ 789. Não vender “SDR ilimitado” sem limitar concorrência, polling, linhas e fair use.
+Cobrança mínima sugerida: **R$ 348/mês** (Base + 1 SDR). Setup: **R$ 149**, abatível em contrato anual. Para 3 SDRs, o Base fica em R$ 446; para 10 SDRs, R$ 789. Mesmo sem limite comercial fixo de concorrência, a operação continua sujeita a polling, linhas, capacidade da infraestrutura e fair use.
 
 > **Eu cobraria R$ 299 por organização + R$ 49 por SDR, com mínimo de R$ 348/mês e setup de R$ 149, porque o seat não gera licença técnica, mas a organização consome capacidade compartilhada, suporte, onboarding, governança e risco de operação WhatsApp.**
 

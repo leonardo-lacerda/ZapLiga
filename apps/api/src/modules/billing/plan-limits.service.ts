@@ -4,7 +4,7 @@ import { EntitlementService } from './entitlement.service';
 
 type Executor = { query: (text: string, params?: unknown[]) => Promise<any> };
 
-/** Enforces operational limits from the effective commercial snapshot. */
+/** Enforces commercial capacity limits from the effective subscription snapshot. */
 @Injectable()
 export class PlanLimitsService {
   constructor(private readonly db: DatabaseService, private readonly entitlement: EntitlementService) {}
@@ -37,12 +37,11 @@ export class PlanLimitsService {
 
   async assertCanAddNumbers(tenantId: string, executor: Executor = this.db, additional = 1) {
     await this.entitlement.acquireTenantLock(tenantId, executor);
-    const { access, limits } = await this.snapshot(tenantId, executor);
+    const { access } = await this.snapshot(tenantId, executor);
     this.ensureWritable(tenantId, access);
-    const limit = this.numeric(limits, 'numbers', 10_000);
     const current = Number((await executor.query("SELECT count(*)::int AS count FROM whatsapp_numbers WHERE tenant_id = $1 AND status <> 'removed'", [tenantId])).rows[0]?.count ?? 0);
-    if (current + additional > limit) throw new ConflictException({ code: 'number_limit_reached', message: 'O plano atingiu o limite de números.', used: current, limit, available: Math.max(0, limit - current) });
-    return { used: current, limit, available: Math.max(0, limit - current - additional) };
+    // WhatsApp numbers are customer-owned and are no longer capped by plan.
+    return { used: current, limit: null, available: null };
   }
 
   async assertCanAddLeads(tenantId: string, executor: Executor = this.db, additional = 1) {
@@ -58,12 +57,12 @@ export class PlanLimitsService {
 
   async assertCanReserveCall(tenantId: string, executor: Executor = this.db) {
     await this.entitlement.acquireTenantLock(tenantId, executor);
-    const { access, limits } = await this.snapshot(tenantId, executor);
+    const { access } = await this.snapshot(tenantId, executor);
     this.ensureWritable(tenantId, access);
-    const limit = this.numeric(limits, 'max_concurrent_dialers', 1);
     const current = Number((await executor.query("SELECT count(*)::int AS count FROM calls WHERE tenant_id = $1 AND status IN ('reserved','dialing','media_active')", [tenantId])).rows[0]?.count ?? 0);
-    if (current >= limit) throw new ConflictException({ code: 'concurrent_call_limit_reached', message: 'O plano atingiu o limite de chamadas simultâneas.', used: current, limit, available: 0 });
-    return { used: current, limit, available: limit - current - 1 };
+    // Calling capacity is governed by infrastructure, line health and fair use,
+    // not by a fixed plan-level concurrent-dialer entitlement.
+    return { used: current, limit: null, available: null };
   }
 
   async getLimits(tenantId: string) {
