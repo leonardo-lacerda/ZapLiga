@@ -48,12 +48,12 @@ export class TenantsService {
     return result.rows[0];
   }
 
-  async setLimits(id: string, limits: { maxLeads?: number; maxNumbers?: number; maxSdrs?: number }) {
+  async setLimits(id: string, limits: { maxLeads?: number }) {
     const result = await this.db.query(`
       UPDATE tenants
-      SET max_leads = COALESCE($1, max_leads), max_numbers = COALESCE($2, max_numbers), max_sdrs = COALESCE($3, max_sdrs), updated_at = now()
-      WHERE id = $4 RETURNING *
-    `, [limits.maxLeads ?? null, limits.maxNumbers ?? null, limits.maxSdrs ?? null, id]);
+      SET max_leads = COALESCE($1, max_leads), updated_at = now()
+      WHERE id = $2 RETURNING *
+    `, [limits.maxLeads ?? null, id]);
     if (!result.rows[0]) throw new NotFoundException('Empresa não encontrada');
     return result.rows[0];
   }

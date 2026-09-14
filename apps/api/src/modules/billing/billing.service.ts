@@ -7,6 +7,12 @@ import { EntitlementService } from './entitlement.service';
 
 const asDate = (seconds: unknown) => EntitlementService.providerDate(seconds);
 
+type BillingCommandOptions = {
+  bypassEntitlement?: boolean;
+  source?: 'organization' | 'admin';
+  reason?: string;
+};
+
 @Injectable()
 export class BillingService {
   private readonly logger = new Logger(BillingService.name);
@@ -32,9 +38,10 @@ export class BillingService {
       WHERE ts.tenant_id = $1 AND ts.livemode = $2
       ORDER BY ts.updated_at DESC LIMIT 1
     `, [tenantId, this.stripe.livemode]);
-    const pendingChanges = await this.db.query(`SELECT id, change_type, from_plan_code, to_plan_code, from_seat_quantity, to_seat_quantity, status, effective_at, created_at FROM tenant_billing_changes WHERE tenant_id = $1 AND status IN ('pending_payment', 'scheduled') ORDER BY created_at DESC`, [tenantId]);
+    const pendingChanges = await this.db.query(`SELECT id, change_type, from_plan_code, to_plan_code, from_seat_quantity, to_seat_quantity, status, effective_at, requested_source, request_reason, created_at FROM tenant_billing_changes WHERE tenant_id = $1 AND status IN ('pending_payment', 'scheduled') ORDER BY created_at DESC`, [tenantId]);
     return {
       ...access,
+      totalSdrSeats: access.maxSdrs ?? null,
       enforcementMode: this.entitlement.enforcementMode,
       stripeConfigured: this.stripe.configured,
       customer: account.rows[0] ?? null,
@@ -87,8 +94,48 @@ export class BillingService {
     return { currentPlanCode: access.planCode, currentTotalSeats, targetPlanCode: targetPrice.code, targetPlanVersionId: targetPrice.plan_version_id, targetPlanName: targetPrice.display_name, targetPriceId: targetPrice.stripe_price_id, targetTotalSeats, extraSeats: Math.max(0, targetTotalSeats - Number(targetPrice.included_sdrs)), interval: targetPrice.billing_interval, effectiveAt, currentPeriodEnd: subscription.rows[0].current_period_end ?? null, price: { amount: Number(targetPrice.unit_amount), currency: targetPrice.currency } };
   }
 
-  async changePlan(tenantId: string, actorUserId: string, toPlanCode: string, interval?: 'month' | 'year', idempotencyKey?: string, requestedTotalSeats?: number) {
-    await this.entitlement.assertAction(tenantId, 'billing_recovery', actorUserId);
+  async previewNewSubscription(planCode: string, interval: 'month' | 'year', requestedTotalSeats?: number) {
+    const price = await this.requirePrice(planCode, interval);
+    const targetTotalSeats = requestedTotalSeats == null ? Number(price.included_sdrs) : Math.floor(Number(requestedTotalSeats));
+    if (!Number.isInteger(targetTotalSeats) || targetTotalSeats < Number(price.included_sdrs)) {
+      throw new ConflictException(`O plano ${price.code} exige pelo menos ${price.included_sdrs} SDRs`);
+    }
+    if (targetTotalSeats > Number(price.max_sdrs)) {
+      throw new ConflictException({ code: 'seat_cap_exceeded', message: `O plano ${price.code} não comporta os ${targetTotalSeats} SDRs solicitados.`, limit: Number(price.max_sdrs) });
+    }
+    const addon = targetTotalSeats > Number(price.included_sdrs) ? await this.requireSeatAddon(interval) : null;
+    const baseAmount = Number(price.unit_amount);
+    const seatAmount = Number(addon?.unit_amount ?? 0);
+    return {
+      mode: 'checkout' as const,
+      targetPlanCode: price.code,
+      targetPlanVersionId: price.plan_version_id,
+      targetPlanName: price.display_name,
+      targetPriceId: price.stripe_price_id,
+      targetTotalSeats,
+      includedSdrs: Number(price.included_sdrs),
+      maxSdrs: Number(price.max_sdrs),
+      extraSeats: Math.max(0, targetTotalSeats - Number(price.included_sdrs)),
+      interval: price.billing_interval,
+      effectiveAt: 'after_payment' as const,
+      price: { amount: baseAmount + Math.max(0, targetTotalSeats - Number(price.included_sdrs)) * seatAmount, baseAmount, seatAmount, currency: price.currency },
+    };
+  }
+
+  async previewAdminChange(tenantId: string, planCode: string, interval: 'month' | 'year', requestedTotalSeats?: number) {
+    const existing = await this.db.query(`
+      SELECT ts.id
+      FROM tenant_subscriptions ts
+      WHERE ts.tenant_id = $1 AND ts.livemode = $2 AND ts.ended_at IS NULL
+        AND ts.status NOT IN ('canceled', 'incomplete_expired')
+      ORDER BY ts.updated_at DESC LIMIT 1
+    `, [tenantId, this.stripe.livemode]);
+    if (existing.rows[0]) return { ...(await this.previewPlanChange(tenantId, planCode, interval, requestedTotalSeats)), mode: 'change' as const };
+    return this.previewNewSubscription(planCode, interval, requestedTotalSeats);
+  }
+
+  async changePlan(tenantId: string, actorUserId: string, toPlanCode: string, interval?: 'month' | 'year', idempotencyKey?: string, requestedTotalSeats?: number, options: BillingCommandOptions = {}) {
+    if (!options.bypassEntitlement) await this.entitlement.assertAction(tenantId, 'billing_recovery', actorUserId);
     const preview = await this.previewPlanChange(tenantId, toPlanCode, interval, requestedTotalSeats);
     const pending = await this.db.query(`SELECT id FROM tenant_billing_changes WHERE tenant_id = $1 AND status IN ('pending_payment', 'scheduled') LIMIT 1`, [tenantId]);
     if (pending.rows[0]) throw new ConflictException({ code: 'billing_change_in_progress', message: 'Já existe uma alteração de cobrança pendente.' });
@@ -102,7 +149,7 @@ export class BillingService {
     const status = preview.effectiveAt === 'immediate' ? 'pending_payment' : 'scheduled';
     const effectiveAt = preview.effectiveAt === 'immediate' ? new Date() : (subscription.rows[0].current_period_end ?? null);
     if (status === 'scheduled' && !effectiveAt) throw new ConflictException('A assinatura não informa o fim do ciclo para agendar o downgrade');
-    await this.db.query(`INSERT INTO tenant_billing_changes (id, tenant_id, stripe_subscription_id, change_type, from_plan_code, to_plan_code, from_seat_quantity, to_seat_quantity, to_plan_version_id, to_base_price_id, status, effective_at, idempotency_key, requested_by) VALUES ($1, $2, $3, 'plan_change', $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)`, [changeId, tenantId, subscription.rows[0].stripe_subscription_id, preview.currentPlanCode, preview.targetPlanCode, preview.currentTotalSeats, preview.targetTotalSeats, preview.targetPlanVersionId, preview.targetPriceId, status, effectiveAt, key, actorUserId]);
+    await this.db.query(`INSERT INTO tenant_billing_changes (id, tenant_id, stripe_subscription_id, change_type, from_plan_code, to_plan_code, from_seat_quantity, to_seat_quantity, to_plan_version_id, to_base_price_id, status, effective_at, idempotency_key, requested_by, requested_source, request_reason) VALUES ($1, $2, $3, 'plan_change', $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)`, [changeId, tenantId, subscription.rows[0].stripe_subscription_id, preview.currentPlanCode, preview.targetPlanCode, preview.currentTotalSeats, preview.targetTotalSeats, preview.targetPlanVersionId, preview.targetPriceId, status, effectiveAt, key, actorUserId, options.source ?? 'organization', options.reason?.trim() || null]);
     try {
       if (preview.effectiveAt === 'immediate') {
         await this.stripe.updateSubscriptionItem(String(base.rows[0].stripe_subscription_item_id), 1, `billing-plan:${tenantId}:${createHash('sha256').update(key).digest('hex')}`, String(preview.targetPriceId));
@@ -114,7 +161,7 @@ export class BillingService {
       await this.db.query(`UPDATE tenant_billing_changes SET status = 'failed', error_message = $2, updated_at = now() WHERE id = $1`, [changeId, String(error).slice(0, 500)]).catch(() => undefined);
       throw error;
     }
-    await this.audit.record({ actorUserId, tenantId, action: 'billing.plan_change_requested', entityType: 'tenant_billing_change', entityId: changeId, metadata: preview });
+    await this.audit.record({ actorUserId, tenantId, action: options.source === 'admin' ? 'admin.billing.plan_change_requested' : 'billing.plan_change_requested', entityType: 'tenant_billing_change', entityId: changeId, metadata: { ...preview, source: options.source ?? 'organization', reason: options.reason?.trim() || null } });
     return { changeId, ...preview, status };
   }
 
@@ -156,8 +203,8 @@ export class BillingService {
     return result.id;
   }
 
-  async createCheckoutSession(tenantId: string, actorUserId: string, input: { planCode: string; interval: 'month' | 'year'; totalSdrSeats?: number; successUrl?: string; cancelUrl?: string; idempotencyKey?: string }) {
-    await this.entitlement.assertAction(tenantId, 'billing_recovery', actorUserId);
+  async createCheckoutSession(tenantId: string, actorUserId: string, input: { planCode: string; interval: 'month' | 'year'; totalSdrSeats?: number; successUrl?: string; cancelUrl?: string; idempotencyKey?: string; bypassEntitlement?: boolean; source?: 'organization' | 'admin'; reason?: string }) {
+    if (!input.bypassEntitlement) await this.entitlement.assertAction(tenantId, 'billing_recovery', actorUserId);
     const price = await this.requirePrice(input.planCode, input.interval);
     const totalSdrSeats = Number.isInteger(input.totalSdrSeats) ? Number(input.totalSdrSeats) : Number(price.included_sdrs);
     if (totalSdrSeats < Number(price.included_sdrs) || totalSdrSeats > Number(price.max_sdrs)) throw new ConflictException(`Este plano permite entre ${price.included_sdrs} e ${price.max_sdrs} SDRs`);
@@ -179,12 +226,12 @@ export class BillingService {
       lineItems.push({ priceId: String(addon.stripe_price_id), quantity: totalSdrSeats - Number(price.included_sdrs) });
     }
     const session = await this.stripe.createCheckoutSession({ customerId, lineItems, tenantId, planCode: input.planCode, totalSdrSeats, successUrl, cancelUrl }, idempotencyKey);
-    await this.audit.record({ actorUserId, tenantId, action: 'billing.checkout_created', entityType: 'checkout_session', entityId: session.id, metadata: { planCode: input.planCode, interval: input.interval, totalSdrSeats } });
+    await this.audit.record({ actorUserId, tenantId, action: input.source === 'admin' ? 'admin.billing.checkout_created' : 'billing.checkout_created', entityType: 'checkout_session', entityId: session.id, metadata: { planCode: input.planCode, interval: input.interval, totalSdrSeats, source: input.source ?? 'organization', reason: input.reason?.trim() || null } });
     return { id: session.id, url: session.url, expiresAt: session.expires_at ? new Date(session.expires_at * 1000) : null };
   }
 
-  async createPortalSession(tenantId: string, actorUserId: string, returnUrl?: string) {
-    await this.entitlement.assertAction(tenantId, 'billing_recovery', actorUserId);
+  async createPortalSession(tenantId: string, actorUserId: string, returnUrl?: string, options: BillingCommandOptions = {}) {
+    if (!options.bypassEntitlement) await this.entitlement.assertAction(tenantId, 'billing_recovery', actorUserId);
     const account = await this.db.query('SELECT stripe_customer_id FROM tenant_billing_accounts WHERE tenant_id = $1 AND livemode = $2', [tenantId, this.stripe.livemode]);
     if (!account.rows[0]) throw new ConflictException('A organização ainda não possui cadastro de cobrança');
     const origin = (process.env.WEB_ORIGIN ?? 'http://localhost:5173').split(',')[0].replace(/\/$/, '');
@@ -196,7 +243,7 @@ export class BillingService {
       } catch { /* keep the server-owned fallback */ }
     }
     const session = await this.stripe.createPortalSession(String(account.rows[0].stripe_customer_id), safeReturnUrl);
-    await this.audit.record({ actorUserId, tenantId, action: 'billing.portal_session_created', entityType: 'billing_portal_session' });
+    await this.audit.record({ actorUserId, tenantId, action: options.source === 'admin' ? 'admin.billing.portal_session_created' : 'billing.portal_session_created', entityType: 'billing_portal_session', metadata: { source: options.source ?? 'organization' } });
     return { url: session.url, expiresAt: session.created ? new Date((session.created + 3600) * 1000) : null };
   }
 
@@ -216,8 +263,8 @@ export class BillingService {
     return { currentTotalSeats: Math.max(current, used), targetTotalSeats: target, extraSeats: Math.max(0, target - access.includedSdrs), delta: target - current, effectiveAt: target < current ? 'period_end' as const : 'immediate' as const };
   }
 
-  async changeSeats(tenantId: string, actorUserId: string, targetTotalSeats: number, idempotencyKey?: string) {
-    await this.entitlement.assertAction(tenantId, 'billing_recovery', actorUserId);
+  async changeSeats(tenantId: string, actorUserId: string, targetTotalSeats: number, idempotencyKey?: string, options: BillingCommandOptions = {}) {
+    if (!options.bypassEntitlement) await this.entitlement.assertAction(tenantId, 'billing_recovery', actorUserId);
     const preview = await this.previewSeatChange(tenantId, targetTotalSeats);
     const pending = await this.db.query(`SELECT id FROM tenant_billing_changes WHERE tenant_id = $1 AND status IN ('pending_payment', 'scheduled') LIMIT 1`, [tenantId]);
     if (pending.rows[0]) throw new ConflictException({ code: 'billing_change_in_progress', message: 'Já existe uma alteração de cobrança pendente.' });
@@ -230,7 +277,7 @@ export class BillingService {
     const effectiveAt = preview.effectiveAt === 'period_end' ? (subscription.rows[0].current_period_end ?? null) : new Date();
     const changeStatus = preview.effectiveAt === 'immediate' ? 'pending_payment' : 'scheduled';
     if (changeStatus === 'scheduled' && !effectiveAt) throw new ConflictException('A assinatura não informa o fim do ciclo para agendar a redução de seats');
-    await this.db.query(`INSERT INTO tenant_billing_changes (id, tenant_id, stripe_subscription_id, change_type, from_seat_quantity, to_seat_quantity, status, effective_at, idempotency_key, requested_by) VALUES ($1, $2, $3, 'seat_change', $4, $5, $6, $7, $8, $9)`, [changeId, tenantId, subscription.rows[0].stripe_subscription_id, preview.currentTotalSeats, preview.targetTotalSeats, changeStatus, effectiveAt, key, actorUserId]);
+    await this.db.query(`INSERT INTO tenant_billing_changes (id, tenant_id, stripe_subscription_id, change_type, from_seat_quantity, to_seat_quantity, status, effective_at, idempotency_key, requested_by, requested_source, request_reason) VALUES ($1, $2, $3, 'seat_change', $4, $5, $6, $7, $8, $9, $10, $11)`, [changeId, tenantId, subscription.rows[0].stripe_subscription_id, preview.currentTotalSeats, preview.targetTotalSeats, changeStatus, effectiveAt, key, actorUserId, options.source ?? 'organization', options.reason?.trim() || null]);
     try {
     if (preview.effectiveAt === 'immediate') {
       if (item.rows[0]) await this.stripe.updateSubscriptionItem(String(item.rows[0].stripe_subscription_item_id), preview.extraSeats, stripeKey);
@@ -244,7 +291,7 @@ export class BillingService {
       await this.db.query(`UPDATE tenant_billing_changes SET status = 'failed', error_message = $2, updated_at = now() WHERE id = $1`, [changeId, String(error).slice(0, 500)]).catch(() => undefined);
       throw error;
     }
-    await this.audit.record({ actorUserId, tenantId, action: 'billing.seats_change_requested', entityType: 'tenant_billing_change', entityId: changeId, metadata: preview });
+    await this.audit.record({ actorUserId, tenantId, action: options.source === 'admin' ? 'admin.billing.seats_change_requested' : 'billing.seats_change_requested', entityType: 'tenant_billing_change', entityId: changeId, metadata: { ...preview, source: options.source ?? 'organization', reason: options.reason?.trim() || null } });
     return { changeId, ...preview, status: preview.effectiveAt === 'immediate' ? 'pending_payment' : 'scheduled' };
   }
 
@@ -298,10 +345,10 @@ export class BillingService {
     return results;
   }
 
-  async cancelPendingChange(tenantId: string, changeId: string, actorUserId: string) {
+  async cancelPendingChange(tenantId: string, changeId: string, actorUserId: string, options: BillingCommandOptions = {}) {
     const result = await this.db.query(`UPDATE tenant_billing_changes SET status = 'canceled', updated_at = now() WHERE id = $1 AND tenant_id = $2 AND status = 'scheduled' RETURNING id, change_type`, [changeId, tenantId]);
     if (!result.rows[0]) throw new NotFoundException('Alteração pendente não encontrada ou já aplicada');
-    await this.audit.record({ actorUserId, tenantId, action: 'billing.change_canceled', entityType: 'tenant_billing_change', entityId: changeId, metadata: { changeType: result.rows[0].change_type } });
+    await this.audit.record({ actorUserId, tenantId, action: options.source === 'admin' ? 'admin.billing.change_canceled' : 'billing.change_canceled', entityType: 'tenant_billing_change', entityId: changeId, metadata: { changeType: result.rows[0].change_type, source: options.source ?? 'organization' } });
     return { ok: true, id: changeId };
   }
 

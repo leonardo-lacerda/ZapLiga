@@ -42,7 +42,7 @@ export class TenantsController {
   @Roles('super_admin')
   async limits(@Param('tenantId') tenantId: string, @Body() body: UpdateTenantLimitsDto, @CurrentUser() user: any) {
     const tenant = await this.tenants.setLimits(tenantId, body);
-    await this.audit.record({ actorUserId: user.id, tenantId, action: 'tenant.limits_changed', entityType: 'tenant', entityId: tenantId, metadata: body as Record<string, unknown> });
+    await this.audit.record({ actorUserId: user.id, tenantId, action: 'tenant.lead_limit_changed', entityType: 'tenant', entityId: tenantId, metadata: body as Record<string, unknown> });
     return tenant;
   }
 }

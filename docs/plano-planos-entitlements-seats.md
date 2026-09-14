@@ -25,11 +25,11 @@ somente como exceção temporária, justificada e auditada.
 
 ### 2.1 Catálogo inicial
 
-| Plano | Mensal | Anual | SDRs incluídos | Limite total com adicionais |
+| Plano | Mensal | Anual | SDRs incluídos | Limite total |
 | --- | ---: | ---: | ---: | ---: |
-| Starter | R$ 89,90 | R$ 899,00 | 5 | 14 |
-| Growth | R$ 249,90 | R$ 2.499,00 | 15 | 39 |
-| Pro | R$ 599,90 | R$ 5.999,00 | 40 | 99 |
+| Starter | R$ 89,90 | R$ 899,00 | 2 | 2 |
+| Growth | R$ 249,90 | R$ 2.499,00 | 5 | 5 |
+| Pro | R$ 599,90 | R$ 5.999,00 | 10 | 10 |
 | Enterprise | sob consulta | contrato anual | 100 ou mais | customizado |
 
 O anual equivale aproximadamente a dez mensalidades. Os valores devem ser
@@ -45,15 +45,18 @@ tabela cria novos Prices/versões, nunca altera retroativamente o contrato.
 - o limite efetivo é `sdrs_incluidos + seats_adicionais_pagos`;
 - o limite efetivo nunca pode ultrapassar o teto comercial do plano.
 
+Nos planos atuais, o número incluído coincide com o teto (2/5/10). Portanto,
+o botão de adicionar SDR permanece bloqueado ao atingir o teto; o adicional de
+R$ 19,90 fica pronto para tiers futuros com capacidade extra entre incluídos e
+teto comercial.
+
 Exemplos:
 
 | Situação | Cálculo | Total mensal |
 | --- | --- | ---: |
-| Starter com 5 SDRs | R$ 89,90 + 0 adicionais | R$ 89,90 |
-| Starter com 8 SDRs | R$ 89,90 + 3 × R$ 19,90 | R$ 149,60 |
-| Starter com 10 SDRs | R$ 89,90 + 5 × R$ 19,90 | R$ 189,40 |
-| Growth com 20 SDRs | R$ 249,90 + 5 × R$ 19,90 | R$ 349,40 |
-| Pro com 50 SDRs | R$ 599,90 + 10 × R$ 19,90 | R$ 798,90 |
+| Starter com 2 SDRs | R$ 89,90 + 0 adicionais | R$ 89,90 |
+| Growth com 5 SDRs | R$ 249,90 + 0 adicionais | R$ 249,90 |
+| Pro com 10 SDRs | R$ 599,90 + 0 adicionais | R$ 599,90 |
 
 ### 2.3 R$ 19,90 faz sentido?
 
@@ -112,8 +115,8 @@ trabalho humano.
 
 | Capacidade | Starter | Growth | Pro | Enterprise |
 | --- | --- | --- | --- | --- |
-| SDRs incluídos | 5 | 15 | 40 | 100+ |
-| SDRs adicionais | até 14 no total | até 39 | até 99 | customizado |
+| SDRs incluídos | 2 | 5 | 10 | customizado |
+| Teto total de SDRs | até 2 | até 5 | até 10 | customizado |
 | Leads armazenados | 25 mil | 250 mil | 1 milhão | customizado |
 | Histórico de métricas | 90 dias | 365 dias | 730 dias | customizado |
 | Campanhas versionadas | — | incluído | incluído | incluído |
@@ -582,7 +585,7 @@ Regras de convergência:
 - comparação clara dos quatro planos;
 - preço mensal/anual;
 - matriz de recursos sem jargão interno;
-- indicação de “5 SDRs incluídos” e “R$ 19,90 por SDR adicional”;
+- indicação de “até 2/5/10 SDRs” por plano e do adicional de R$ 19,90 quando houver capacidade extra no catálogo;
 - simulador de total antes do Checkout;
 - recomendação automática do plano mais econômico para a quantidade escolhida;
 - aviso de que capacidade de chamadas não é igual ao número de SDRs.
@@ -720,10 +723,9 @@ Por pelo menos sete dias:
 
 ### 13.4 Stripe sandbox
 
-- contratação Starter com 5 seats;
-- Starter com 8 seats e dois line items;
-- adição com pró-rata e cartão aprovado;
-- adição com cartão recusado;
+- contratação Starter com 2 seats;
+- bloqueio ao tentar ultrapassar o teto de 2 seats;
+- upgrade Starter → Growth com 5 seats;
 - redução agendada;
 - upgrade Starter → Growth;
 - downgrade Pro → Growth com uso excedente;
@@ -798,7 +800,7 @@ integralmente `docs/deploy-runbook.md`. Rust/Waxum nunca deve ser compilado na V
 
 ## 16. Critérios de aceite
 
-- [x] Starter custa R$ 89,90/mês e inclui exatamente 5 SDRs.
+- [x] Starter custa R$ 89,90/mês e permite até 2 SDRs.
 - [x] Seat adicional custa R$ 19,90/mês e só existe com plano-base.
 - [x] Assinatura representa base e seats na mesma fatura.
 - [x] Pagamento confirmado ativa automaticamente recursos e limites.

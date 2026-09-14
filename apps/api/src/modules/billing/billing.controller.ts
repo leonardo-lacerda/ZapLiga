@@ -8,6 +8,7 @@ import { ManualGrantDto } from './dto/manual-grant.dto';
 import { SeatChangeDto } from './dto/seat-change.dto';
 import { EntitlementOverrideDto } from './dto/entitlement-override.dto';
 import { PlanChangeDto } from './dto/plan-change.dto';
+import { AdminBillingCheckoutDto, AdminBillingPlanChangeDto, AdminBillingSeatChangeDto } from './dto/admin-billing.dto';
 
 @Controller()
 @UseGuards(AuthGuard, TenantMembershipGuard, RolesGuard)
@@ -125,5 +126,68 @@ export class BillingAdminController {
   @Post('/webhooks/:eventId/retry')
   retry(@Param('eventId') eventId: string, @CurrentUser() user: any) {
     return this.billing.retryWebhookEvent(eventId, user.id);
+  }
+}
+
+// These routes intentionally do not use TenantMembershipGuard. A platform
+// administrator may manage a tenant before the administrator is a member of
+// that tenant, while RolesGuard still keeps every operation super-admin only.
+@Controller('/api/admin/tenants')
+@UseGuards(AuthGuard, RolesGuard)
+@Roles('super_admin')
+export class BillingAdminTenantController {
+  constructor(private readonly billing: BillingService) {}
+
+  @Get('/:tenantId/billing')
+  status(@Param('tenantId') tenantId: string) {
+    return this.billing.getTenantBilling(tenantId);
+  }
+
+  @Get('/:tenantId/billing/plans')
+  plans() {
+    return this.billing.listPlans();
+  }
+
+  @Post('/:tenantId/billing/preview')
+  preview(@Param('tenantId') tenantId: string, @Body() body: AdminBillingPlanChangeDto) {
+    return this.billing.previewAdminChange(tenantId, body.planCode, body.interval ?? 'month', body.totalSdrSeats);
+  }
+
+  @Post('/:tenantId/billing/checkout-session')
+  checkout(@Param('tenantId') tenantId: string, @CurrentUser() user: any, @Body() body: AdminBillingCheckoutDto, @Headers('idempotency-key') idempotencyKey?: string) {
+    return this.billing.createCheckoutSession(tenantId, user.id, {
+      planCode: body.planCode,
+      interval: body.interval ?? 'month',
+      totalSdrSeats: body.totalSdrSeats,
+      idempotencyKey,
+      bypassEntitlement: true,
+      source: 'admin',
+      reason: body.reason,
+    });
+  }
+
+  @Post('/:tenantId/billing/plan-change')
+  planChange(@Param('tenantId') tenantId: string, @CurrentUser() user: any, @Body() body: AdminBillingPlanChangeDto, @Headers('idempotency-key') idempotencyKey?: string) {
+    return this.billing.changePlan(tenantId, user.id, body.planCode, body.interval, idempotencyKey, body.totalSdrSeats, { bypassEntitlement: true, source: 'admin', reason: body.reason });
+  }
+
+  @Post('/:tenantId/billing/seats')
+  seats(@Param('tenantId') tenantId: string, @CurrentUser() user: any, @Body() body: AdminBillingSeatChangeDto, @Headers('idempotency-key') idempotencyKey?: string) {
+    return this.billing.changeSeats(tenantId, user.id, body.totalSdrSeats, idempotencyKey, { bypassEntitlement: true, source: 'admin', reason: body.reason });
+  }
+
+  @Post('/:tenantId/billing/portal-session')
+  portal(@Param('tenantId') tenantId: string, @CurrentUser() user: any) {
+    return this.billing.createPortalSession(tenantId, user.id, undefined, { bypassEntitlement: true, source: 'admin' });
+  }
+
+  @Post('/:tenantId/billing/reconcile')
+  reconcile(@Param('tenantId') tenantId: string) {
+    return this.billing.reconcileTenant(tenantId);
+  }
+
+  @Delete('/:tenantId/billing/changes/:changeId')
+  cancelChange(@Param('tenantId') tenantId: string, @Param('changeId') changeId: string, @CurrentUser() user: any) {
+    return this.billing.cancelPendingChange(tenantId, changeId, user.id, { source: 'admin' });
   }
 }
