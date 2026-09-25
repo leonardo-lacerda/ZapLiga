@@ -3,6 +3,7 @@ import { Request } from 'express';
 import { StripeClientService } from '../../infrastructure/stripe/stripe.client';
 import { AuthGuard, CurrentTenant, CurrentUser, Roles, RolesGuard, TenantAction, TenantMembershipGuard } from '../auth/auth.guards';
 import { BillingService } from './billing.service';
+import { EntitlementService } from './entitlement.service';
 import { CheckoutSessionDto } from './dto/checkout-session.dto';
 import { ManualGrantDto } from './dto/manual-grant.dto';
 import { SeatChangeDto } from './dto/seat-change.dto';
@@ -116,7 +117,18 @@ export class BillingWebhookController {
 @UseGuards(AuthGuard, RolesGuard)
 @Roles('super_admin')
 export class BillingAdminController {
-  constructor(private readonly billing: BillingService) {}
+  constructor(private readonly billing: BillingService, private readonly entitlement: EntitlementService) {}
+
+  @Get('/write-mode')
+  writeMode(@CurrentUser() user: any) {
+    return this.entitlement.getAdminWriteMode(user.id);
+  }
+
+  @Post('/write-mode')
+  setWriteMode(@Body() body: { enabled?: unknown }, @CurrentUser() user: any) {
+    if (typeof body?.enabled !== 'boolean') throw new BadRequestException('Informe enabled como booleano');
+    return this.entitlement.setAdminWriteMode(user.id, body.enabled);
+  }
 
   @Get('/webhooks')
   webhooks(@Query('limit') limit?: string, @Query('status') status?: string) {

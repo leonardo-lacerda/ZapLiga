@@ -41,6 +41,19 @@ describe('billing entitlement enforcement', () => {
     expect(audit.record).toHaveBeenCalledWith(expect.objectContaining({ action: 'billing.action_denied', tenantId: 'tenant-1' }));
   });
 
+  it('lets a super admin with edit mode on write to a read-only tenant, but not a regular user', async () => {
+    process.env.NODE_ENV = 'production';
+    process.env.BILLING_ENFORCEMENT_MODE = 'enforce';
+    const db = { query: jest.fn(async (sql: string) => ({ rows: [sql.includes('platform_role') ? { platform_role: 'super_admin' } : { tenant_status: 'active', access_mode: 'read_only', access_reason: 'no_subscription' }] })) };
+    const redis = { client: { get: jest.fn().mockResolvedValue('1'), del: jest.fn() }, incrementMetric: jest.fn().mockResolvedValue(undefined) };
+    const audit = { record: jest.fn().mockResolvedValue(undefined) };
+    const service = new EntitlementService(db as any, redis as any, audit as any);
+    await expect(service.assertAction('tenant-1', 'write', 'admin-1')).resolves.toMatchObject({ mode: 'read_only' });
+    expect(audit.record).toHaveBeenCalledWith(expect.objectContaining({ action: 'billing.admin_write_override', tenantId: 'tenant-1' }));
+    redis.client.get.mockResolvedValue(null);
+    await expect(service.assertAction('tenant-1', 'write', 'user-1')).rejects.toMatchObject({ status: 402 });
+  });
+
   it('defaults to enforce in production when the mode is blank', async () => {
     process.env.NODE_ENV = 'production';
     process.env.BILLING_ENFORCEMENT_MODE = '  ';

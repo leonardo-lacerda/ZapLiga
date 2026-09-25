@@ -17,7 +17,9 @@ const envMode = (): 'off' | 'shadow' | 'enforce' => {
   return value === 'enforce' || value === 'shadow' ? value : 'off';
 };
 
-const objectOrEmpty = <T extends object>(value: unknown): T => (
+const ADMIN_WRITE_MODE_TTL_SECONDS = 8 * 60 * 60;
+
+const objectOrEmpty =<T extends object>(value: unknown): T => (
   value && typeof value === 'object' && !Array.isArray(value) ? value as T : {} as T
 );
 
@@ -115,9 +117,45 @@ export class EntitlementService {
       return access;
     }
     if (mode === 'off') return access;
+    if (access.mode === 'read_only' && actorUserId && await this.hasAdminWriteMode(actorUserId)) {
+      await this.audit.record({ actorUserId, tenantId, action: 'billing.admin_write_override', entityType: 'tenant', entityId: tenantId, metadata: { requestedAction: action, reason: access.reason } }).catch(() => undefined);
+      return access;
+    }
     await this.redis.incrementMetric('billing_action_denied_total').catch(() => undefined);
     await this.audit.record({ actorUserId: actorUserId ?? null, tenantId, action: 'billing.action_denied', entityType: 'tenant', entityId: tenantId, metadata: { requestedAction: action, reason: access.reason } }).catch(() => undefined);
     throw new HttpException({ statusCode: 402, code: 'subscription_required', message: 'A organização está em modo somente leitura.', billingReason: access.reason, manageBilling: true }, 402);
+  }
+
+  /**
+   * Super-admin "edit mode": lets a platform admin act on a read-only tenant (support work)
+   * without granting the tenant itself anything. Per admin, stored in Redis with a TTL so it
+   * cannot be left on forever, and re-checked against the user's current platform role so a
+   * demoted admin loses it immediately. Blocked tenants stay blocked.
+   */
+  private adminWriteModeKey(userId: string) { return `zapcall:admin-write-mode:${userId}`; }
+
+  private async hasAdminWriteMode(userId: string) {
+    // Fails closed: any lookup error keeps the tenant read-only.
+    try {
+      const flag = await this.redis.client.get(this.adminWriteModeKey(userId));
+      if (!flag) return false;
+      const user = await this.db.query('SELECT platform_role FROM users WHERE id = $1 LIMIT 1', [userId]);
+      return user.rows[0]?.platform_role === 'super_admin';
+    } catch {
+      return false;
+    }
+  }
+
+  async getAdminWriteMode(userId: string) {
+    const ttl = await this.redis.client.ttl(this.adminWriteModeKey(userId)).catch(() => -2);
+    return { enabled: ttl > 0, expiresAt: ttl > 0 ? new Date(Date.now() + ttl * 1000).toISOString() : null };
+  }
+
+  async setAdminWriteMode(userId: string, enabled: boolean) {
+    if (enabled) await this.redis.client.set(this.adminWriteModeKey(userId), '1', 'EX', ADMIN_WRITE_MODE_TTL_SECONDS);
+    else await this.redis.client.del(this.adminWriteModeKey(userId));
+    await this.audit.record({ actorUserId: userId, tenantId: null, action: enabled ? 'billing.admin_write_mode_enabled' : 'billing.admin_write_mode_disabled', entityType: 'user', entityId: userId }).catch(() => undefined);
+    return this.getAdminWriteMode(userId);
   }
 
   async assertCanOperate(tenantId: string, actorUserId?: string) { return this.assertAction(tenantId, 'operate', actorUserId); }
