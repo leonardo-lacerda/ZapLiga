@@ -48,9 +48,18 @@ const INBOUND_REPORT_INTERVAL_MS = 400;
  * never repaid) accumulates as delay for the rest of the call -- 1.45 s was measured after four
  * minutes. Above the high mark, frames are dropped until the backlog is back under the low mark:
  * a brief skip once, instead of a conversation that lags more every minute.
+ *
+ * Waxum already runs a ~120-150 ms jitter buffer and emits paced 20 ms frames, so this second
+ * buffer only has to absorb WebSocket/scheduler jitter. The old 0.45/0.2 marks let the backlog
+ * park anywhere up to 450 ms for the whole call, which stacked with the upstream buffer, the
+ * WhatsApp network and Bluetooth output into ~1 s of mouth-to-ear delay.
  */
-const PLAYBACK_BACKLOG_HIGH_S = 0.45;
-const PLAYBACK_BACKLOG_LOW_S = 0.2;
+const PLAYBACK_BACKLOG_HIGH_S = 0.16;
+const PLAYBACK_BACKLOG_LOW_S = 0.08;
+/** Cushion when (re)starting playout after an underrun, so the next frame isn't already late. */
+const PLAYBACK_START_LEAD_S = 0.04;
+/** Frames queued before the AudioContext was ready are stale; replay only the most recent ones. */
+const PENDING_PLAYBACK_REPLAY_FRAMES = 4;
 
 function detectSinkMode(): SinkMode {
   if (typeof AudioContext !== 'undefined' && typeof (AudioContext.prototype as SinkableAudioContext).setSinkId === 'function') return 'context';
@@ -302,7 +311,7 @@ export class AudioBridge {
     } else {
       this.playbackGain.connect(context.destination);
     }
-    const pending = this.pendingPlayback.splice(0);
+    const pending = this.pendingPlayback.splice(0).slice(-PENDING_PLAYBACK_REPLAY_FRAMES);
     pending.forEach((frame) => this.enqueuePlayback(frame));
     return context;
   }
@@ -479,7 +488,7 @@ export class AudioBridge {
     if (!this.context || this.context.state === 'closed') return;
     this.resuming ??= this.context.resume().then(() => {
       if (this.context?.state !== 'running') return;
-      const pending = this.pendingPlayback.splice(0);
+      const pending = this.pendingPlayback.splice(0).slice(-PENDING_PLAYBACK_REPLAY_FRAMES);
       pending.forEach((frame) => this.enqueuePlayback(frame));
     }).catch(() => undefined).finally(() => { this.resuming = undefined; });
     await this.resuming;
@@ -512,7 +521,7 @@ export class AudioBridge {
     source.buffer = buffer;
     source.connect(this.playbackGain);
     source.onended = () => { this.playbackFramesEnded += 1; };
-    this.nextPlayTime = Math.max(this.nextPlayTime, this.context.currentTime);
+    if (this.nextPlayTime < this.context.currentTime) this.nextPlayTime = this.context.currentTime + PLAYBACK_START_LEAD_S;
     source.start(this.nextPlayTime);
     this.nextPlayTime += buffer.duration;
     this.playbackFramesScheduled += 1;
