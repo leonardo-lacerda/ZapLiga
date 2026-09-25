@@ -432,7 +432,7 @@ function AuthenticatedApp() {
 }
 
 export default function App() {
-  const { session, loading, login, register, acceptInvite, reload } = useAuth();
+  const { session, loading, login, register, acceptInvite, reload, logout, selectTenant } = useAuth();
   const authRoute = authRouteFromPath(window.location.pathname);
   useEffect(() => {
     // A verification link may be opened while the registration session is
@@ -456,6 +456,9 @@ export default function App() {
   if (!session.user.emailVerifiedAt) return <EmailVerificationGate session={session} reload={reload} />;
   if (session.user.forcePasswordChange) return <ForcePasswordChangeGate reload={reload} />;
   if (session.legalAcceptanceRequired) return <LegalAcceptanceGate session={session} reload={reload} />;
+  // A platform admin with no company (e.g. after deleting them all) still needs the admin panel
+  // to create or reactivate one; everyone else gets the no-access screen.
+  if (!session.tenants.length && session.user.platformRole === 'super_admin') return <main className="main-content"><div className="module-header"><div className="breadcrumb"><Icon name="settings" size={17} /><strong>Admin</strong><span>/</span><span>Nenhuma empresa vinculada</span></div><div className="header-actions"><Button variant="ghost" onClick={() => void logout()}>Sair</Button></div></div><div className="page-content"><AdminPage onChanged={reload} onOpenTenant={(tenantId) => { selectTenant(tenantId); void reload(); }} /></div></main>;
   if (!session.tenants.length) return <div className="auth-shell"><div className="no-access-card"><Icon name="alert" size={28} /><h1>Sem acesso a uma empresa</h1><p>Seu acesso foi removido ou nenhuma empresa ativa está vinculada à conta. Peça um novo convite ao responsável.</p><Button onClick={() => void reload()}>Verificar novamente</Button></div></div>;
   return <AuthenticatedApp />;
 }
