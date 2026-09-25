@@ -110,8 +110,11 @@ export class InvitationsService implements OnModuleInit, OnModuleDestroy {
         SELECT i.*, t.name AS tenant_name, t.status AS tenant_status
         FROM invitations i JOIN tenants t ON t.id = i.tenant_id
         WHERE i.token_hash = $1 AND i.accepted_at IS NULL AND i.revoked_at IS NULL
-        FOR UPDATE
+        FOR UPDATE OF i
       `, [tokenHash]);
+      // Lock only the invitation (OF i). Locking the joined tenant row too deadlocked acceptance:
+      // the entitlement check below writes an audit row (FK to tenants) on another pool connection,
+      // which waited forever on this transaction's tenant lock while this transaction awaited it.
       const invitation = result.rows[0];
       if (!invitation || invitation.tenant_status !== 'active' || new Date(invitation.expires_at).getTime() <= Date.now()) throw new NotFoundException('Convite inválido, expirado ou revogado');
       // Invitation acceptance is a membership/data mutation too. A pending
