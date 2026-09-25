@@ -23,7 +23,12 @@ export class SdrCapacityService {
     return { tenantId, limit, used, reserved, available: limit == null ? null : Math.max(0, limit - used - reserved), accessMode: row.access_mode ?? 'read_only', accessReason: row.access_reason ?? 'no_subscription' };
   }
 
-  async assertCanAdd(tenantId: string, executor: Executor, options: { ignoreInvitationId?: string } = {}) {
+  /**
+   * `actorUserId` with admin edit mode on, or `sanctionedBy` a super admin (an invitation they sent),
+   * skips both the subscription check and the seat cap: without a plan the cap is 0, so the admin
+   * could otherwise never add an SDR while supporting a read-only company.
+   */
+  async assertCanAdd(tenantId: string, executor: Executor, options: { ignoreInvitationId?: string; actorUserId?: string; sanctionedBy?: string } = {}) {
     await this.entitlement.acquireTenantLock(tenantId, executor);
     const result = await executor.query(`
       SELECT t.status AS tenant_status, e.access_mode, e.access_until, e.max_sdrs, t.max_sdrs AS legacy_max_sdrs,
@@ -35,6 +40,14 @@ export class SdrCapacityService {
     const row = result.rows[0];
     if (!row || row.tenant_status !== 'active') throw new HttpException({ statusCode: 403, code: 'tenant_blocked', message: 'A empresa está bloqueada.' }, 403);
     const mode = this.entitlement.enforcementMode;
+    const used0 = Number(row.used ?? 0);
+    const reserved0 = Number(row.reserved ?? 0);
+    const adminOverride = (options.actorUserId && await this.entitlement.hasAdminWriteMode(options.actorUserId))
+      || (options.sanctionedBy && await this.entitlement.isSuperAdmin(options.sanctionedBy));
+    if (adminOverride) {
+      await this.audit?.record({ actorUserId: options.actorUserId ?? null, tenantId, action: 'billing.admin_sdr_capacity_override', entityType: 'tenant', entityId: tenantId, metadata: { used: used0, reserved: reserved0, sanctionedBy: options.sanctionedBy ?? null } }).catch(() => undefined);
+      return { used: used0, reserved: reserved0, limit: null, available: null };
+    }
     const entitlementValid = row.access_mode === 'full' && row.access_until && new Date(row.access_until).getTime() > Date.now();
     if (mode === 'enforce' && !entitlementValid) throw new HttpException({ statusCode: 402, code: 'subscription_required', message: 'A organização está em modo somente leitura.', billingReason: row.access_reason ?? 'no_subscription', manageBilling: true }, 402);
     const limit = row.max_sdrs == null ? (mode === 'off' || mode === 'shadow' ? Number(row.legacy_max_sdrs ?? 0) : 0) : Number(row.max_sdrs);

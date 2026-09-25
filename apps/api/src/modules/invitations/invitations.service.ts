@@ -43,7 +43,7 @@ export class InvitationsService implements OnModuleInit, OnModuleDestroy {
     const expiresAt = new Date(Date.now() + this.invitationTtlSeconds * 1000);
     const insertInvitation = (executor: { query: (text: string, params?: unknown[]) => Promise<any> }) => executor.query(`INSERT INTO invitations (id, tenant_id, invited_email, invitee_name, role, token_hash, invited_by, expires_at, delivery_token_encrypted, next_delivery_attempt_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, now())`, [invitationId, tenantId, normalizedEmail, normalizedName, role, hashToken(token), invitedBy, expiresAt, delivery === 'email' ? this.protectToken(token) : null]);
     try {
-      if (role === 'sdr' && this.capacity && typeof (this.db as any).transaction === 'function') await this.db.transaction(async (client) => { await this.capacity!.assertCanAdd(tenantId, client); await insertInvitation(client); });
+      if (role === 'sdr' && this.capacity && typeof (this.db as any).transaction === 'function') await this.db.transaction(async (client) => { await this.capacity!.assertCanAdd(tenantId, client, { actorUserId: invitedBy }); await insertInvitation(client); });
       else await insertInvitation(this.db);
     } catch (error) {
       if ((error as any)?.code === '23505') throw new ConflictException('Ja existe um convite pendente para este e-mail');
@@ -76,7 +76,7 @@ export class InvitationsService implements OnModuleInit, OnModuleDestroy {
       // old invitation is ignored while the tenant lock serializes it with
       // other invites, memberships and acceptances.
       await this.db.transaction(async (client) => {
-        await this.capacity!.assertCanAdd(tenantId, client, { ignoreInvitationId: invitationId });
+        await this.capacity!.assertCanAdd(tenantId, client, { ignoreInvitationId: invitationId, actorUserId: invitedBy });
         await update(client);
       });
     } else {
@@ -116,11 +116,11 @@ export class InvitationsService implements OnModuleInit, OnModuleDestroy {
       if (!invitation || invitation.tenant_status !== 'active' || new Date(invitation.expires_at).getTime() <= Date.now()) throw new NotFoundException('Convite inválido, expirado ou revogado');
       // Invitation acceptance is a membership/data mutation too. A pending
       // invite created before a billing lapse must not become a write bypass.
-      await this.entitlement?.assertAction(invitation.tenant_id, 'write');
+      await this.entitlement?.assertAction(invitation.tenant_id, 'write', undefined, { sanctionedBy: invitation.invited_by });
       const existing = await client.query('SELECT * FROM users WHERE lower(email) = lower($1) LIMIT 1', [invitation.invited_email]);
       if (existing.rows[0] && !(await this.users.comparePassword(password, existing.rows[0].password_hash))) throw new ConflictException('A senha da conta existente está incorreta');
       const user = existing.rows[0] ?? (await client.query(`INSERT INTO users (id, name, email, password_hash, email_verified_at) VALUES ($1, $2, $3, $4, now()) RETURNING *`, [randomUUID(), name.trim(), invitation.invited_email, passwordHash])).rows[0];
-      if (invitation.role === 'sdr') await this.capacity.assertCanAdd(invitation.tenant_id, client, { ignoreInvitationId: invitation.id });
+      if (invitation.role === 'sdr') await this.capacity.assertCanAdd(invitation.tenant_id, client, { ignoreInvitationId: invitation.id, sanctionedBy: invitation.invited_by });
       const existingMembership = await client.query('SELECT * FROM tenant_memberships WHERE tenant_id = $1 AND user_id = $2 LIMIT 1 FOR UPDATE', [invitation.tenant_id, user.id]);
       let membership;
       if (existingMembership.rows[0]) {

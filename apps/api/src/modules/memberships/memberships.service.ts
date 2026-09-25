@@ -10,12 +10,12 @@ export type MembershipStatus = 'active' | 'blocked' | 'removed';
 export class MembershipsService {
   constructor(private readonly db: DatabaseService, @Optional() private readonly capacity?: SdrCapacityService) {}
 
-  async create(tenantId: string, userId: string, role: MembershipRole) {
+  async create(tenantId: string, userId: string, role: MembershipRole, actorUserId?: string) {
     return this.db.transaction(async (client) => {
       const existing = await client.query('SELECT * FROM tenant_memberships WHERE tenant_id = $1 AND user_id = $2 LIMIT 1 FOR UPDATE', [tenantId, userId]);
       if (existing.rows[0] && existing.rows[0].status !== 'removed') throw new ConflictException('Este usuário já possui uma membership nesta empresa');
       if (role === 'sdr' && (!existing.rows[0] || existing.rows[0].status === 'removed')) {
-        if (this.capacity) await this.capacity.assertCanAdd(tenantId, client);
+        if (this.capacity) await this.capacity.assertCanAdd(tenantId, client, { actorUserId });
       }
       const membership = existing.rows[0]
         ? (await client.query('UPDATE tenant_memberships SET role = $1, status = \'active\', updated_at = now() WHERE tenant_id = $2 AND user_id = $3 RETURNING *', [role, tenantId, userId])).rows[0]
@@ -92,7 +92,7 @@ export class MembershipsService {
     return result.rows[0];
   }
 
-  async setStatus(tenantId: string, userId: string, status: MembershipStatus) {
+  async setStatus(tenantId: string, userId: string, status: MembershipStatus, actorUserId?: string) {
     const membership = await this.findByTenantAndUser(tenantId, userId);
     if (membership.role === 'leader' && status !== 'active') {
       const leaders = await this.db.query(`SELECT count(*)::int AS count FROM tenant_memberships WHERE tenant_id = $1 AND role = 'leader' AND status = 'active'`, [tenantId]);
@@ -107,7 +107,7 @@ export class MembershipsService {
         const leaders = await client.query(`SELECT count(*)::int AS count FROM tenant_memberships WHERE tenant_id = $1 AND role = 'leader' AND status = 'active'`, [tenantId]);
         if (Number(leaders.rows[0]?.count ?? 0) <= 1) throw new ConflictException('A empresa precisa manter pelo menos um líder ativo');
       }
-      if (membership.role === 'sdr' && status === 'active' && membership.status !== 'active') await this.capacity?.assertCanAdd(tenantId, client);
+      if (membership.role === 'sdr' && status === 'active' && membership.status !== 'active') await this.capacity?.assertCanAdd(tenantId, client, { actorUserId });
       const updated = await client.query('UPDATE tenant_memberships SET status = $1, updated_at = now() WHERE tenant_id = $2 AND user_id = $3 RETURNING *', [status, tenantId, userId]);
       if (status !== 'active') {
         const remaining = await client.query(`SELECT count(*)::int AS count FROM tenant_memberships tm JOIN tenants t ON t.id = tm.tenant_id WHERE tm.user_id = $1 AND tm.status = 'active' AND t.status = 'active'`, [userId]);
@@ -118,7 +118,7 @@ export class MembershipsService {
     return result.rows[0];
   }
 
-  async setRole(tenantId: string, userId: string, role: MembershipRole) {
+  async setRole(tenantId: string, userId: string, role: MembershipRole, actorUserId?: string) {
     const membership = await this.findByTenantAndUser(tenantId, userId);
     if (membership.role === 'leader' && role !== 'leader' && membership.status === 'active') {
       const leaders = await this.db.query(`SELECT count(*)::int AS count FROM tenant_memberships WHERE tenant_id = $1 AND role = 'leader' AND status = 'active'`, [tenantId]);
@@ -130,7 +130,7 @@ export class MembershipsService {
         const lockedLeaders = await client.query(`SELECT count(*)::int AS count FROM tenant_memberships WHERE tenant_id = $1 AND role = 'leader' AND status = 'active'`, [tenantId]);
         if (Number(lockedLeaders.rows[0]?.count ?? 0) <= 1) throw new ConflictException('A empresa precisa manter pelo menos um líder ativo');
       }
-      if (role === 'sdr' && membership.role !== 'sdr' && membership.status === 'active') await this.capacity?.assertCanAdd(tenantId, client);
+      if (role === 'sdr' && membership.role !== 'sdr' && membership.status === 'active') await this.capacity?.assertCanAdd(tenantId, client, { actorUserId });
       const updated = await client.query('UPDATE tenant_memberships SET role = $1, updated_at = now() WHERE tenant_id = $2 AND user_id = $3 RETURNING *', [role, tenantId, userId]);
       if (role === 'sdr' && membership.role !== 'sdr') {
         const existingSdr = await client.query('SELECT id FROM sdrs WHERE tenant_id = $1 AND user_id = $2 LIMIT 1', [tenantId, userId]);

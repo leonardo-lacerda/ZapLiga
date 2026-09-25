@@ -102,7 +102,12 @@ export class EntitlementService {
     return Promise.all(rows.map(async (row) => ({ ...row, billing: await this.getAccess(String(row.id)) })));
   }
 
-  async assertAction(tenantId: string, action: BillingAction, actorUserId?: string) {
+  /**
+   * `sanctionedBy`: the user who authorized this write earlier, when the actor is someone else --
+   * e.g. the invitee accepting an invitation. An invitation a super admin sent on a read-only
+   * tenant is an admin decision and must be acceptable, otherwise admin edit mode only half works.
+   */
+  async assertAction(tenantId: string, action: BillingAction, actorUserId?: string, options: { sanctionedBy?: string } = {}) {
     const access = await this.getAccess(tenantId);
     // Finishing an already-running call is allowed while a tenant is
     // read-only, but an administratively blocked tenant must still be denied.
@@ -117,8 +122,8 @@ export class EntitlementService {
       return access;
     }
     if (mode === 'off') return access;
-    if (access.mode === 'read_only' && actorUserId && await this.hasAdminWriteMode(actorUserId)) {
-      await this.audit.record({ actorUserId, tenantId, action: 'billing.admin_write_override', entityType: 'tenant', entityId: tenantId, metadata: { requestedAction: action, reason: access.reason } }).catch(() => undefined);
+    if (access.mode === 'read_only' && ((actorUserId && await this.hasAdminWriteMode(actorUserId)) || (options.sanctionedBy && await this.isSuperAdmin(options.sanctionedBy)))) {
+      await this.audit.record({ actorUserId: actorUserId ?? null, tenantId, action: 'billing.admin_write_override', entityType: 'tenant', entityId: tenantId, metadata: { requestedAction: action, reason: access.reason, sanctionedBy: options.sanctionedBy ?? null } }).catch(() => undefined);
       return access;
     }
     await this.redis.incrementMetric('billing_action_denied_total').catch(() => undefined);
@@ -134,7 +139,16 @@ export class EntitlementService {
    */
   private adminWriteModeKey(userId: string) { return `zapcall:admin-write-mode:${userId}`; }
 
-  private async hasAdminWriteMode(userId: string) {
+  async isSuperAdmin(userId: string) {
+    try {
+      const user = await this.db.query('SELECT platform_role FROM users WHERE id = $1 LIMIT 1', [userId]);
+      return user.rows[0]?.platform_role === 'super_admin';
+    } catch {
+      return false;
+    }
+  }
+
+  async hasAdminWriteMode(userId: string) {
     // Fails closed: any lookup error keeps the tenant read-only.
     try {
       const flag = await this.redis.client.get(this.adminWriteModeKey(userId));

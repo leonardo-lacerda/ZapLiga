@@ -96,4 +96,20 @@ describe('billing entitlement enforcement', () => {
     const capacity = new SdrCapacityService(db as any, entitlement);
     await expect(capacity.assertCanAdd('tenant-1', db as any)).rejects.toMatchObject({ status: 402 });
   });
+
+  it('lets admin edit mode or a super-admin-sent invitation add an SDR to a read-only tenant with no seats', async () => {
+    process.env.NODE_ENV = 'production';
+    process.env.BILLING_ENFORCEMENT_MODE = 'enforce';
+    const executor = { query: jest.fn(async (sql: string) => ({ rows: [sql.includes('pg_advisory') ? {} : { tenant_status: 'active', access_mode: 'read_only', max_sdrs: null, used: 0, reserved: 0 }] })) };
+    const db = { query: jest.fn(async () => ({ rows: [{ platform_role: 'super_admin' }] })) };
+    const redis = { client: { get: jest.fn().mockResolvedValue('1') } };
+    const entitlement = new EntitlementService(db as any, redis as any, { record: jest.fn() } as any);
+    const capacity = new SdrCapacityService(db as any, entitlement, { record: jest.fn().mockResolvedValue(undefined) } as any);
+    await expect(capacity.assertCanAdd('tenant-1', executor as any, { actorUserId: 'admin-1' })).resolves.toMatchObject({ limit: null });
+    redis.client.get.mockResolvedValue(null);
+    await expect(capacity.assertCanAdd('tenant-1', executor as any, { sanctionedBy: 'admin-1' })).resolves.toMatchObject({ limit: null });
+    await expect(capacity.assertCanAdd('tenant-1', executor as any, { actorUserId: 'admin-1' })).rejects.toMatchObject({ status: 402 });
+    db.query.mockResolvedValue({ rows: [{ platform_role: 'user' }] });
+    await expect(capacity.assertCanAdd('tenant-1', executor as any, { sanctionedBy: 'leader-1' })).rejects.toMatchObject({ status: 402 });
+  });
 });

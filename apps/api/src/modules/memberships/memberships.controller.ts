@@ -22,7 +22,7 @@ export class MembershipsController {
   async create(@Param('tenantId') tenantId: string, @Body() body: CreateMembershipDto, @CurrentUser() actor: any) {
     const user = await this.users.findByEmail(body.email);
     if (!user) throw new NotFoundException('Nenhuma conta encontrada com este e-mail. Use um convite para criar uma conta nova.');
-    const membership = await this.memberships.create(tenantId, user.id, body.role);
+    const membership = await this.memberships.create(tenantId, user.id, body.role, actor.id);
     await this.audit.record({ actorUserId: actor.id, tenantId, action: 'membership.created', entityType: 'membership', entityId: membership.id, metadata: { userId: user.id, role: body.role } });
     return membership;
   }
@@ -34,7 +34,7 @@ export class MembershipsController {
     const target = await this.memberships.findByTenantAndUser(tenantId, userId);
     const actorMembership = actor.tenantMembership;
     if (actor.id === userId && body.status !== 'active') await this.requireSelfConfirmation(actor.id, body.confirmationEmail);
-    const membership = await this.memberships.setStatus(tenantId, userId, body.status);
+    const membership = await this.memberships.setStatus(tenantId, userId, body.status, actor.id);
     const action = target.role === 'sdr' ? body.status === 'active' ? 'sdr.activated' : body.status === 'blocked' ? 'sdr.blocked' : 'sdr.removed' : `membership.${body.status}`;
     await this.audit.record({ actorUserId: actor.id, tenantId, action, entityType: 'membership', entityId: target.id, metadata: { userId, role: target.role, actorRole: actorMembership?.role ?? actor.platformRole } });
     return membership;
@@ -57,7 +57,7 @@ export class MembershipsController {
   async role(@Param('tenantId') tenantId: string, @Param('userId') userId: string, @Body() body: UpdateMembershipRoleDto, @CurrentUser() actor: any) {
     const target = await this.memberships.findByTenantAndUser(tenantId, userId);
     if (actor.id === userId && target.role === 'leader' && body.role !== 'leader') await this.requireSelfConfirmation(actor.id, body.confirmationEmail);
-    const membership = await this.memberships.setRole(tenantId, userId, body.role);
+    const membership = await this.memberships.setRole(tenantId, userId, body.role, actor.id);
     await this.audit.record({ actorUserId: actor.id, tenantId, action: 'membership.role_changed', entityType: 'membership', entityId: target.id, metadata: { userId, from: target.role, to: body.role } });
     return membership;
   }
