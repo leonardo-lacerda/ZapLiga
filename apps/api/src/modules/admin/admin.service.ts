@@ -1,8 +1,11 @@
 import { randomUUID } from 'node:crypto';
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, Injectable, Logger, NotFoundException, Optional } from '@nestjs/common';
+import type { PoolClient } from 'pg';
 import { DatabaseService } from '../../database/database.service';
 import { RedisService } from '../../infrastructure/redis/redis.service';
 import { UsersService } from '../users/users.service';
+import { WaxumClient } from '../../infrastructure/waxum/waxum.client';
+import { MembershipsService } from '../memberships/memberships.service';
 
 type ListFilters = { search?: string; status?: string; role?: string; tenantId?: string; limit?: number; offset?: number };
 
@@ -24,7 +27,134 @@ const NUMBER_LOCK_FIELDS = `
 
 @Injectable()
 export class AdminService {
-  constructor(private readonly db: DatabaseService, private readonly redis: RedisService, private readonly users: UsersService) {}
+  private readonly logger = new Logger(AdminService.name);
+
+  constructor(
+    private readonly db: DatabaseService,
+    private readonly redis: RedisService,
+    private readonly users: UsersService,
+    @Optional() private readonly waxum?: WaxumClient,
+    @Optional() private readonly memberships?: MembershipsService,
+  ) {}
+
+  /**
+   * Permanently deletes a tenant and every row that belongs to it. Irreversible (backup only):
+   * the caller must type the tenant's exact name, and it refuses while a Stripe subscription is
+   * still billing or a call is in progress. Members left without any company lose their account.
+   */
+  async deleteTenant(tenantId: string, confirmName: string) {
+    const tenant = (await this.db.query('SELECT id, name FROM tenants WHERE id = $1', [tenantId])).rows[0];
+    if (!tenant) throw new NotFoundException('Empresa não encontrada');
+    if (String(confirmName ?? '').trim() !== String(tenant.name).trim()) throw new BadRequestException('Digite o nome exato da empresa para confirmar a exclusão');
+    const billing = await this.db.query(`SELECT 1 FROM tenant_subscriptions WHERE tenant_id = $1 AND status IN ('active', 'trialing', 'past_due', 'unpaid', 'paused', 'incomplete') LIMIT 1`, [tenantId]);
+    if (billing.rows[0]) throw new ConflictException('A empresa tem uma assinatura Stripe ativa. Cancele a assinatura antes de apagar a empresa.');
+    const activeCall = await this.db.query(`SELECT 1 FROM calls WHERE tenant_id = $1 AND status IN ('reserved', 'dialing', 'media_active') LIMIT 1`, [tenantId]);
+    if (activeCall.rows[0]) throw new ConflictException('Há uma chamada em andamento nesta empresa. Encerre-a antes de apagar.');
+
+    const members = (await this.db.query('SELECT DISTINCT user_id FROM tenant_memberships WHERE tenant_id = $1', [tenantId])).rows.map((row) => String(row.user_id));
+    await this.db.query('UPDATE user_sessions SET revoked_at = COALESCE(revoked_at, now()) WHERE revoked_at IS NULL AND user_id = ANY($1::text[])', [members]);
+
+    const numbers = await this.db.query(`SELECT waxum_session_id FROM whatsapp_numbers WHERE tenant_id = $1 AND status <> 'removed' AND waxum_session_id IS NOT NULL`, [tenantId]);
+    const waxumFailures: string[] = [];
+    for (const number of numbers.rows) {
+      try {
+        await this.waxum?.deleteSession(String(number.waxum_session_id));
+      } catch (error) {
+        if ((error as Error & { statusCode?: number }).statusCode !== 404) waxumFailures.push(String(number.waxum_session_id));
+      }
+    }
+    if (waxumFailures.length) this.logger.warn(`deleteTenant ${tenantId}: sessões Waxum não removidas: ${waxumFailures.join(', ')}`);
+
+    await this.db.transaction(async (client) => {
+      await this.purgeTenantRows(client, tenantId);
+      await client.query('DELETE FROM tenants WHERE id = $1', [tenantId]);
+    });
+    await this.redis.client.del(`zapcall:billing:tenant:${tenantId}`, `zapcall:tenant:${tenantId}:feature-flags`).catch(() => undefined);
+
+    let deletedUsers = 0;
+    let blockedUsers = 0;
+    for (const userId of members) {
+      const outcome = await this.deleteUserIfOrphan(userId);
+      if (outcome === 'deleted') deletedUsers += 1;
+      else if (outcome === 'blocked') blockedUsers += 1;
+    }
+    return { ok: true, id: tenantId, name: String(tenant.name), deletedUsers, blockedUsers, waxumFailures };
+  }
+
+  /** Removes a user from a tenant; if that leaves them with no company, their account goes too. */
+  async removeTenantUser(tenantId: string, userId: string) {
+    if (!this.memberships) throw new Error('MembershipsService indisponível');
+    await this.memberships.remove(tenantId, userId);
+    const account = await this.deleteUserIfOrphan(userId);
+    return { ok: true, tenantId, userId, account };
+  }
+
+  /**
+   * Deletes the account of a non-admin user who no longer belongs to any company. Rows that must
+   * keep pointing at their author (billing grants, invitations sent) block a hard delete; the
+   * account is then blocked with its sessions revoked instead, which is equivalent for access.
+   */
+  private async deleteUserIfOrphan(userId: string): Promise<'deleted' | 'blocked' | 'kept'> {
+    const user = (await this.db.query('SELECT platform_role FROM users WHERE id = $1', [userId])).rows[0];
+    if (!user || user.platform_role === 'super_admin') return 'kept';
+    const remaining = await this.db.query(`SELECT 1 FROM tenant_memberships WHERE user_id = $1 AND status <> 'removed' LIMIT 1`, [userId]);
+    if (remaining.rows[0]) return 'kept';
+    try {
+      await this.db.transaction(async (client) => {
+        await client.query('DELETE FROM tenant_memberships WHERE user_id = $1', [userId]);
+        await client.query('DELETE FROM users WHERE id = $1', [userId]);
+      });
+      return 'deleted';
+    } catch (error) {
+      if ((error as { code?: string }).code !== '23503') throw error;
+      await this.db.query(`UPDATE users SET status = 'blocked' WHERE id = $1`, [userId]);
+      await this.db.query('UPDATE user_sessions SET revoked_at = COALESCE(revoked_at, now()) WHERE user_id = $1 AND revoked_at IS NULL', [userId]);
+      return 'blocked';
+    }
+  }
+
+  /**
+   * Deletes every row with this tenant_id across all tables. The FK graph between tenant tables
+   * is large and several constraints do not cascade, so instead of a hand-kept order each table is
+   * tried under a savepoint and retried on the next pass once its dependents are gone. Audit logs
+   * are kept (their FK nulls tenant_id), so the deletion itself stays traceable.
+   */
+  private async purgeTenantRows(client: PoolClient, tenantId: string) {
+    const tables = await client.query(`
+      SELECT c.table_name FROM information_schema.columns c
+      JOIN information_schema.tables t ON t.table_schema = c.table_schema AND t.table_name = c.table_name
+      WHERE c.table_schema = current_schema() AND c.column_name = 'tenant_id' AND t.table_type = 'BASE TABLE'
+        AND c.table_name NOT IN ('tenants', 'audit_logs')
+    `);
+    const all = tables.rows.map((row) => String(row.table_name)).filter((name) => /^[a-z_][a-z0-9_]*$/.test(name));
+    const sweep = async (pending: string[]) => {
+      const failed: string[] = [];
+      let lastError: unknown;
+      for (const table of pending) {
+        await client.query('SAVEPOINT purge_tenant_table');
+        try {
+          await client.query(`DELETE FROM "${table}" WHERE tenant_id = $1`, [tenantId]);
+          await client.query('RELEASE SAVEPOINT purge_tenant_table');
+        } catch (error) {
+          await client.query('ROLLBACK TO SAVEPOINT purge_tenant_table');
+          failed.push(table);
+          lastError = error;
+        }
+      }
+      return { failed, lastError };
+    };
+    const fail = (failed: string[], lastError: unknown) => new ConflictException(`Não foi possível apagar os dados da empresa (${failed.join(', ')}): ${(lastError as Error)?.message ?? String(lastError)}`);
+    let pending = all;
+    while (pending.length) {
+      const { failed, lastError } = await sweep(pending);
+      if (failed.length === pending.length) throw fail(failed, lastError);
+      pending = failed;
+    }
+    // Triggers on deleted rows can write fresh derived rows into tables swept earlier; one more
+    // pass clears them before the tenant row itself is removed.
+    const { failed, lastError } = await sweep(all);
+    if (failed.length) throw fail(failed, lastError);
+  }
 
   async overview(tenantId?: string) {
     const scope = tenantId?.trim() || null;

@@ -1,4 +1,4 @@
-import { Body, Controller, Delete, Get, Param, Post, Query, UseGuards } from '@nestjs/common';
+import { BadRequestException, Body, Controller, Delete, Get, Param, Post, Query, UseGuards } from '@nestjs/common';
 import { AuditService } from '../audit/audit.service';
 import { AuthGuard, CurrentUser, Roles, RolesGuard, TenantAction, TenantMembershipGuard } from '../auth/auth.guards';
 import { DialerService } from '../dialer/dialer.service';
@@ -54,6 +54,25 @@ export class AdminController {
     const role = body?.role === 'leader' || body?.role === 'sdr' ? body.role : undefined;
     const result = await this.admin.revokeTenantSessions(tenantId, role);
     await this.audit.record({ actorUserId: actor.id, tenantId, action: 'tenant.sessions_revoked', entityType: 'tenant', entityId: tenantId, metadata: { reason: body?.reason ?? null, role: role ?? 'all', revoked: result.revoked } });
+    return result;
+  }
+
+  // --- Exclusão definitiva ---
+
+  @Delete('/tenants/:tenantId')
+  async deleteTenant(@Param('tenantId') tenantId: string, @Body() body: { confirmName?: string }, @CurrentUser() actor: any) {
+    const result = await this.admin.deleteTenant(tenantId, String(body?.confirmName ?? ''));
+    await this.audit.record({ actorUserId: actor.id, tenantId: null, action: 'tenant.deleted', entityType: 'tenant', entityId: tenantId, metadata: { name: result.name, deletedUsers: result.deletedUsers, blockedUsers: result.blockedUsers, waxumFailures: result.waxumFailures } });
+    return result;
+  }
+
+  @Delete('/tenants/:tenantId/users/:userId')
+  @UseGuards(TenantMembershipGuard)
+  @TenantAction('read')
+  async removeTenantUser(@Param('tenantId') tenantId: string, @Param('userId') userId: string, @CurrentUser() actor: any) {
+    if (userId === actor.id) throw new BadRequestException('Você não pode remover a si mesmo');
+    const result = await this.admin.removeTenantUser(tenantId, userId);
+    await this.audit.record({ actorUserId: actor.id, tenantId, action: 'tenant.user_removed', entityType: 'user', entityId: userId, metadata: { account: result.account } });
     return result;
   }
 
