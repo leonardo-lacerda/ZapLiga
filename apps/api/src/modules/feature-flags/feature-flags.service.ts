@@ -63,6 +63,18 @@ const normalizeLevels = (value: unknown): Partial<TenantFeatureEntitlements> => 
   return result;
 };
 
+/**
+ * Whether the tenant's billing snapshot is authoritative for its roadmap features. Only a real
+ * plan (Stripe subscription) carries a per-feature snapshot. A manual grant just unlocks access and
+ * seats -- its snapshot is an empty `{}` -- so treating it as authoritative resolved every roadmap
+ * feature to 'none' and made the admin's "Recursos da empresa" checkboxes silently inert: they
+ * saved fine, then read back unchecked after a refresh. For those tenants the admin toggles decide.
+ */
+const planDecidesFeatures = (row: { access_mode?: unknown; feature_entitlements?: unknown; source?: unknown } | undefined) =>
+  row?.access_mode === 'full'
+  && row.source !== 'manual_grant'
+  && Boolean(row.feature_entitlements) && typeof row.feature_entitlements === 'object' && !Array.isArray(row.feature_entitlements);
+
 @Injectable()
 export class FeatureFlagsService {
   constructor(private readonly db: DatabaseService, private readonly redis: RedisService, private readonly audit: AuditService) {}
@@ -95,7 +107,7 @@ export class FeatureFlagsService {
     if (cached) await this.redis.client.del(this.key(tenantId)).catch(() => undefined);
     const row = (await this.db.query(`
       SELECT tff.${TENANT_FEATURES.join(', tff.')},
-        e.access_mode, e.feature_entitlements, e.last_active_feature_entitlements,
+        e.access_mode, e.source, e.feature_entitlements, e.last_active_feature_entitlements,
         c.operational_flags
       FROM tenants t
       LEFT JOIN tenant_feature_flags tff ON tff.tenant_id = t.id
@@ -104,18 +116,14 @@ export class FeatureFlagsService {
       WHERE t.id = $1
     `, [tenantId])).rows[0];
     const legacy = normalizeFeatureFlags(row);
-    // Overrides win regardless of commercial state: they are the admin's explicit, per-tenant,
-    // per-feature decision, and without them here a "full" tenant (paid plan OR manual grant)
-    // whose plan snapshot says nothing about a roadmap feature falls through to 'none' below,
-    // silently ignoring both the legacy toggle AND any override -- exactly what made "Recursos da
-    // empresa" look like it saved but have no effect for a manually-granted tenant like PREVITAS.
+    // Overrides are the admin's explicit per-tenant, per-feature decision and win over the plan.
     const active = { ...normalizeLevels(row?.feature_entitlements), ...(await this.overrideLevels(tenantId)) };
     const historical = normalizeLevels(row?.last_active_feature_entitlements);
     const operational = row?.operational_flags && typeof row.operational_flags === 'object' ? row.operational_flags as Record<string, unknown> : {};
-    const hasCommercialSnapshot = row?.feature_entitlements && typeof row.feature_entitlements === 'object' && !Array.isArray(row.feature_entitlements);
+    const planDecides = planDecidesFeatures(row);
     const flags = { ...legacy };
     for (const feature of TENANT_FEATURES) {
-      const level = row?.access_mode === 'full' && hasCommercialSnapshot
+      const level = planDecides
         ? (active[feature] ?? 'none')
         : (active[feature] ?? historical[feature]);
       if (level) flags[feature] = level !== 'none';
@@ -130,9 +138,11 @@ export class FeatureFlagsService {
   }
   async getLevels(tenantId: string): Promise<TenantFeatureEntitlements> {
     const result = await this.db.query(`
-      SELECT e.access_mode, e.access_until, e.feature_entitlements, e.last_active_feature_entitlements,
+      SELECT tff.${TENANT_FEATURES.join(', tff.')},
+        e.access_mode, e.access_until, e.source, e.feature_entitlements, e.last_active_feature_entitlements,
         c.operational_flags
       FROM tenants t
+      LEFT JOIN tenant_feature_flags tff ON tff.tenant_id = t.id
       LEFT JOIN tenant_entitlements e ON e.tenant_id = t.id
       LEFT JOIN tenant_feature_controls c ON c.tenant_id = t.id
       WHERE t.id = $1
@@ -142,10 +152,14 @@ export class FeatureFlagsService {
     const historical = normalizeLevels(row.last_active_feature_entitlements);
     const operational = row.operational_flags && typeof row.operational_flags === 'object' ? row.operational_flags as Record<string, unknown> : {};
     const fullyEntitled = row.access_mode === 'full' && (!row.access_until || new Date(row.access_until).getTime() > Date.now());
-    const hasCommercialSnapshot = row.feature_entitlements && typeof row.feature_entitlements === 'object' && !Array.isArray(row.feature_entitlements);
+    const planDecides = planDecidesFeatures(row);
+    // Legacy admin toggles ("Recursos da empresa"). This query previously did not select them, so
+    // normalizeFeatureFlags() fell back to defaults and roadmap features were always 'none' here --
+    // the API gate refused them even when the admin had turned them on.
+    const toggles = normalizeFeatureFlags(row);
     const levels = {} as TenantFeatureEntitlements;
     for (const feature of TENANT_FEATURES) {
-      const configured = active[feature] ?? historical[feature] ?? (fullyEntitled && hasCommercialSnapshot ? 'none' : (normalizeFeatureFlags(row)[feature] ? 'full' : 'none'));
+      const configured = active[feature] ?? historical[feature] ?? (fullyEntitled && planDecides ? 'none' : (toggles[feature] ? 'full' : 'none'));
       levels[feature] = operational[feature] === false ? 'none' : (fullyEntitled ? configured : (configured === 'none' ? 'none' : 'read_only'));
     }
     return levels;

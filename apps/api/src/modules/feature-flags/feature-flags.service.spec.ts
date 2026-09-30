@@ -92,21 +92,28 @@ describe('FeatureFlagsService', () => {
     expect(audit.record).toHaveBeenCalledWith(expect.objectContaining({ metadata: { changed: ['callbacks'] } }));
   });
 
-  it('nav visibility (get) needs an entitlement override to enable a roadmap feature on a manually-granted tenant', async () => {
-    // Regression for a real production incident: a tenant given full access via a manual grant
-    // (not a Stripe plan) gets `feature_entitlements = '{}'` (present but empty), which makes
-    // `hasCommercialSnapshot` true and forces every roadmap feature to 'none' -- the legacy
-    // "Recursos da empresa" admin toggle then silently has no effect. An active grant override
-    // is the one thing that still turns the feature on, and `get()` (nav visibility) must honor
-    // it exactly like `getLevels()` (API gating) already did -- before this fix it did not.
-    const row = { access_mode: 'full', feature_entitlements: {}, last_active_feature_entitlements: {}, operational_flags: {} };
-    const withoutOverride = { query: jest.fn().mockResolvedValueOnce({ rows: [row] }).mockResolvedValueOnce({ rows: [] }) };
-    const service1 = new FeatureFlagsService(withoutOverride as any, { client: { get: jest.fn().mockResolvedValue(null), set: jest.fn().mockResolvedValue('OK'), del: jest.fn() } } as any, { record: jest.fn() } as any);
-    expect((await service1.get('tenant-1')).campaigns).toBe(false);
+  it('lets the admin toggles decide roadmap features for a manually-granted tenant, in both nav and API gate', async () => {
+    // Regression for PREVITAS: a manual grant sets access_mode='full' with an empty feature
+    // snapshot. That snapshot used to be treated as the plan, resolving every roadmap feature to
+    // 'none' -- the "Recursos da empresa" checkboxes saved but read back unchecked after F5, and
+    // getLevels() (the API gate) did not even select the toggle columns.
+    const redis = () => ({ client: { get: jest.fn().mockResolvedValue(null), set: jest.fn().mockResolvedValue('OK'), del: jest.fn() } });
+    const granted = { access_mode: 'full', source: 'manual_grant', access_until: new Date(Date.now() + 60_000), feature_entitlements: {}, last_active_feature_entitlements: {}, operational_flags: {}, campaigns: true, experiments: false };
+    const db = { query: jest.fn(async (sql: string) => ({ rows: sql.includes('tenant_entitlement_overrides') ? [] : [granted] })) };
+    const service = new FeatureFlagsService(db as any, redis() as any, { record: jest.fn() } as any);
+    const flags = await service.get('tenant-1');
+    expect(flags.campaigns).toBe(true);
+    expect(flags.experiments).toBe(false);
+    const levels = await service.getLevels('tenant-1');
+    expect(levels.campaigns).toBe('full');
+    expect(levels.experiments).toBe('none');
 
-    const withOverride = { query: jest.fn().mockResolvedValueOnce({ rows: [row] }).mockResolvedValueOnce({ rows: [{ feature_code: 'campaigns', override_mode: 'grant', value: {} }] }) };
-    const service2 = new FeatureFlagsService(withOverride as any, { client: { get: jest.fn().mockResolvedValue(null), set: jest.fn().mockResolvedValue('OK'), del: jest.fn() } } as any, { record: jest.fn() } as any);
-    expect((await service2.get('tenant-1')).campaigns).toBe(true);
+    // A real Stripe plan keeps deciding: the same toggle does not unlock a feature the plan omits.
+    const paid = { ...granted, source: 'stripe' };
+    const paidDb = { query: jest.fn(async (sql: string) => ({ rows: sql.includes('tenant_entitlement_overrides') ? [] : [paid] })) };
+    const paidService = new FeatureFlagsService(paidDb as any, redis() as any, { record: jest.fn() } as any);
+    expect((await paidService.get('tenant-1')).campaigns).toBe(false);
+    expect((await paidService.getLevels('tenant-1')).campaigns).toBe('none');
   });
 
   it('does not let concurrent toggles of different flags clobber each other', async () => {
