@@ -176,6 +176,8 @@ p { color: var(--muted); }
 .admin-flag-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 12px; border: 1px solid var(--border-subtle); border-radius: 8px; background: var(--surface-subtle); color: var(--text); font-size: 12px; font-weight: 600; }
 .admin-flag-row small { display: block; margin-top: 3px; color: var(--subtle); font-size: 10px; font-weight: 500; }
 .admin-flag-row input { width: 16px; height: 16px; min-height: 0; accent-color: var(--primary); }
+.admin-flag-row.is-dirty { border-color: var(--primary); background: var(--primary-soft, var(--surface-subtle)); }
+.admin-flag-unsaved { margin: 8px 0 0; color: var(--primary); }
 .admin-operation-title { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; }.admin-operation-grid article > dl { margin: 13px 0; padding: 11px 0; border-top: 1px solid var(--border-subtle); border-bottom: 1px solid var(--border-subtle); display: grid; grid-template-columns: repeat(4, 1fr); gap: 5px; }
 .admin-operation-grid article > .panel-actions { align-items: stretch; flex-direction: column; }.admin-operation-grid article > .panel-actions .button { justify-content: center; }
 .admin-two-columns { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }.admin-two-columns .panel { min-width: 0; }.admin-scroll-list { max-height: 390px; overflow-y: auto; }

@@ -24,12 +24,11 @@ describe('FeatureFlagsService', () => {
     expect(updated.callbacks).toBe(false);
     expect(updated.onboarding).toBe(true);
     expect(updated.campaigns).toBe(false);
-    expect(db.query.mock.calls[2][0]).toContain('campaigns=EXCLUDED.campaigns');
-    expect(db.query.mock.calls[2][1]).toEqual([
-      'tenant-1',
-      ...TENANT_FEATURES.map((feature) => feature === 'callbacks' ? false : defaultTenantFeatureFlags()[feature]),
-      'leader-1',
-    ]);
+    // Only the changed column is written -- writing every column from a stale snapshot is what
+    // let concurrent toggles of different flags clobber each other (see update()'s comment).
+    expect(db.query.mock.calls[2][0]).toContain('callbacks=EXCLUDED.callbacks');
+    expect(db.query.mock.calls[2][0]).not.toContain('campaigns');
+    expect(db.query.mock.calls[2][1]).toEqual(['tenant-1', false, 'leader-1']);
     expect(audit.record).toHaveBeenCalledWith(expect.objectContaining({ action: 'tenant.feature_flags_updated', metadata: { changed: ['callbacks'] } }));
   });
 
@@ -91,6 +90,32 @@ describe('FeatureFlagsService', () => {
     expect(updated.campaigns).toBe(false);
     expect(db.query.mock.calls[1][1]).not.toContain(undefined);
     expect(audit.record).toHaveBeenCalledWith(expect.objectContaining({ metadata: { changed: ['callbacks'] } }));
+  });
+
+  it('does not let concurrent toggles of different flags clobber each other', async () => {
+    // Regression for the "select all, refresh, most reverted" bug: each update() used to read a
+    // `current` snapshot and write ALL 12 columns from it. Two overlapping requests toggling
+    // DIFFERENT flags would each write their target flag plus 11 stale values for the others --
+    // whichever one's UPDATE committed last silently reverted every flag the other had just set.
+    const db = { query: jest.fn().mockResolvedValue({ rows: [] }) };
+    const redis = { client: { get: jest.fn().mockResolvedValue(null), set: jest.fn().mockResolvedValue('OK'), del: jest.fn().mockResolvedValue(1) } };
+    const audit = { record: jest.fn().mockResolvedValue(undefined) };
+    const service = new FeatureFlagsService(db as any, redis as any, audit as any);
+
+    // Simulates two toggles racing: both start from the same pre-update state, and their flags
+    // inserts can land in either order -- neither write should mention the other's column.
+    await Promise.all([
+      service.update('tenant-1', { campaigns: true }, 'leader-1'),
+      service.update('tenant-1', { experiments: true }, 'leader-1'),
+    ]);
+
+    const flagInserts = db.query.mock.calls.filter(([sql]) => String(sql).includes('INSERT INTO tenant_feature_flags'));
+    expect(flagInserts).toHaveLength(2);
+    for (const [sql] of flagInserts) {
+      // Each write touches exactly one boolean column, never the other request's flag.
+      const matches = String(sql).match(/\b(campaigns|experiments)\b/g) ?? [];
+      expect(new Set(matches).size).toBe(1);
+    }
   });
 
   it('treats plan entitlements as commercial access and keeps expired tenants read-only', async () => {

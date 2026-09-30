@@ -152,21 +152,29 @@ export class FeatureFlagsService {
     ) as Partial<TenantFeatureFlags>;
     const current = await this.get(tenantId);
     const next = { ...current, ...definedUpdates };
-    // Keep the legacy projection populated for older workers and migration
-    // tooling. It is no longer the source of commercial plan activation.
-    const columns = TENANT_FEATURES.join(', ');
-    const values = TENANT_FEATURES.map((_, index) => `$${index + 2}`).join(', ');
-    const assignments = TENANT_FEATURES.map((feature) => `${feature}=EXCLUDED.${feature}`).join(', ');
-    await this.db.query(`INSERT INTO tenant_feature_flags (tenant_id, ${columns}, updated_by, updated_at)
-      VALUES ($1, ${values}, $${TENANT_FEATURES.length + 2}, now())
-      ON CONFLICT (tenant_id) DO UPDATE SET ${assignments}, updated_by=EXCLUDED.updated_by, updated_at=now()`,
-    [tenantId, ...TENANT_FEATURES.map((feature) => next[feature]), userId]);
-    await this.db.query(`INSERT INTO tenant_feature_controls (tenant_id, operational_flags, updated_by, updated_at)
-      VALUES ($1, $2::jsonb, $3, now())
-      ON CONFLICT (tenant_id) DO UPDATE SET operational_flags = tenant_feature_controls.operational_flags || EXCLUDED.operational_flags, updated_by=EXCLUDED.updated_by, updated_at=now()`,
-    [tenantId, JSON.stringify(definedUpdates), userId]);
-    await this.redis.client.del(this.key(tenantId)).catch(() => undefined);
-    await this.audit.record({ actorUserId: userId, tenantId, action: 'tenant.feature_flags_updated', entityType: 'tenant', entityId: tenantId, metadata: { changed: Object.keys(definedUpdates) } });
+    const changedFeatures = Object.keys(definedUpdates) as TenantFeature[];
+    if (changedFeatures.length) {
+      // Write ONLY the columns actually changed, not every column from a `current` snapshot taken
+      // at request start. Toggling several flags in quick succession (e.g. an admin turning several
+      // on at once) fires overlapping requests; if each one blindly rewrote all 12 columns from its
+      // own stale snapshot, whichever request's UPDATE landed last silently reverted every flag it
+      // wasn't asked to touch -- the admin would toggle several on and, after a refresh, find most
+      // of them back off. Restricting each write to its own columns makes concurrent toggles of
+      // DIFFERENT flags commute instead of racing.
+      const columns = changedFeatures.join(', ');
+      const placeholders = changedFeatures.map((_, index) => `$${index + 2}`).join(', ');
+      const assignments = changedFeatures.map((feature) => `${feature}=EXCLUDED.${feature}`).join(', ');
+      await this.db.query(`INSERT INTO tenant_feature_flags (tenant_id, ${columns}, updated_by, updated_at)
+        VALUES ($1, ${placeholders}, $${changedFeatures.length + 2}, now())
+        ON CONFLICT (tenant_id) DO UPDATE SET ${assignments}, updated_by=EXCLUDED.updated_by, updated_at=now()`,
+      [tenantId, ...changedFeatures.map((feature) => definedUpdates[feature]), userId]);
+      await this.db.query(`INSERT INTO tenant_feature_controls (tenant_id, operational_flags, updated_by, updated_at)
+        VALUES ($1, $2::jsonb, $3, now())
+        ON CONFLICT (tenant_id) DO UPDATE SET operational_flags = tenant_feature_controls.operational_flags || EXCLUDED.operational_flags, updated_by=EXCLUDED.updated_by, updated_at=now()`,
+      [tenantId, JSON.stringify(definedUpdates), userId]);
+      await this.redis.client.del(this.key(tenantId)).catch(() => undefined);
+      await this.audit.record({ actorUserId: userId, tenantId, action: 'tenant.feature_flags_updated', entityType: 'tenant', entityId: tenantId, metadata: { changed: changedFeatures } });
+    }
     return next;
   }
 }
