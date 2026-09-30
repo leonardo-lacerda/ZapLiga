@@ -67,6 +67,23 @@ const normalizeLevels = (value: unknown): Partial<TenantFeatureEntitlements> => 
 export class FeatureFlagsService {
   constructor(private readonly db: DatabaseService, private readonly redis: RedisService, private readonly audit: AuditService) {}
   private key(tenantId: string) { return `zapcall:tenant:${tenantId}:feature-flags`; }
+
+  /**
+   * Per-tenant admin overrides (tenant_entitlement_overrides), independent of the tenant's plan.
+   * This is the one mechanism that can turn a roadmap feature on for a tenant whose commercial
+   * snapshot (Stripe plan or manual grant) says nothing about it -- see the comment on `get()`.
+   */
+  private async overrideLevels(tenantId: string): Promise<Partial<TenantFeatureEntitlements>> {
+    const result = await this.db.query(`SELECT feature_code, override_mode, value FROM tenant_entitlement_overrides WHERE tenant_id = $1 AND revoked_at IS NULL AND starts_at <= now() AND (expires_at IS NULL OR expires_at > now())`, [tenantId]);
+    const overrides: Partial<TenantFeatureEntitlements> = {};
+    for (const override of result.rows) {
+      if (!override.feature_code) continue;
+      if (override.override_mode === 'deny') overrides[String(override.feature_code) as TenantFeature] = 'none';
+      if (override.override_mode === 'grant') overrides[String(override.feature_code) as TenantFeature] = (override.value?.level ?? 'full') as FeatureLevel;
+    }
+    return overrides;
+  }
+
   async get(tenantId: string): Promise<TenantFeatureFlags> {
     const cached = await this.redis.client.get(this.key(tenantId)).catch(() => null);
     if (cached && Buffer.byteLength(cached, 'utf8') <= FEATURE_FLAGS_CACHE_MAX_BYTES) {
@@ -87,7 +104,12 @@ export class FeatureFlagsService {
       WHERE t.id = $1
     `, [tenantId])).rows[0];
     const legacy = normalizeFeatureFlags(row);
-    const active = normalizeLevels(row?.feature_entitlements);
+    // Overrides win regardless of commercial state: they are the admin's explicit, per-tenant,
+    // per-feature decision, and without them here a "full" tenant (paid plan OR manual grant)
+    // whose plan snapshot says nothing about a roadmap feature falls through to 'none' below,
+    // silently ignoring both the legacy toggle AND any override -- exactly what made "Recursos da
+    // empresa" look like it saved but have no effect for a manually-granted tenant like PREVITAS.
+    const active = { ...normalizeLevels(row?.feature_entitlements), ...(await this.overrideLevels(tenantId)) };
     const historical = normalizeLevels(row?.last_active_feature_entitlements);
     const operational = row?.operational_flags && typeof row.operational_flags === 'object' ? row.operational_flags as Record<string, unknown> : {};
     const hasCommercialSnapshot = row?.feature_entitlements && typeof row.feature_entitlements === 'object' && !Array.isArray(row.feature_entitlements);
@@ -116,14 +138,8 @@ export class FeatureFlagsService {
       WHERE t.id = $1
     `, [tenantId]);
     const row = result.rows[0] ?? {};
-    const overrideResult = await this.db.query(`SELECT feature_code, override_mode, value FROM tenant_entitlement_overrides WHERE tenant_id = $1 AND revoked_at IS NULL AND starts_at <= now() AND (expires_at IS NULL OR expires_at > now())`, [tenantId]);
-    const active = normalizeLevels(row.feature_entitlements);
+    const active = { ...normalizeLevels(row.feature_entitlements), ...(await this.overrideLevels(tenantId)) };
     const historical = normalizeLevels(row.last_active_feature_entitlements);
-    for (const override of overrideResult.rows) {
-      if (!override.feature_code) continue;
-      if (override.override_mode === 'deny') active[String(override.feature_code) as TenantFeature] = 'none';
-      if (override.override_mode === 'grant') active[String(override.feature_code) as TenantFeature] = (override.value?.level ?? 'full') as FeatureLevel;
-    }
     const operational = row.operational_flags && typeof row.operational_flags === 'object' ? row.operational_flags as Record<string, unknown> : {};
     const fullyEntitled = row.access_mode === 'full' && (!row.access_until || new Date(row.access_until).getTime() > Date.now());
     const hasCommercialSnapshot = row.feature_entitlements && typeof row.feature_entitlements === 'object' && !Array.isArray(row.feature_entitlements);

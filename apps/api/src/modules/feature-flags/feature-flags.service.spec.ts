@@ -2,10 +2,7 @@ import { defaultTenantFeatureFlags, FeatureFlagsService, TENANT_FEATURES } from 
 
 describe('FeatureFlagsService', () => {
   it('defaults launch features to enabled and supports audited disablement', async () => {
-    const db = { query: jest.fn()
-      .mockResolvedValueOnce({ rows: [] })
-      .mockResolvedValueOnce({ rows: [] })
-      .mockResolvedValueOnce({ rows: [] }) };
+    const db = { query: jest.fn().mockResolvedValue({ rows: [] }) };
     const redis = { client: { get: jest.fn().mockResolvedValue(null), set: jest.fn().mockResolvedValue('OK'), del: jest.fn().mockResolvedValue(1) } };
     const audit = { record: jest.fn().mockResolvedValue(undefined) };
     const service = new FeatureFlagsService(db as any, redis as any, audit as any);
@@ -26,9 +23,10 @@ describe('FeatureFlagsService', () => {
     expect(updated.campaigns).toBe(false);
     // Only the changed column is written -- writing every column from a stale snapshot is what
     // let concurrent toggles of different flags clobber each other (see update()'s comment).
-    expect(db.query.mock.calls[2][0]).toContain('callbacks=EXCLUDED.callbacks');
-    expect(db.query.mock.calls[2][0]).not.toContain('campaigns');
-    expect(db.query.mock.calls[2][1]).toEqual(['tenant-1', false, 'leader-1']);
+    const flagsInsert = db.query.mock.calls.find(([sql]) => String(sql).includes('INSERT INTO tenant_feature_flags'));
+    expect(flagsInsert?.[0]).toContain('callbacks=EXCLUDED.callbacks');
+    expect(flagsInsert?.[0]).not.toContain('campaigns');
+    expect(flagsInsert?.[1]).toEqual(['tenant-1', false, 'leader-1']);
     expect(audit.record).toHaveBeenCalledWith(expect.objectContaining({ action: 'tenant.feature_flags_updated', metadata: { changed: ['callbacks'] } }));
   });
 
@@ -56,7 +54,8 @@ describe('FeatureFlagsService', () => {
     const flags = await service.get('tenant-corrupted');
 
     expect(redis.client.del).toHaveBeenCalledWith('zapcall:tenant:tenant-corrupted:feature-flags');
-    expect(db.query).toHaveBeenCalledTimes(1);
+    // One query for the tenant's row, one for its active entitlement overrides.
+    expect(db.query).toHaveBeenCalledTimes(2);
     expect(flags.callbacks).toBe(false);
     expect(flags.campaigns).toBe(true);
     expect(flags).not.toHaveProperty('unexpected');
@@ -76,7 +75,7 @@ describe('FeatureFlagsService', () => {
   });
 
   it('ignores undefined optional DTO fields when updating flags', async () => {
-    const db = { query: jest.fn().mockResolvedValueOnce({ rows: [] }).mockResolvedValueOnce({ rows: [] }) };
+    const db = { query: jest.fn().mockResolvedValue({ rows: [] }) };
     const redis = { client: { get: jest.fn().mockResolvedValue(null), set: jest.fn().mockResolvedValue('OK'), del: jest.fn().mockResolvedValue(1) } };
     const audit = { record: jest.fn().mockResolvedValue(undefined) };
     const service = new FeatureFlagsService(db as any, redis as any, audit as any);
@@ -88,8 +87,26 @@ describe('FeatureFlagsService', () => {
     expect(updated.callbacks).toBe(false);
     expect(updated.schedule_enforcement).toBe(true);
     expect(updated.campaigns).toBe(false);
-    expect(db.query.mock.calls[1][1]).not.toContain(undefined);
+    const flagsInsert = db.query.mock.calls.find(([sql]) => String(sql).includes('INSERT INTO tenant_feature_flags'));
+    expect(flagsInsert?.[1]).not.toContain(undefined);
     expect(audit.record).toHaveBeenCalledWith(expect.objectContaining({ metadata: { changed: ['callbacks'] } }));
+  });
+
+  it('nav visibility (get) needs an entitlement override to enable a roadmap feature on a manually-granted tenant', async () => {
+    // Regression for a real production incident: a tenant given full access via a manual grant
+    // (not a Stripe plan) gets `feature_entitlements = '{}'` (present but empty), which makes
+    // `hasCommercialSnapshot` true and forces every roadmap feature to 'none' -- the legacy
+    // "Recursos da empresa" admin toggle then silently has no effect. An active grant override
+    // is the one thing that still turns the feature on, and `get()` (nav visibility) must honor
+    // it exactly like `getLevels()` (API gating) already did -- before this fix it did not.
+    const row = { access_mode: 'full', feature_entitlements: {}, last_active_feature_entitlements: {}, operational_flags: {} };
+    const withoutOverride = { query: jest.fn().mockResolvedValueOnce({ rows: [row] }).mockResolvedValueOnce({ rows: [] }) };
+    const service1 = new FeatureFlagsService(withoutOverride as any, { client: { get: jest.fn().mockResolvedValue(null), set: jest.fn().mockResolvedValue('OK'), del: jest.fn() } } as any, { record: jest.fn() } as any);
+    expect((await service1.get('tenant-1')).campaigns).toBe(false);
+
+    const withOverride = { query: jest.fn().mockResolvedValueOnce({ rows: [row] }).mockResolvedValueOnce({ rows: [{ feature_code: 'campaigns', override_mode: 'grant', value: {} }] }) };
+    const service2 = new FeatureFlagsService(withOverride as any, { client: { get: jest.fn().mockResolvedValue(null), set: jest.fn().mockResolvedValue('OK'), del: jest.fn() } } as any, { record: jest.fn() } as any);
+    expect((await service2.get('tenant-1')).campaigns).toBe(true);
   });
 
   it('does not let concurrent toggles of different flags clobber each other', async () => {

@@ -291,6 +291,11 @@ export class EntitlementService {
     return { ok: true, id };
   }
 
+  async listOverrides(tenantId: string) {
+    const result = await this.db.query(`SELECT id, feature_code, override_mode, value, reason, expires_at, created_at, created_by FROM tenant_entitlement_overrides WHERE tenant_id = $1 AND revoked_at IS NULL AND (expires_at IS NULL OR expires_at > now()) ORDER BY created_at DESC`, [tenantId]);
+    return result.rows;
+  }
+
   async createOverride(tenantId: string, input: { featureCode?: string; overrideMode: 'grant' | 'deny' | 'replace_limit'; value?: Record<string, unknown>; reason: string; expiresInSeconds?: number; actorUserId: string }) {
     if (!input.reason.trim() || (input.overrideMode === 'grant' && (!input.expiresInSeconds || input.expiresInSeconds <= 0)) || (input.overrideMode === 'replace_limit' && !Number.isFinite(Number(input.value?.value)))) throw new HttpException({ statusCode: 400, code: 'invalid_entitlement_override', message: 'Override de entitlement invalido.' }, 400);
     const id = randomUUID();

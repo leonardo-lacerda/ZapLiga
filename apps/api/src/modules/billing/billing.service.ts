@@ -360,6 +360,10 @@ export class BillingService {
     return this.entitlement.revokeManualGrant(tenantId, grantId, actorUserId);
   }
 
+  listOverrides(tenantId: string) {
+    return this.entitlement.listOverrides(tenantId);
+  }
+
   createOverride(tenantId: string, input: { featureCode?: string; overrideMode: 'grant' | 'deny' | 'replace_limit'; value?: Record<string, unknown>; reason: string; expiresInSeconds?: number; actorUserId: string }) {
     return this.entitlement.createOverride(tenantId, input);
   }

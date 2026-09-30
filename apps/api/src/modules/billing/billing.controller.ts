@@ -85,6 +85,12 @@ export class BillingController {
     return this.billing.revokeManualGrant(tenantId, grantId, user.id);
   }
 
+  @Get('/api/tenants/:tenantId/billing/entitlement-overrides')
+  @Roles('super_admin')
+  listOverrides(@CurrentTenant() tenantId: string) {
+    return this.billing.listOverrides(tenantId);
+  }
+
   @Post('/api/tenants/:tenantId/billing/entitlement-overrides')
   @TenantAction('billing_recovery')
   @Roles('super_admin')
