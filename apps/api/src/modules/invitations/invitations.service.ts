@@ -99,7 +99,11 @@ export class InvitationsService implements OnModuleInit, OnModuleDestroy {
     const invitation = result.rows[0];
     if (!invitation || invitation.tenant_status !== 'active' || new Date(invitation.expires_at).getTime() <= Date.now()) throw new NotFoundException('Convite inválido, expirado ou revogado');
     await this.db.query('UPDATE invitations SET opened_at = COALESCE(opened_at, now()) WHERE id = $1', [invitation.id]);
-    return { valid: true, name: invitation.invitee_name, email: invitation.invited_email, role: invitation.role, expiresAt: invitation.expires_at, tenant: { id: invitation.tenant_id, name: invitation.tenant_name } };
+    // Accepting with an email that already has an account links that account instead of creating
+    // one, and requires ITS password (see accept() below) -- tell the invitee upfront so the form
+    // doesn't ask them to "create a password" for an account that already exists.
+    const existingUser = await this.db.query('SELECT 1 FROM users WHERE lower(email) = lower($1) LIMIT 1', [invitation.invited_email]);
+    return { valid: true, name: invitation.invitee_name, email: invitation.invited_email, role: invitation.role, expiresAt: invitation.expires_at, tenant: { id: invitation.tenant_id, name: invitation.tenant_name }, accountExists: Boolean(existingUser.rows[0]) };
   }
 
   async accept(token: string, name: string, password: string) {

@@ -10,7 +10,15 @@ export function AcceptInvitePage({ token, acceptInvite }: { token: string; accep
   return <AuthShell mode="login"><Panel className="auth-card">
     <div className="auth-card-head"><span className="eyebrow">CONVITE</span><span className="auth-status"><i /> Acesso seguro</span></div>
     <h1>Entrar na operação</h1>
-    {preview ? <><p className="auth-intro">Você foi convidado para <strong>{preview.tenant.name}</strong> como <strong>{preview.role === 'leader' ? 'líder' : 'SDR'}</strong>.</p><form className="auth-form" onSubmit={submit}><label><span>Seu nome</span><input value={name} onChange={(event) => setName(event.target.value)} placeholder="Como podemos chamar você?" autoComplete="name" required /></label><label><span>Senha <small>Mínimo de 8 caracteres</small></span><input type="password" value={password} onChange={(event) => setPassword(event.target.value)} placeholder="Crie uma senha segura" minLength={8} autoComplete="new-password" required /></label><Button type="submit" disabled={busy}>{busy ? 'Criando acesso...' : 'Aceitar convite'}</Button></form></> : !error ? <p className="auth-intro">Validando convite...</p> : null}
+    {preview ? <>
+      <p className="auth-intro">Você foi convidado para <strong>{preview.tenant.name}</strong> como <strong>{preview.role === 'leader' ? 'líder' : 'SDR'}</strong>.</p>
+      {preview.accountExists && <div className="alert" role="status">O e-mail <strong>{preview.email}</strong> já tem uma conta no ZapLiga. Digite a senha <strong>dessa conta existente</strong> para vincular este acesso — não é para criar uma senha nova.</div>}
+      <form className="auth-form" onSubmit={submit}>
+        {!preview.accountExists && <label><span>Seu nome</span><input value={name} onChange={(event) => setName(event.target.value)} placeholder="Como podemos chamar você?" autoComplete="name" required /></label>}
+        <label><span>{preview.accountExists ? 'Senha da sua conta existente' : <>Senha <small>Mínimo de 8 caracteres</small></>}</span><input type="password" value={password} onChange={(event) => setPassword(event.target.value)} placeholder={preview.accountExists ? 'Senha que você já usa para entrar' : 'Crie uma senha segura'} minLength={8} autoComplete={preview.accountExists ? 'current-password' : 'new-password'} required /></label>
+        <Button type="submit" disabled={busy}>{busy ? 'Criando acesso...' : preview.accountExists ? 'Vincular à conta existente' : 'Aceitar convite'}</Button>
+      </form>
+    </> : !error ? <p className="auth-intro">Validando convite...</p> : null}
     {error && <div className="alert" role="alert">{error}</div>}
   </Panel></AuthShell>;
 }

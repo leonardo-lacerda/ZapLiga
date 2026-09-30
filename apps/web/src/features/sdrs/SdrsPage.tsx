@@ -66,7 +66,7 @@ export function SdrsPage({ tenantId, sdrs }: SdrsPageProps) {
   };
 
   const generateNewLink = async (invitationId: string) => {
-    setLinkBusyId(invitationId); setMessage('');
+    setLinkBusyId(invitationId); setBusy(true); setMessage('');
     try {
       const result = await json(`/api/tenants/${tenantId}/sdrs/invitations/${invitationId}/resend`, { method: 'POST' });
       await load();
@@ -74,7 +74,7 @@ export function SdrsPage({ tenantId, sdrs }: SdrsPageProps) {
       setInvitationLink({ id: result.id, url: result.invitationUrl, name: result.name ?? 'SDR', email: result.email ?? '', expiresAt: result.expiresAt });
       setCopied(false); setMessage('Novo link criado. O link anterior deixou de funcionar.');
     } catch (error) { setMessage(error instanceof Error ? error.message : String(error)); }
-    finally { setLinkBusyId(''); }
+    finally { setLinkBusyId(''); setBusy(false); }
   };
 
   const copyInvitationLink = async () => {
@@ -94,13 +94,19 @@ export function SdrsPage({ tenantId, sdrs }: SdrsPageProps) {
     } catch { setMessage('Não foi possível copiar automaticamente. Selecione o link e copie manualmente.'); }
   };
 
+  // Reuses `linkBusyId` (keyed on this invitation) so revoke and "gerar novo link" for the SAME
+  // invitation exclude each other, and also blocks a fresh invite submission (`busy`) from firing
+  // before the revoke commits -- otherwise the create could still see the old row as pending and
+  // reject with a (momentarily correct, but confusing) "already exists".
   const revoke = async (invitationId: string) => {
     if (!window.confirm('Revogar este convite? O link deixará de funcionar.')) return;
+    setLinkBusyId(invitationId); setBusy(true);
     try {
       await json(`/api/tenants/${tenantId}/invitations/${invitationId}`, { method: 'DELETE' });
       if (invitationLink?.id === invitationId) { setInvitationLink(null); setCopied(false); }
       await load();
     } catch (error) { setMessage(error instanceof Error ? error.message : String(error)); }
+    finally { setLinkBusyId(''); setBusy(false); }
   };
 
   const operationalByUser = useMemo(() => new Map(sdrs.filter((sdr) => sdr.user_id).map((sdr) => [sdr.user_id, sdr])), [sdrs]);
@@ -149,7 +155,7 @@ export function SdrsPage({ tenantId, sdrs }: SdrsPageProps) {
           return <div className="access-row" key={invitation.id}>
             <div><strong>{invitation.invitee_name || 'SDR'}</strong><small>{invitation.invited_email} · expira em {new Date(invitation.expires_at).toLocaleString('pt-BR')}</small></div>
             <Badge tone={invitation.accepted_at ? 'success' : pending ? 'info' : 'warning'}>{state}</Badge>
-            {pending ? <><Button variant="ghost" disabled={linkBusyId === invitation.id} onClick={() => void generateNewLink(invitation.id)}>{linkBusyId === invitation.id ? 'Gerando...' : 'Gerar novo link'}</Button><Button variant="ghost" onClick={() => void revoke(invitation.id)}>Revogar</Button></> : <span />}
+            {pending ? <><Button variant="ghost" disabled={busy || linkBusyId === invitation.id} onClick={() => void generateNewLink(invitation.id)}>{linkBusyId === invitation.id ? 'Gerando...' : 'Gerar novo link'}</Button><Button variant="ghost" disabled={busy || linkBusyId === invitation.id} onClick={() => void revoke(invitation.id)}>Revogar</Button></> : <span />}
           </div>;
         })}
         {!invitations.length && <p className="text-muted">Nenhum convite enviado.</p>}
