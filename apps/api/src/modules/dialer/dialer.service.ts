@@ -21,6 +21,7 @@ import { DecisionPolicyService } from '../decision-engine/decision-policy.servic
 import { ExperimentsService } from '../experiments/experiments.service';
 import { EntitlementService } from '../billing/entitlement.service';
 import { PlanLimitsService } from '../billing/plan-limits.service';
+import { eligibleOperatorSql, tenantOperatorSql } from '../sdrs/operator';
 import {
   analyzePcm16Le,
   computeCallOutcome,
@@ -490,7 +491,7 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
       this.db.query(`
         SELECT s.* FROM sdrs s
         WHERE s.tenant_id = $1 AND s.state NOT IN ('in_call', 'post_call')
-          AND EXISTS (SELECT 1 FROM tenant_memberships tm WHERE tm.tenant_id = s.tenant_id AND tm.user_id = s.user_id AND tm.role = 'sdr' AND tm.status = 'active')
+          AND ${eligibleOperatorSql('s')}
           AND NOT EXISTS (
             SELECT 1 FROM calls c
             WHERE c.tenant_id = s.tenant_id AND c.sdr_id = s.id AND c.status IN ('reserved', 'dialing', 'media_active')
@@ -564,6 +565,13 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
     return this.startReservedCall(sdr, number, lead, settings, token, 'manual', tenantId);
   }
 
+  /** The caller's own operator row if their calling station is connected right now. */
+  async connectedStationFor(tenantId: string, userId: string): Promise<string | null> {
+    const result = await this.db.query('SELECT id FROM sdrs WHERE tenant_id = $1 AND user_id = $2 LIMIT 1', [tenantId, userId]);
+    const id = result.rows[0]?.id as string | undefined;
+    return id && this.gateway.isConnected(id) ? id : null;
+  }
+
   async manualCallWithInput(input: { leadId?: string; phone?: string; name?: string }, tenantId = legacyTenantId(), sdrUserId?: string) {
     await this.entitlement?.assertCanOperate(tenantId, sdrUserId);
     if (this.schedule) await this.schedule.assertAllowed(tenantId);
@@ -631,7 +639,7 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
       this.db.query(`
         SELECT s.* FROM sdrs s
         WHERE s.tenant_id = $1 AND s.state NOT IN ('in_call', 'post_call')
-          AND EXISTS (SELECT 1 FROM tenant_memberships tm WHERE tm.tenant_id = s.tenant_id AND tm.user_id = s.user_id AND tm.role = 'sdr' AND tm.status = 'active')
+          AND ${eligibleOperatorSql('s')}
           AND ($2::text IS NULL OR s.user_id = $2)
           AND NOT EXISTS (
             SELECT 1 FROM calls c
@@ -644,8 +652,11 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
     const execution = this.campaignExecution ? await this.campaignExecution.resolveForLead(tenantId, lead) : undefined;
     if (execution && !execution.allowed) throw new Error('A campanha deste lead não está em execução ou não possui recursos disponíveis');
     if (execution && !CampaignExecutionService.scheduleAllowed(execution.effectiveConfig)) throw new Error('A campanha deste lead está fora da janela de atendimento');
-    const sdr = sdrs.rows.find((row: any) => this.gateway.isConnected(row.id) && (!execution?.campaignId || execution.sdrIds.includes(row.id)));
-    if (!sdr) throw new Error('Nenhum SDR conectado e disponivel');
+    // A leader or platform admin dialing from their own station is a deliberate one-off call, not
+    // queue work: they are not on campaign rosters, so the campaign's SDR filter does not apply.
+    const sdr = sdrs.rows.find((row: any) => this.gateway.isConnected(row.id)
+      && (!execution?.campaignId || execution.sdrIds.includes(row.id) || (sdrUserId && row.operator_kind !== 'sdr')));
+    if (!sdr) throw new Error(sdrUserId ? 'Sua estação de ligação não está conectada ou está ocupada' : 'Nenhum SDR conectado e disponivel');
     if (!numbers.rows.length) throw new Error('Nenhum numero WhatsApp conectado');
     // Protections only (see manualCall): a manual call is not paced by the cooldown.
     const readyNumbers = numbers.rows.filter((row: any) => !lineIsProtected(row.last_call_ended_at));
@@ -731,7 +742,7 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
     const [available, leads, numberDetails, queueSummary, queuePreview, activeCalls, sdrDetails, folderSummary] = await Promise.all([
       this.db.query(`
         SELECT count(*)::int AS count FROM sdrs s
-        WHERE s.tenant_id = $1 AND s.available = true AND s.state = 'available'
+        WHERE s.tenant_id = $1 AND s.available = true AND s.state = 'available' AND ${tenantOperatorSql('s')}
           AND NOT EXISTS (
             SELECT 1 FROM calls c
             WHERE c.tenant_id = s.tenant_id AND c.sdr_id = s.id AND c.status IN ('reserved', 'dialing', 'media_active')
@@ -805,7 +816,8 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
         LEFT JOIN calls active_call ON active_call.tenant_id = s.tenant_id AND active_call.sdr_id = s.id AND active_call.status IN ('reserved', 'dialing', 'media_active')
         LEFT JOIN leads active_lead ON active_lead.tenant_id = active_call.tenant_id AND active_lead.id = active_call.lead_id
         LEFT JOIN whatsapp_numbers active_number ON active_number.id = active_call.number_id
-        WHERE s.tenant_id = $1
+        -- A platform admin's station only shows up while it is actually busy on this tenant's lines.
+        WHERE s.tenant_id = $1 AND (${tenantOperatorSql('s')} OR s.state IN ('in_call', 'post_call'))
         ORDER BY s.name
       `, [tenantId]),
       this.db.query(`
@@ -1064,7 +1076,7 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
         this.db.query(`
             SELECT s.* FROM sdrs s
             WHERE s.tenant_id = $1 AND s.available = true AND s.state = 'available'
-              AND EXISTS (SELECT 1 FROM tenant_memberships tm WHERE tm.tenant_id = s.tenant_id AND tm.user_id = s.user_id AND tm.role = 'sdr' AND tm.status = 'active')
+              AND ${eligibleOperatorSql('s')}
             AND NOT EXISTS (
               SELECT 1 FROM calls c
                 WHERE c.tenant_id = s.tenant_id AND c.sdr_id = s.id AND c.status IN ('reserved', 'dialing', 'media_active')

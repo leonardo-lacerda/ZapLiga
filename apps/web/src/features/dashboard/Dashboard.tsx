@@ -35,6 +35,12 @@ export function Dashboard(props: AnyRow) {
   const presenceInfo = presenceCopy[presence];
   const presenceStep = ['offline', 'connecting'].includes(presence) ? 1 : presence === 'connected' ? 2 : ['available', 'dialing'].includes(presence) ? 3 : 4;
   if (isSdr) return <SdrWorkspace {...props} presence={presence} presenceInfo={presenceInfo} presenceStep={presenceStep} />;
+  // A leader or platform admin with their calling station on: their own station (fed by their own
+  // status and operator row, not the organization's) above the usual organizer overview.
+  if (props.stationMode) return <>
+    <SdrWorkspace {...props} status={props.operatorStatus ?? {}} sdrs={props.operatorSdr ? [props.operatorSdr] : []} presence={presence} presenceInfo={presenceInfo} presenceStep={presenceStep} />
+    <OrganizerOverview {...props} />
+  </>;
   return <OrganizerOverview {...props} />;
 }
 
@@ -47,7 +53,7 @@ function SdrWorkspace(props: AnyRow) {
   const hearingCustomer = Boolean(activeCall?.mediaActive && inbound?.receiving);
   return <div className="sdr-workspace">
     <div className="page-heading sdr-page-heading">
-      <div><span className="eyebrow">MINHA ESTAÇÃO</span><h1>Olá, {sdrs[0]?.name?.split(' ')[0] ?? 'SDR'}</h1><p>Conecte o áudio, fique disponível e concentre-se na próxima conversa.</p></div>
+      <div><span className="eyebrow">MINHA ESTAÇÃO</span><h1>Olá, {sdrs[0]?.name?.split(' ')[0] ?? 'SDR'}</h1><p>{props.stationLabel ? <strong>{props.stationLabel}. </strong> : null}Conecte o áudio, fique disponível e concentre-se na próxima conversa.</p></div>
       <Badge tone={available ? 'success' : connected ? 'info' : 'neutral'}><i className="badge-dot"></i>{presenceInfo.label}</Badge>
     </div>
 

@@ -40,7 +40,10 @@ export class SdrGateway implements OnModuleDestroy {
         if (route.tenantId && decodeURIComponent(route.tenantId) !== identity.tenantId) { socket.destroy(); return; }
         void (async () => {
           const access = this.entitlement ? await this.entitlement.getAccess(identity.tenantId) : null;
-          if (route.kind === 'control' && this.entitlement?.enforcementMode === 'enforce' && access?.mode !== 'full') { socket.destroy(); return; }
+          // A tenant without an active plan can't open a station -- except a platform admin with edit
+          // mode on, the same rule every other admin write on a read-only tenant follows.
+          const adminOverride = identity.platformRole === 'super_admin' && access?.mode === 'read_only' && this.entitlement ? await this.entitlement.hasAdminWriteMode(identity.userId) : false;
+          if (route.kind === 'control' && this.entitlement?.enforcementMode === 'enforce' && access?.mode !== 'full' && !adminOverride) { socket.destroy(); return; }
           this.server?.handleUpgrade(request, socket, head, (ws) => {
             if (route.kind === 'control') return this.handleControl(ws, identity);
             if (route.kind === 'operations') return void this.handleOperations(ws, identity);
@@ -138,7 +141,7 @@ export class SdrGateway implements OnModuleDestroy {
       if (message.type === 'identify') {
         if (identity.platformRole !== 'super_admin') {
           const membership = await this.db.query(`SELECT role FROM tenant_memberships WHERE tenant_id = $1 AND user_id = $2 AND status = 'active' LIMIT 1`, [identity.tenantId, identity.userId]);
-          if (membership.rows[0]?.role !== 'sdr') throw new Error('Somente usuários SDR podem abrir o canal operacional');
+          if (membership.rows[0]?.role !== 'sdr' && membership.rows[0]?.role !== 'leader') throw new Error('Seu acesso não permite abrir a estação de ligação');
         }
         const name = identity.name.trim();
         const existing = await this.db.query(`

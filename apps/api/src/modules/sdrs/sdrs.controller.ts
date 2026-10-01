@@ -6,6 +6,7 @@ import { DialerService } from '../dialer/dialer.service';
 import { FinishPauseDto } from './dto/finish-pause.dto';
 import { AuditService } from '../audit/audit.service';
 import { EntitlementService } from '../billing/entitlement.service';
+import { operatorKindFor, tenantOperatorSql } from './operator';
 
 @Controller()
 @UseGuards(AuthGuard, TenantMembershipGuard, RolesGuard)
@@ -14,7 +15,7 @@ export class SdrsController {
   constructor(private readonly db: DatabaseService, private readonly dialer: DialerService, private readonly audit: AuditService, private readonly entitlement: EntitlementService) {}
 
   @Get(['/api/me/sdr', '/api/tenants/:tenantId/me/sdr'])
-  @Roles('sdr')
+  @Roles('sdr', 'leader', 'super_admin')
   async own(@CurrentTenant() tenantId: string, @CurrentUser() user: any) {
     const existing = await this.db.query('SELECT id FROM sdrs WHERE tenant_id = $1 AND user_id = $2 LIMIT 1', [tenantId, user.id]);
     if (existing.rows[0]) return this.dialer.getSdrState(existing.rows[0].id, tenantId);
@@ -22,17 +23,29 @@ export class SdrsController {
   }
 
   @Post(['/api/me/sdr', '/api/tenants/:tenantId/me/sdr'])
-  @Roles('sdr')
+  @Roles('sdr', 'leader', 'super_admin')
   @TenantAction('write')
   async createOwn(@CurrentTenant() tenantId: string, @CurrentUser() user: any) {
+    const kind = operatorKindFor(user);
+    if (!kind) throw new ForbiddenException('Seu acesso não permite operar ligações nesta empresa');
     await this.entitlement.assertAction(tenantId, 'write', user.id);
     const result = await this.db.transaction(async (client) => {
       await this.entitlement.acquireTenantLock(tenantId, client);
-      const existing = await client.query('SELECT id FROM sdrs WHERE tenant_id = $1 AND user_id = $2 LIMIT 1', [tenantId, user.id]);
-      if (existing.rows[0]) return existing.rows[0];
+      const existing = await client.query('SELECT id, operator_kind FROM sdrs WHERE tenant_id = $1 AND user_id = $2 LIMIT 1', [tenantId, user.id]);
+      if (existing.rows[0]) {
+        if (existing.rows[0].operator_kind !== kind) await client.query('UPDATE sdrs SET operator_kind = $1 WHERE id = $2', [kind, existing.rows[0].id]);
+        return existing.rows[0];
+      }
       const profile = await client.query('SELECT name FROM users WHERE id = $1', [user.id]);
-      return (await client.query(`INSERT INTO sdrs (id, tenant_id, user_id, name) VALUES ($1, $2, $3, $4) RETURNING id`, [randomUUID(), tenantId, user.id, profile.rows[0]?.name ?? 'SDR'])).rows[0];
+      const baseName = String(profile.rows[0]?.name ?? 'SDR');
+      // Operator names are unique per tenant. A platform admin is always tagged so the tenant can
+      // tell support calls apart; a leader only when their name is already taken by an SDR.
+      const suffix = kind === 'platform_admin' ? ' (Admin ZapLiga)' : kind === 'leader' ? ' (Organizador)' : '';
+      const taken = await client.query('SELECT 1 FROM sdrs WHERE tenant_id = $1 AND name = $2 LIMIT 1', [tenantId, baseName]);
+      const name = kind === 'platform_admin' || (taken.rows[0] && suffix) ? `${baseName}${suffix}` : baseName;
+      return (await client.query(`INSERT INTO sdrs (id, tenant_id, user_id, name, operator_kind) VALUES ($1, $2, $3, $4, $5) RETURNING id`, [randomUUID(), tenantId, user.id, name, kind])).rows[0];
     });
+    if (kind === 'platform_admin') await this.audit.record({ actorUserId: user.id, tenantId, action: 'sdr.platform_admin_station_created', entityType: 'sdr', entityId: result.id });
     return this.dialer.getSdrState(result.id, tenantId);
   }
 
@@ -40,7 +53,7 @@ export class SdrsController {
   async list(@Query('limit') limit = '100', @Query('offset') offset = '0', @CurrentTenant() tenantId: string) {
     const safeLimit = Math.min(500, Math.max(1, Number(limit) || 100));
     const safeOffset = Math.max(0, Number(offset) || 0);
-    const total = await this.db.query('SELECT count(*)::int AS total FROM sdrs s WHERE s.tenant_id = $1', [tenantId]);
+    const total = await this.db.query(`SELECT count(*)::int AS total FROM sdrs s WHERE s.tenant_id = $1 AND ${tenantOperatorSql('s')}`, [tenantId]);
     const items = await this.db.query(`
       SELECT s.*, u.name AS user_name, u.email AS user_email, u.status AS user_status, u.last_login_at,
         tm.status AS membership_status, p.pause_type, p.started_at AS pause_started_at, p.call_id AS pause_call_id,
@@ -53,7 +66,7 @@ export class SdrsController {
       LEFT JOIN sdr_pauses p ON p.tenant_id = s.tenant_id AND p.id = s.current_pause_id AND p.ended_at IS NULL
       LEFT JOIN calls c ON c.tenant_id = s.tenant_id AND c.id = p.call_id
       LEFT JOIN leads l ON l.tenant_id = s.tenant_id AND l.id = c.lead_id
-      WHERE s.tenant_id = $1
+      WHERE s.tenant_id = $1 AND ${tenantOperatorSql('s')}
       ORDER BY s.name
       LIMIT $2 OFFSET $3
     `, [tenantId, safeLimit, safeOffset]);
@@ -75,6 +88,11 @@ export class SdrsController {
     if (user.platformRole !== 'super_admin' && user.tenantMembership?.role === 'sdr') {
       const own = await this.db.query('SELECT 1 FROM sdrs WHERE tenant_id = $1 AND id = $2 AND user_id = $3 LIMIT 1', [tenantId, id, user.id]);
       if (!own.rows[0]) throw new ForbiddenException('Um SDR só pode finalizar o próprio pós-atendimento');
+    }
+    // A platform admin's own station is the only one they finalize through this route.
+    if (user.platformRole === 'super_admin') {
+      const target = await this.db.query('SELECT operator_kind, user_id FROM sdrs WHERE tenant_id = $1 AND id = $2 LIMIT 1', [tenantId, id]);
+      if (target.rows[0]?.operator_kind === 'platform_admin' && target.rows[0].user_id !== user.id) throw new ForbiddenException('Este pós-atendimento pertence a outro operador');
     }
     try {
       const result = await this.dialer.finishPause(id, pauseId, { ...body, actorUserId: user.id }, tenantId);

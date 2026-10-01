@@ -5,6 +5,7 @@ import { DialerScheduleService } from '../dialer-schedule/dialer-schedule.servic
 import { calculateOperationHealth, HEALTH_FORMULA_VERSION, HealthResult, OperationHealthSignals } from './health-formula';
 import { HealthRecommendationsAdapter } from './health-recommendations.adapter';
 import { AnalyticsEventsService } from '../analytics-events/analytics-events.service';
+import { tenantOperatorSql } from '../sdrs/operator';
 
 const CONNECTED_STATUSES = ['connected', 'online', 'ready', 'authenticated'];
 const ACTIVE_CALL_STATUSES = ['reserved', 'dialing', 'media_active'];
@@ -140,7 +141,7 @@ export class OperationHealthService implements OnModuleInit, OnModuleDestroy {
           count(*) FILTER (WHERE state = 'in_call')::int AS in_call,
           count(*) FILTER (WHERE state = 'post_call')::int AS post_call,
           count(*) FILTER (WHERE state = 'offline')::int AS offline
-        FROM sdrs WHERE tenant_id = $1
+        FROM sdrs s WHERE tenant_id = $1 AND ${tenantOperatorSql('s')}
       `, [tenantId]),
       this.db.query(`
         SELECT

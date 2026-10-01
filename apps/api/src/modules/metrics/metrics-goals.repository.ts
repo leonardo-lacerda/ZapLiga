@@ -2,6 +2,7 @@ import { Injectable } from '@nestjs/common';
 import { PoolClient } from 'pg';
 import { DatabaseService } from '../../database/database.service';
 import { GoalMetric, GoalScope, GoalValueType } from './metrics.definitions';
+import { tenantOperatorSql } from '../sdrs/operator';
 
 // `DatabaseService.query` e `PoolClient.query` (pg) têm conjuntos de
 // sobrecarga diferentes; um parâmetro tipado como a união das duas classes
@@ -117,7 +118,7 @@ export class MetricsGoalsRepository {
   }
 
   async sdrExists(tenantId: string, sdrId: string) {
-    const result = await this.db.query('SELECT 1 FROM sdrs WHERE tenant_id = $1 AND id = $2', [tenantId, sdrId]);
+    const result = await this.db.query(`SELECT 1 FROM sdrs s WHERE s.tenant_id = $1 AND s.id = $2 AND ${tenantOperatorSql('s')}`, [tenantId, sdrId]);
     return Boolean(result.rows[0]);
   }
 

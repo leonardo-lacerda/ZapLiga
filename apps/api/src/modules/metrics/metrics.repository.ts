@@ -3,6 +3,7 @@ import { DatabaseService } from '../../database/database.service';
 import { ACTIVE_CALL_STATUSES, CONNECTED_NUMBER_STATUSES, CONVERSION_CALL_RESULT_CODES, CONVERSION_PIPELINE_STAGE_CODES, NO_RESULT_CODE, NO_STAGE_CODE, POSITIVE_CALL_RESULT_CODES } from './metrics.definitions';
 import { civilDateInTimezone, dayRangeInTimezone, lastCompleteDayInRange, shiftDateStr } from './metrics.formulas';
 import { MetricsSource } from './metrics.types';
+import { tenantOperatorSql } from '../sdrs/operator';
 
 export type TrendGranularity = 'hour' | 'day' | 'week';
 
@@ -170,7 +171,7 @@ export class MetricsRepository {
           count(*) FILTER (WHERE state = 'in_call')::int AS in_call,
           count(*) FILTER (WHERE state = 'post_call')::int AS post_call,
           count(*) FILTER (WHERE state = 'offline')::int AS offline
-        FROM sdrs WHERE tenant_id = $1
+        FROM sdrs s WHERE tenant_id = $1 AND ${tenantOperatorSql('s')}
       `, [tenantId]),
       this.db.query(`
         SELECT
@@ -370,7 +371,7 @@ export class MetricsRepository {
         JOIN calls hc ON hc.tenant_id = h.tenant_id AND hc.id = h.call_id
         WHERE hc.sdr_id = s.id AND h.tenant_id = s.tenant_id AND h.created_at >= $2 AND h.created_at <= $3 AND h.source = 'wrap_up' AND h.from_stage IS DISTINCT FROM h.to_stage
       ) adv ON true
-      WHERE s.tenant_id = $1 ${sdrIdClause}
+      WHERE s.tenant_id = $1 AND ${tenantOperatorSql('s')} ${sdrIdClause}
       GROUP BY s.id, adv.count
       ORDER BY calls_made DESC, s.name ASC
     `, [...values, POSITIVE_CALL_RESULT_CODES]);

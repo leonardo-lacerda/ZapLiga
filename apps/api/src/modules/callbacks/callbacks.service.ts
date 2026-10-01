@@ -2,6 +2,7 @@ import { BadRequestException, ForbiddenException, HttpException, Injectable, Not
 import { DatabaseService } from '../../database/database.service';
 import { AuditService } from '../audit/audit.service';
 import { DialerService } from '../dialer/dialer.service';
+import { eligibleOperatorSql, tenantOperatorSql } from '../sdrs/operator';
 
 @Injectable()
 export class CallbacksService {
@@ -49,9 +50,9 @@ export class CallbacksService {
 
   async reassign(tenantId: string, ids: string[], assignedSdrId: string | undefined, actorUserId: string) {
     if (assignedSdrId) {
+      // Any operator of this tenant (SDR or leader running a station) -- not a platform admin.
       const exists = await this.db.query(`SELECT 1 FROM sdrs s
-        JOIN tenant_memberships tm ON tm.tenant_id = s.tenant_id AND tm.user_id = s.user_id AND tm.role = 'sdr' AND tm.status = 'active'
-        WHERE s.tenant_id = $1 AND s.id = $2`, [tenantId, assignedSdrId]);
+        WHERE s.tenant_id = $1 AND s.id = $2 AND ${eligibleOperatorSql('s')} AND ${tenantOperatorSql('s')}`, [tenantId, assignedSdrId]);
       if (!exists.rows[0]) throw new BadRequestException('SDR não encontrado ou inativo');
     }
     const result = await this.db.query(`UPDATE lead_callbacks SET assigned_sdr_id = $1, status = 'reassigned', updated_by_user_id = $2, updated_at = now() WHERE tenant_id = $3 AND id = ANY($4::uuid[]) AND status IN ('pending','due','reassigned') RETURNING *`, [assignedSdrId ?? null, actorUserId, tenantId, ids]);

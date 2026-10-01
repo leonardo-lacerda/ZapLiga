@@ -139,6 +139,9 @@ export class MembershipsService {
           await client.query('INSERT INTO sdrs (id, tenant_id, user_id, name) VALUES ($1, $2, $3, $4)', [randomUUID(), tenantId, userId, user.rows[0]?.name ?? 'SDR']);
         }
       }
+      // The operator row survives a role change; keep its kind matching the new role so the
+      // dialer's eligibility check (which compares kind to current role) keeps routing to it.
+      if (role !== membership.role) await client.query(`UPDATE sdrs SET operator_kind = $1 WHERE tenant_id = $2 AND user_id = $3 AND operator_kind <> 'platform_admin'`, [role === 'leader' ? 'leader' : 'sdr', tenantId, userId]);
       return updated;
     });
     return result.rows[0];
