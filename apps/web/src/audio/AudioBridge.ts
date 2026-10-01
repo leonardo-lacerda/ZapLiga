@@ -81,6 +81,8 @@ export class AudioBridge {
   private socket?: WebSocket;
   private stopRequested = false;
   private nextPlayTime = 0;
+  private ringbackTimer?: number;
+  private ringbackNodes?: { oscillator: OscillatorNode; envelope: GainNode };
   private captureSampleRate = 16000;
   private sourceBuffer: number[] = [];
   private sourceCursor = 0;
@@ -218,6 +220,49 @@ export class AudioBridge {
       oscillator.start(now);
       oscillator.stop(now + 0.7);
     });
+  }
+
+  /**
+   * Local ringback while a manual call is ringing: the WhatsApp leg sends no audio until the lead
+   * answers, so without this the operator hears dead silence and can't tell the call is going
+   * out. Brazilian cadence (425 Hz, 1 s on / 4 s off), routed through the same output as the call.
+   */
+  async startRingback() {
+    if (this.ringbackTimer !== undefined) return;
+    const context = await this.ensureContext();
+    if (context.state === 'suspended') await context.resume();
+    if (context.state !== 'running' || !this.playbackGain) return;
+    await this.applySink();
+    const playbackGain = this.playbackGain;
+    const oscillator = context.createOscillator();
+    const envelope = context.createGain();
+    oscillator.type = 'sine';
+    oscillator.frequency.value = 425;
+    envelope.gain.value = 0;
+    oscillator.connect(envelope);
+    envelope.connect(playbackGain);
+    oscillator.start();
+    const burst = () => {
+      const now = context.currentTime;
+      envelope.gain.cancelScheduledValues(now);
+      envelope.gain.setValueAtTime(0, now);
+      envelope.gain.linearRampToValueAtTime(0.18, now + 0.02);
+      envelope.gain.setValueAtTime(0.18, now + 0.98);
+      envelope.gain.linearRampToValueAtTime(0, now + 1);
+    };
+    burst();
+    this.ringbackNodes = { oscillator, envelope };
+    this.ringbackTimer = window.setInterval(burst, 5000);
+  }
+
+  stopRingback() {
+    if (this.ringbackTimer !== undefined) window.clearInterval(this.ringbackTimer);
+    this.ringbackTimer = undefined;
+    const nodes = this.ringbackNodes;
+    this.ringbackNodes = undefined;
+    if (!nodes) return;
+    try { nodes.oscillator.stop(); } catch { /* already stopped */ }
+    nodes.oscillator.disconnect(); nodes.envelope.disconnect();
   }
 
   // ---------------------------------------------------------------------------
@@ -576,6 +621,7 @@ export class AudioBridge {
   }
 
   async stop() {
+    this.stopRingback();
     this.stopRequested = true;
     this.reportPlaybackStatus(true);
     if (this.inboundReportTimer !== undefined) { window.clearTimeout(this.inboundReportTimer); this.inboundReportTimer = undefined; }

@@ -11,7 +11,7 @@ const settingFields = [
   ['min_seconds_between_calls', 'Espera entre ligações (s)', 0, 3600],
   ['max_attempts_per_lead', 'Tentativas por lead', 1, 100],
   ['retry_delay_minutes', 'Intervalo entre tentativas (min)', 0, 10080],
-  ['ring_timeout_seconds', 'Tempo de toque (s)', 1, 600],
+  ['ring_timeout_seconds', 'Tempo de toque da discagem automática (s)', 1, 600],
   ['default_number_cooldown_seconds', 'Proteção entre chamadas (s)', 0, 3600],
 ] as const;
 

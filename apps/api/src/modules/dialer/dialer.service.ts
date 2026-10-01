@@ -131,6 +131,13 @@ const manualPacingConfig = (number: any) => ({
   minSecondsBetweenCalls: 0,
 });
 
+/**
+ * Manual calls are not cut by the tenant's ring_timeout_seconds (which still paces the automatic
+ * dialer): they ring until WhatsApp itself gives up, as a phone would. This cap only exists so a
+ * call whose end event is lost can never hold the line, the operator and the reservation forever.
+ */
+const MANUAL_RING_SAFETY_SECONDS = 180;
+
 @Injectable()
 export class DialerService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(DialerService.name);
@@ -559,7 +566,7 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
       numberMax: number.max_concurrent_calls, numberId: number.id, waxumSessionId: numberSessionId(number),
       ...manualPacingConfig(number),
       leadId: lead.id, sdrId: sdr.id,
-      ttlMs: (Number(settings.ring_timeout_seconds) + 60) * 1000,
+      ttlMs: (MANUAL_RING_SAFETY_SECONDS + 60) * 1000,
     });
     if (!reserved) throw new Error('Os limites de chamadas estão ocupados; tente novamente em instantes');
     return this.startReservedCall(sdr, number, lead, settings, token, 'manual', tenantId);
@@ -687,7 +694,7 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
       numberMax: number.max_concurrent_calls, numberId: number.id, waxumSessionId: numberSessionId(number),
       ...manualPacingConfig(number),
       leadId: lead.id, sdrId: sdr.id,
-      ttlMs: (Number(settings.ring_timeout_seconds) + 60) * 1000,
+      ttlMs: (MANUAL_RING_SAFETY_SECONDS + 60) * 1000,
     });
     if (!reserved) throw new Error('Os limites de chamadas estao ocupados; tente novamente em instantes');
     return { ...(await this.startReservedCall(sdr, number, lead, settings, token, 'manual', tenantId)), leadId: lead.id };
@@ -1321,7 +1328,10 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
 
   private async startReservedCall(sdr: any, number: any, lead: any, settings: any, token: string, source: string, tenantId = legacyTenantId()) {
     const callId = randomUUID();
-    const expires = new Date(Date.now() + Number(settings.ring_timeout_seconds) * 1000);
+    // A call stays 'reserved' until answered, and expireReservations() cancels reserved calls past
+    // offer_expires_at -- so a manual call needs the longer window here too, or it would still drop
+    // at ring_timeout_seconds.
+    const expires = new Date(Date.now() + (source === 'manual' ? MANUAL_RING_SAFETY_SECONDS : Number(settings.ring_timeout_seconds)) * 1000);
     const isAutomatic = source === 'automatico';
     const waxumSessionId = numberSessionId(number);
     try {
@@ -1510,9 +1520,10 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
       resource.recipient = recipient;
       resource.waxumSessionId = call.rows[0].waxum_session_id;
       resource.callPlacedAt = Date.now();
+      const ringSeconds = call.rows[0].source === 'manual' ? MANUAL_RING_SAFETY_SECONDS : Number(settings.ring_timeout_seconds);
       resource.ringTimeout = setTimeout(() => {
         if (!resource.mediaActive && !resource.answerSignalReceived) void this.finishCall(callId, 'no_answer', 'ring_timeout').catch((error) => this.logger.error(`Could not finish timed out call ${callId}: ${safeOperationalError(error)}`));
-      }, Number(settings.ring_timeout_seconds) * 1000);
+      }, ringSeconds * 1000);
 
       media.on('open', () => {
         resource.mediaOpen = true;
