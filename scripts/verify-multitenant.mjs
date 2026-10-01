@@ -215,8 +215,12 @@ try {
 
   const invalid = await request('/api/auth/login', { method: 'POST', body: JSON.stringify({ email: adminEmail, password: adminPassword, unexpected: true }) });
   assert(invalid.response.status === 400, `DTO desconhecido deveria ser 400, foi ${invalid.response.status}`);
+  // A platform admin may run a calling station in the tenant they have open, so a ticket for an
+  // existing tenant is now expected; a tenant that does not exist must still be refused.
   const ticket = await request('/api/auth/ws-ticket', { method: 'POST', headers: { ...auth, 'x-tenant-id': legacyTenantId } });
-  assert(ticket.response.status === 403, `Admin não deveria obter ticket SDR: ${ticket.response.status}`);
+  assert(ticket.response.status === 201, `Admin deveria obter ticket da estação na empresa aberta: ${ticket.response.status}`);
+  const ghostTicket = await request('/api/auth/ws-ticket', { method: 'POST', headers: { ...auth, 'x-tenant-id': 'tenant-inexistente' } });
+  assert(ghostTicket.response.status >= 400, `Ticket para empresa inexistente deveria falhar: ${ghostTicket.response.status}`);
 
   const refreshCookie = cookieFrom(login.response);
   assert(refreshCookie, 'login não retornou refresh cookie');
