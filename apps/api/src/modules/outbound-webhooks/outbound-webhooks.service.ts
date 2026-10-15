@@ -153,8 +153,11 @@ export class OutboundWebhooksService implements OnModuleInit, OnModuleDestroy {
       } catch (error) {
         const message = String(error instanceof Error ? error.message : error).slice(0, 300);
         const nextDelaySeconds = Math.min(3600, 2 ** Math.min(attempt, 10));
-        await this.db.query(`UPDATE outbound_webhook_deliveries SET status=CASE WHEN $2 >= $3 THEN 'dead_letter' ELSE 'pending' END,
-          attempts=$2, next_attempt_at=now() + ($4::int * interval '1 second'), last_error=$5, updated_at=now()
+        // Explicit casts: node-pg sends untyped parameters and Postgres infers `$2 >= $3` as text,
+        // which made this update fail -- the delivery then stayed pending and was re-posted every
+        // second, never backing off nor reaching the dead-letter state.
+        await this.db.query(`UPDATE outbound_webhook_deliveries SET status=CASE WHEN $2::int >= $3::int THEN 'dead_letter' ELSE 'pending' END,
+          attempts=$2::int, next_attempt_at=now() + ($4::int * interval '1 second'), last_error=$5, updated_at=now()
           WHERE tenant_id=$1 AND id=$6 AND status='pending'`, [row.tenant_id, attempt, MAX_ATTEMPTS, nextDelaySeconds, message, row.id]);
         await this.db.query('UPDATE outbound_webhook_endpoints SET last_failure_at=now(), updated_at=now() WHERE tenant_id=$1 AND id=$2', [row.tenant_id, row.endpoint_id]).catch(() => undefined);
         this.logger.warn(`Falha na entrega outbound ${row.id}: ${message}`);
