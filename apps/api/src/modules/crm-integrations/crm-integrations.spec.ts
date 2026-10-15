@@ -2,7 +2,7 @@ import 'reflect-metadata';
 jest.mock('@nestjs/jwt', () => ({ JwtService: class JwtService {} }));
 import { ExecutionContext } from '@nestjs/common';
 import { hashCredential, decryptSecret } from '../lead-ingestion/lead-ingestion.crypto';
-import { CrmIntegrationsService, normalizeIntegrationUrl, normalizeOrigins } from './crm-integrations.service';
+import { CrmIntegrationsService, isPrivateHost, normalizeIntegrationUrl, normalizeOrigins } from './crm-integrations.service';
 import { IntegrationKeyGuard } from './crm-integration.guard';
 import { IntegrationAgentsService } from './integration-agents.service';
 import { IntegrationCallsService } from './integration-calls.service';
@@ -18,7 +18,8 @@ describe('CrmIntegrationsService', () => {
     const db = { query: jest.fn(async (_sql: string, params: unknown[] = []) => ({ rows: [{ ...integration, api_key_hash: params[5], webhook_url: params[0] }] })) };
     const redis = { client: { set: jest.fn().mockResolvedValue('OK') } };
     const audit = { record: jest.fn().mockResolvedValue(undefined) };
-    return { service: new CrmIntegrationsService(db as any, redis as any, audit as any, {} as any, {} as any), db, audit };
+    const events = { recordPing: jest.fn().mockResolvedValue(undefined) };
+    return { service: new CrmIntegrationsService(db as any, redis as any, audit as any, {} as any, {} as any, events as any), db, audit, events };
   };
 
   it('returns the API key once and stores only its hash', async () => {
@@ -56,6 +57,21 @@ describe('CrmIntegrationsService', () => {
     try { expect(() => normalizeIntegrationUrl('http://localhost:13001/hook', 'URL')).toThrow('HTTPS'); }
     finally { process.env.NODE_ENV = previous; }
     expect(normalizeOrigins(['https://a.example.com/path', 'https://a.example.com'])).toEqual(['https://a.example.com']);
+  });
+
+  it('refuses webhooks pointing at internal addresses in production', () => {
+    expect(['localhost', '127.0.0.1', '10.0.0.5', '172.20.1.1', '192.168.0.10', '169.254.169.254', '[::1]', 'api.localhost'].every(isPrivateHost)).toBe(true);
+    expect(['franco.example.com', '8.8.8.8', '172.32.0.1'].some(isPrivateHost)).toBe(false);
+    const previous = process.env.NODE_ENV;
+    process.env.NODE_ENV = 'production';
+    try { expect(() => normalizeIntegrationUrl('https://169.254.169.254/latest', 'URL')).toThrow('endereço interno'); }
+    finally { process.env.NODE_ENV = previous; }
+  });
+
+  it('queues a test event right after the handshake', async () => {
+    const { service, events } = makeService();
+    await service.handshake(integration as any, { webhookUrl: 'https://franco.example.com/webhooks/zapcall/abc' });
+    expect(events.recordPing).toHaveBeenCalledWith('tenant-1', 'int-1');
   });
 });
 

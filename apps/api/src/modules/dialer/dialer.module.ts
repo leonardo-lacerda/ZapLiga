@@ -9,9 +9,10 @@ import { CampaignsModule } from '../campaigns/campaigns.module';
 import { DecisionEngineModule } from '../decision-engine/decision-engine.module';
 import { ExperimentsModule } from '../experiments/experiments.module';
 import { BillingModule } from '../billing/billing.module';
+import { CrmEventsModule } from '../crm-events/crm-events.module';
 
 @Module({
-  imports: [ContactComplianceModule, DialerScheduleModule, AuditModule, CampaignsModule, DecisionEngineModule, ExperimentsModule, BillingModule],
+  imports: [ContactComplianceModule, DialerScheduleModule, AuditModule, CampaignsModule, DecisionEngineModule, ExperimentsModule, BillingModule, CrmEventsModule],
   providers: [WaxumClient, DialerService, SdrGateway],
   exports: [DialerService, SdrGateway, WaxumClient],
 })

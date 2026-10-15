@@ -6,6 +6,7 @@ import { AuditService } from '../audit/audit.service';
 import { SdrCapacityService } from '../billing/sdr-capacity.service';
 import { EntitlementService } from '../billing/entitlement.service';
 import { encryptSecret, hashCredential } from '../lead-ingestion/lead-ingestion.crypto';
+import { CrmEventsService } from '../crm-events/crm-events.service';
 
 export const INTEGRATION_SCOPES = ['calls', 'numbers:read', 'numbers:write', 'agents', 'webhooks'] as const;
 export type IntegrationScope = typeof INTEGRATION_SCOPES[number];
@@ -22,6 +23,18 @@ const allowsPlainHttp = () => process.env.NODE_ENV === 'development' || process.
 const isLocalHost = (hostname: string) => hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '[::1]' || hostname.endsWith('.localhost') || hostname.endsWith('.test');
 const newApiKey = () => `zpl_crm_${randomBytes(30).toString('base64url')}`;
 
+// Literal private or loopback addresses: a production webhook must not point the API at its own
+// network. (Hostnames are not resolved here; this only stops the obvious cases.)
+export function isPrivateHost(hostname: string) {
+  const host = hostname.replace(/^\[|\]$/g, '').toLowerCase();
+  if (host === 'localhost' || host.endsWith('.localhost') || host === '0.0.0.0' || host === '::' || host === '::1') return true;
+  if (/^(fc|fd)[0-9a-f]{2}:/.test(host) || host.startsWith('fe80:')) return true;
+  const octets = host.split('.').map(Number);
+  if (octets.length !== 4 || octets.some((part) => !Number.isInteger(part) || part < 0 || part > 255)) return false;
+  const [a, b] = octets;
+  return a === 10 || a === 127 || a === 0 || (a === 169 && b === 254) || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168) || (a === 100 && b >= 64 && b <= 127);
+}
+
 /** HTTPS everywhere; plain HTTP only for local hosts on a development/test API. */
 export function normalizeIntegrationUrl(value: string, label: string) {
   let url: URL;
@@ -29,6 +42,7 @@ export function normalizeIntegrationUrl(value: string, label: string) {
   const plainLocal = url.protocol === 'http:' && allowsPlainHttp() && isLocalHost(url.hostname);
   if (url.protocol !== 'https:' && !plainLocal) throw new BadRequestException(`${label} precisa usar HTTPS`);
   if (url.username || url.password) throw new BadRequestException(`${label} não pode conter credenciais`);
+  if (!allowsPlainHttp() && isPrivateHost(url.hostname)) throw new BadRequestException(`${label} não pode apontar para um endereço interno`);
   return url;
 }
 
@@ -40,13 +54,14 @@ export function normalizeOrigins(values: unknown) {
 
 @Injectable()
 export class CrmIntegrationsService {
-  constructor(private readonly db: DatabaseService, private readonly redis: RedisService, private readonly audit: AuditService, private readonly capacity: SdrCapacityService, private readonly entitlement: EntitlementService) {}
+  constructor(private readonly db: DatabaseService, private readonly redis: RedisService, private readonly audit: AuditService, private readonly capacity: SdrCapacityService, private readonly entitlement: EntitlementService, private readonly events: CrmEventsService) {}
 
   publicView(row: any) {
     return {
       id: row.id, kind: row.kind, name: row.name, public_id: row.public_id, api_key_prefix: row.api_key_prefix,
       scopes: row.scopes ?? [], status: row.status, webhook_url: row.webhook_url ?? null, allowed_origins: row.allowed_origins ?? [],
       external_account_id: row.external_account_id ?? null, connected_at: row.connected_at ?? null, last_used_at: row.last_used_at ?? null,
+      last_delivery_at: row.last_delivery_at ?? null, last_delivery_failure_at: row.last_delivery_failure_at ?? null,
       created_at: row.created_at, revoked_at: row.revoked_at ?? null,
     };
   }
@@ -91,6 +106,24 @@ export class CrmIntegrationsService {
     return result.rows[0];
   }
 
+  async listEvents(tenantId: string, integrationId: string, filters: { status?: string; limit?: number }) {
+    await this.findForTenant(tenantId, integrationId);
+    return this.events.list(tenantId, integrationId, filters);
+  }
+
+  async retryEvent(tenantId: string, userId: string | null, integrationId: string, eventId: string) {
+    await this.findForTenant(tenantId, integrationId);
+    const result = await this.events.retry(tenantId, integrationId, eventId);
+    await this.audit.record({ actorUserId: userId, tenantId, action: 'crm_integration.event_retried', entityType: 'crm_integration_event', entityId: eventId });
+    return result;
+  }
+
+  async sendTestEvent(integration: CrmIntegration) {
+    if (!integration.webhook_url) throw new BadRequestException({ code: 'webhook_not_configured', message: 'Faça o handshake antes de testar o webhook' });
+    await this.events.recordPing(integration.tenant_id, integration.id);
+    return { ok: true, queued: true };
+  }
+
   /** Resolves an API key to its active integration (and active tenant), or null. */
   async authenticate(apiKey: string): Promise<CrmIntegration | null> {
     if (!apiKey.startsWith('zpl_crm_') || apiKey.length > 200) return null;
@@ -116,6 +149,8 @@ export class CrmIntegrationsService {
     const row = (await this.db.query(`UPDATE crm_integrations SET webhook_url = $1, webhook_secret_ciphertext = $2, allowed_origins = $3, external_account_id = COALESCE($4, external_account_id),
       connected_at = now(), updated_at = now() WHERE id = $5 RETURNING *`, [webhookUrl, encryptSecret(webhookSecret), allowedOrigins, input.externalAccountId?.trim() || null, integration.id])).rows[0];
     await this.audit.record({ tenantId: integration.tenant_id, action: 'crm_integration.handshake', entityType: 'crm_integration', entityId: integration.id, metadata: { webhookHost: new URL(webhookUrl).host } });
+    // The first delivery doubles as a check that the CRM verifies the new secret.
+    await this.events.recordPing(integration.tenant_id, integration.id).catch(() => undefined);
     return { integration: this.publicView(row), webhook_secret: webhookSecret, contract_version: CRM_CONTRACT_VERSION };
   }
 

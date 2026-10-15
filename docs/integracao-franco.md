@@ -4,7 +4,7 @@ Permite que um CRM (primeiro consumidor: **Franco**, fork do Chatwoot) faça lig
 
 Plano completo, incluindo o lado Franco: `Franco/plano-integracao-zapliga.md`.
 
-Status: **Z1–Z3 implementados** (chave, API v1, estação só-manual, intenção de discagem). **Z4 (webhooks para o CRM) ainda não existe.** Até lá, o CRM acompanha a ligação pelo socket da estação e reconcilia por `GET /calls/:id`.
+Status: **Z1–Z4 implementados** (chave, API v1, estação só-manual, intenção de discagem e webhooks para o CRM). Nada disso está em produção.
 
 ## Como funciona
 
@@ -122,11 +122,68 @@ Um operador tem uma estação por vez. Se o mesmo usuário abrir a estação em 
   - tabelas `crm_integrations` e `crm_integration_agents`;
   - colunas novas `websocket_tickets.integration_id`, `sdrs.station_mode`, `calls.integration_id` e `calls.external_ref`;
   - feature `crm_integration` (coluna legada, catálogo de planos e snapshots de Growth/Pro).
+- **Migration** `063_crm_integration_events.sql`: fila `crm_integration_events` (outbox dos webhooks, com lease de entrega) e colunas `last_delivery_at`/`last_delivery_failure_at` em `crm_integrations`.
 - **Leads criados por ligações do CRM** vão para a pasta **"Franco CRM"**, com status `manual` (fora da fila automática) e `external_id`. Eles contam na cota de leads do plano.
 - **Origens do navegador:** se a integração declarou `allowed_origins`, o upgrade do WebSocket de um ticket da integração exige `Origin` igual a uma delas. Integração revogada não abre estação.
 
+## Webhooks ZapLiga → CRM
+
+O ZapLiga entrega eventos na `webhookUrl` registrada no handshake.
+
+**Requisição:** `POST` com JSON e os headers:
+- `x-zapliga-event-id`
+- `x-zapliga-event-type`
+- `x-zapliga-timestamp` (segundos Unix)
+- `x-zapliga-signature: sha256=<hex>`
+- `idempotency-key`
+
+**Assinatura:** `HMAC-SHA256(webhook_secret, "<timestamp>.<corpo bruto>")`.
+- O CRM deve comparar em tempo constante.
+- Deve rejeitar timestamps com mais de 5 minutos de diferença.
+- Deve responder `2xx` rápido e processar depois.
+
+**Envelope:**
+
+```json
+{ "id": "…", "type": "call.ended", "schemaVersion": 1, "occurredAt": "2026-10-15T01:02:03.000Z",
+  "tenantId": "…", "integrationId": "…", "payload": { "call": { … } } }
+```
+
+| Evento | Quando | `payload` |
+|---|---|---|
+| `call.reserved` | A ligação da integração foi reservada (linha + agente) | `{call}` |
+| `call.dialing` | O WhatsApp começou a chamar o destino | `{call}` |
+| `call.answered` | O destino atendeu | `{call, answered_at}` |
+| `call.ended` | Terminou (`status`: `completed`/`no_answer`/`failed`/`cancelled`, mais `outcome` e `failure_reason`) | `{call}` |
+| `call.wrap_up_completed` | Pós-ligação registrado no ZapLiga | `{call, callback_at}` |
+| `number.created` / `number.updated` / `number.removed` | Linha criada, ajustada ou arquivada | `{number}` |
+| `number.status_changed` | Linha conectou, desconectou ou entrou em quarentena | `{number}` |
+| `integration.ping` | Enviado após cada handshake e por `POST /webhook/test` | `{message}` |
+
+**Conteúdo dos payloads:**
+- `call` tem o mesmo formato de `GET /calls/:id`: status, durações, `to_phone`, `lead_name`, `number{id,label,phone,available_at,quarantined_until}`, `sdr{id,name,external_user_id}`, `external_ref`, resultado e notas.
+- `number` tem o mesmo formato de `GET /numbers`.
+- Eventos de ligação só vão para a integração que fez a ligação.
+- Eventos de linha vão para todas as integrações conectadas do tenant.
+
+**Entrega:**
+- **Pelo menos uma vez.** Retry com backoff exponencial (2 s, 4 s … até 15 min). Depois de 10 tentativas, cerca de 1 h, o evento vai para dead-letter.
+  - Redirecionamentos (3xx) contam como falha.
+  - Cada evento é postado por uma instância de cada vez.
+- **Ordem não garantida.** Cada evento traz o estado completo da ligação ou da linha. O CRM deve deduplicar pelo `id` do evento e ficar com o estado mais recente (`occurredAt`).
+- **Retenção:** eventos entregues ficam 30 dias.
+- **Consulta e reenvio:** `GET /events?status=dead_letter` e `POST /events/:id/retry`, ou pelo card no painel.
+- **Endereço do webhook:** em produção não pode apontar para endereço interno (IP privado, loopback ou `localhost`).
+
+| Método e rota | Escopo | Uso |
+|---|---|---|
+| `POST /webhook/test` | `webhooks` | Enfileira um `integration.ping` |
+| `GET /events?status=&limit=` | `webhooks` | Últimas entregas (`pending`/`delivered`/`dead_letter`) |
+| `POST /events/:id/retry` | `webhooks` | Recoloca um evento na fila |
+
+Painel do ZapLiga: o card da integração mostra a última entrega, o aviso de falhas e a lista "Ver entregas", com **Reenviar** para os eventos que falharam.
+
 ## Pendências
 
-- **Z4 — webhooks para o CRM:** `call.reserved/dialing/answered/ended/wrap_up_completed`, `number.status_changed/removed`. O envelope será igual ao do outbox de analytics e assinado com o `webhook_secret` do handshake, mas com payload completo (telefone e nome) e sem a trava `analytics_learning`.
-- **Painel:** últimos eventos e falhas de entrega no card da integração.
-- **Métricas Prometheus** específicas (`integration_requests_total`, `dial_intents_total{result}`).
+- Métricas Prometheus específicas (`integration_requests_total`, `dial_intents_total{result}`, `crm_events_delivery_failures_total`).
+- Resolver DNS do webhook antes de entregar (hoje só IPs literais internos são bloqueados).

@@ -16,6 +16,11 @@ const copy = async (value: string) => {
 
 const formatDate = (value?: string | null) => value ? new Date(value).toLocaleString('pt-BR') : '';
 const hostOf = (value?: string | null) => { try { return value ? new URL(value).host : ''; } catch { return ''; } };
+const eventStatus: Record<string, { label: string; tone: string }> = {
+  delivered: { label: 'Entregue', tone: 'success' },
+  pending: { label: 'Pendente', tone: 'info' },
+  dead_letter: { label: 'Falhou', tone: 'warning' },
+};
 
 /** Franco CRM: the leader generates the key the CRM uses to place calls through ZapLiga. */
 export function CrmIntegrationsPanel({ tenantId }: CrmIntegrationsPanelProps) {
@@ -25,6 +30,8 @@ export function CrmIntegrationsPanel({ tenantId }: CrmIntegrationsPanelProps) {
   const [message, setMessage] = useState('');
   const [busy, setBusy] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [eventsFor, setEventsFor] = useState('');
+  const [events, setEvents] = useState<AnyRow[]>([]);
   const copyTimer = useRef<number>();
   useEffect(() => () => { if (copyTimer.current) window.clearTimeout(copyTimer.current); }, []);
 
@@ -61,6 +68,22 @@ export function CrmIntegrationsPanel({ tenantId }: CrmIntegrationsPanelProps) {
     catch (error) { setMessage(error instanceof Error ? error.message : String(error)); }
   };
 
+  const loadEvents = async (id: string) => {
+    try { setEvents((await json('/api/tenants/' + tenantId + '/crm-integrations/' + id + '/events?limit=20')).items ?? []); }
+    catch (error) { setMessage(error instanceof Error ? error.message : String(error)); }
+  };
+
+  const toggleEvents = async (id: string) => {
+    if (eventsFor === id) { setEventsFor(''); return; }
+    setEventsFor(id); setEvents([]);
+    await loadEvents(id);
+  };
+
+  const retryEvent = async (id: string, eventId: string) => {
+    try { await json('/api/tenants/' + tenantId + '/crm-integrations/' + id + '/events/' + eventId + '/retry', { method: 'POST' }); setMessage('Evento colocado de volta na fila de entrega.'); await loadEvents(id); }
+    catch (error) { setMessage(error instanceof Error ? error.message : String(error)); }
+  };
+
   const handleCopy = async () => {
     await copy(apiKey);
     setCopied(true);
@@ -90,8 +113,13 @@ export function CrmIntegrationsPanel({ tenantId }: CrmIntegrationsPanelProps) {
         <div className="integration-stats">
           <span><small>Conectada em</small><strong>{integration.connected_at ? `${formatDate(integration.connected_at)}${hostOf(integration.webhook_url) ? ' · ' + hostOf(integration.webhook_url) : ''}` : 'Ainda não'}</strong></span>
           <span><small>Último uso</small><strong>{formatDate(integration.last_used_at) || 'Nunca'}</strong></span>
+          <span><small>Última entrega</small><strong>{formatDate(integration.last_delivery_at) || 'Nenhuma'}{integration.last_delivery_failure_at && (!integration.last_delivery_at || integration.last_delivery_failure_at > integration.last_delivery_at) ? ' · com falhas' : ''}</strong></span>
         </div>
-        {integration.status === 'active' && <div className="panel-actions"><Button variant="ghost" onClick={() => void rotate(integration.id)}>Gerar nova chave</Button><Button variant="danger" onClick={() => void revoke(integration.id)}>Revogar</Button></div>}
+        {integration.status === 'active' && <div className="panel-actions"><Button variant="ghost" onClick={() => void toggleEvents(integration.id)}>{eventsFor === integration.id ? 'Ocultar entregas' : 'Ver entregas'}</Button><Button variant="ghost" onClick={() => void rotate(integration.id)}>Gerar nova chave</Button><Button variant="danger" onClick={() => void revoke(integration.id)}>Revogar</Button></div>}
+        {eventsFor === integration.id && <div className="integration-events">
+          {events.map((item) => <div className="integration-event-row" key={item.id}><span className={'integration-event-dot integration-event-' + (item.status === 'dead_letter' ? 'failed' : item.status === 'delivered' ? 'accepted' : 'received')} /><div><strong>{item.event_type}</strong><small>{item.last_error ? `${item.last_error} · ${item.attempts} tentativas` : `${item.attempts} tentativa(s)`}</small></div><Badge tone={eventStatus[item.status]?.tone ?? 'neutral'}>{eventStatus[item.status]?.label ?? item.status}</Badge><time>{formatDate(item.created_at)}</time>{item.status === 'dead_letter' && <Button variant="ghost" onClick={() => void retryEvent(integration.id, item.id)}>Reenviar</Button>}</div>)}
+          {!events.length && <EmptyState title="Nenhuma entrega ainda" description="Os eventos de ligação e de linha enviados ao Franco aparecem aqui." />}
+        </div>}
       </article>)}
       {!integrations.length && <EmptyState title="Nenhuma integração com CRM" description="Gere uma chave acima para conectar o Franco." />}
     </div>

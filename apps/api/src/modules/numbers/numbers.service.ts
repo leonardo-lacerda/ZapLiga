@@ -1,4 +1,4 @@
-import { BadRequestException, HttpException, HttpStatus, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, HttpException, HttpStatus, Injectable, Logger, NotFoundException, Optional } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
 import { DatabaseService } from '../../database/database.service';
 import { AuditService } from '../audit/audit.service';
@@ -7,6 +7,7 @@ import { normalizeWaxumStatus } from '../../infrastructure/waxum/waxum-status';
 import { RedisService } from '../../infrastructure/redis/redis.service';
 import { EntitlementService } from '../billing/entitlement.service';
 import { PlanLimitsService } from '../billing/plan-limits.service';
+import { CrmEventsService, CrmLineEventType } from '../crm-events/crm-events.service';
 
 const digits = (value: unknown) => String(value ?? '').replace(/\D/g, '');
 
@@ -19,11 +20,17 @@ export type UpdateNumberInput = { label?: string; maxConcurrentCalls?: number; c
  */
 @Injectable()
 export class NumbersService {
+  private readonly logger = new Logger(NumbersService.name);
   private readonly qrRequests = new Map<string, Promise<any>>();
   private readonly waxumCreateCooldownKey = 'zapcall:waxum:create-session:cooldown';
   private readonly waxumCreateLockKey = 'zapcall:waxum:create-session:lock';
 
-  constructor(private readonly db: DatabaseService, private readonly waxum: WaxumClient, private readonly audit: AuditService, private readonly redis: RedisService, private readonly entitlement: EntitlementService, private readonly planLimits: PlanLimitsService) {}
+  constructor(private readonly db: DatabaseService, private readonly waxum: WaxumClient, private readonly audit: AuditService, private readonly redis: RedisService, private readonly entitlement: EntitlementService, private readonly planLimits: PlanLimitsService, @Optional() private readonly crmEvents?: CrmEventsService) {}
+
+  // Connected CRMs mirror the tenant's lines; reporting is best-effort.
+  private emitCrmLine(tenantId: string, numberId: string, eventType: CrmLineEventType) {
+    void this.crmEvents?.recordLine(tenantId, numberId, eventType).catch((error) => this.logger.warn(`CRM event ${eventType} not recorded for line ${numberId}: ${String((error as Error)?.message ?? error).slice(0, 200)}`));
+  }
 
   async create(tenantId: string, actorUserId: string | null, body: CreateNumberInput) {
     await this.entitlement.assertAction(tenantId, 'write', actorUserId ?? undefined);
@@ -46,6 +53,7 @@ export class NumbersService {
       });
       persisted = true;
       await this.audit.record({ actorUserId, tenantId, action: 'number.created', entityType: 'whatsapp_number', entityId: result.rows[0].id });
+      this.emitCrmLine(tenantId, result.rows[0].id, 'number.created');
       return result.rows[0];
     } catch (error) {
       if (createdSessionId && !persisted) await this.waxum.deleteSession(createdSessionId).catch(() => undefined);
@@ -82,6 +90,7 @@ export class NumbersService {
 
     await this.db.query("UPDATE whatsapp_numbers SET status = 'removed' WHERE id = $1 AND tenant_id = $2", [id, tenantId]);
     await this.audit.record({ actorUserId, tenantId, action: 'number.removed', entityType: 'whatsapp_number', entityId: id });
+    this.emitCrmLine(tenantId, id, 'number.removed');
     return { ok: true, id, archived: true };
   }
 
@@ -115,6 +124,7 @@ export class NumbersService {
     const result = await this.db.query(`UPDATE whatsapp_numbers SET max_concurrent_calls = COALESCE($1,max_concurrent_calls), cooldown_seconds = COALESCE($2,cooldown_seconds), max_calls_per_window = COALESCE($3,max_calls_per_window), call_window_seconds = COALESCE($4,call_window_seconds), label = COALESCE($5,label) WHERE id = $6 AND tenant_id = $7 AND status <> 'removed' RETURNING *`, [body.maxConcurrentCalls == null ? null : Number(body.maxConcurrentCalls), body.cooldownSeconds == null ? null : Number(body.cooldownSeconds), body.maxCallsPerWindow == null ? null : Number(body.maxCallsPerWindow), body.callWindowSeconds == null ? null : Number(body.callWindowSeconds), body.label ? String(body.label) : null, id, tenantId]);
     if (!result.rows[0]) throw new NotFoundException('Número não encontrado');
     await this.audit.record({ actorUserId, tenantId, action: 'number.settings_changed', entityType: 'whatsapp_number', entityId: id });
+    this.emitCrmLine(tenantId, id, 'number.updated');
     return result.rows[0];
   }
 
@@ -190,6 +200,7 @@ export class NumbersService {
   private async refreshNumberStatus(number: any) {
     const status = normalizeWaxumStatus(await this.waxum.getStatus(number.waxum_session_id));
     await this.db.query('UPDATE whatsapp_numbers SET status = $1, phone = COALESCE($2, phone) WHERE id = $3 AND tenant_id = $4', [status.status, status.phone, number.id, number.tenant_id]);
+    if (status.status !== number.status) this.emitCrmLine(number.tenant_id, number.id, 'number.status_changed');
     return status;
   }
 

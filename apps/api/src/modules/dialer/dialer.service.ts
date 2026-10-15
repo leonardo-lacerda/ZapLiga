@@ -35,12 +35,15 @@ import {
   shouldQuarantineLine,
 } from './dialer.rules';
 import { DIAL_INTENT_TTL_SECONDS, DialIntent, DialRefusedError, dialIntentKey } from './dial-intents';
+import { CrmCallEventType, CrmEventsService, CrmLineEventType } from '../crm-events/crm-events.service';
 
 type IntegrationCallContext = { integrationId: string; externalRef: Record<string, string | number> | null; leadExternalId?: string | null };
 const CONNECTED_LINE_STATUSES = ['connected', 'online', 'ready', 'authenticated'];
 
 type CallResource = {
   tenantId: string;
+  // Set when a CRM integration placed the call: its lifecycle is reported to that CRM.
+  integrationId?: string;
   token: string;
   numberId: string;
   waxumSessionId: string;
@@ -181,7 +184,19 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
     @Optional() private readonly experiments?: ExperimentsService,
     @Optional() private readonly entitlement?: EntitlementService,
     @Optional() private readonly planLimits?: PlanLimitsService,
+    @Optional() private readonly crmEvents?: CrmEventsService,
   ) {}
+
+  // CRM events are best-effort: a webhook outbox hiccup must never touch the call itself.
+  private emitCrmCall(tenantId: string, callId: string, eventType: CrmCallEventType, extra?: Record<string, unknown>) {
+    if (!this.crmEvents) return;
+    void this.crmEvents.recordCall(tenantId, callId, eventType, extra).catch((error) => this.logger.warn(`CRM event ${eventType} not recorded for ${callId}: ${safeOperationalError(error)}`));
+  }
+
+  private emitCrmLine(tenantId: string, numberId: string, eventType: CrmLineEventType) {
+    if (!this.crmEvents) return;
+    void this.crmEvents.recordLine(tenantId, numberId, eventType).catch((error) => this.logger.warn(`CRM event ${eventType} not recorded for line ${numberId}: ${safeOperationalError(error)}`));
+  }
 
   onModuleInit() {
     void this.heartbeat();
@@ -418,8 +433,9 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
       }
       const nextState = continueAvailable ? 'available' : 'offline';
       await client.query(`UPDATE sdrs SET available = $4, state = $5, current_pause_id = NULL WHERE tenant_id = $1 AND id = $2 AND current_pause_id = $3`, [tenantId, sdrId, pauseId, continueAvailable, nextState]);
-      return { id: pauseId, ended_at: endedAt.toISOString(), duration_seconds: Math.max(0, Math.floor((endedAt.getTime() - new Date(pause.started_at).getTime()) / 1000)), call_result: callResult, pipeline_stage: pipelineStage, notes, lead_name: pause.lead_name, callback_at: callbackAt?.toISOString() ?? null, callback_created_id: createdCallbackId, callbacks_completed: completedCallbackIds, available: continueAvailable, state: nextState };
+      return { id: pauseId, call_id: (pause.call_id ?? null) as string | null, ended_at: endedAt.toISOString(), duration_seconds: Math.max(0, Math.floor((endedAt.getTime() - new Date(pause.started_at).getTime()) / 1000)), call_result: callResult, pipeline_stage: pipelineStage, notes, lead_name: pause.lead_name, callback_at: callbackAt?.toISOString() ?? null, callback_created_id: createdCallbackId, callbacks_completed: completedCallbackIds, available: continueAvailable, state: nextState };
     }).then(async (result) => {
+      if (result.call_id) this.emitCrmCall(tenantId, result.call_id, 'call.wrap_up_completed', { callback_at: result.callback_at });
       if (this.audit && result.callback_created_id) await this.audit.record({ actorUserId: input.actorUserId, tenantId, action: 'callback.created', entityType: 'callback', entityId: result.callback_created_id }).catch(() => undefined);
       if (this.audit) for (const callbackId of result.callbacks_completed) await this.audit.record({ actorUserId: input.actorUserId, tenantId, action: 'callback.completed', entityType: 'callback', entityId: callbackId }).catch(() => undefined);
       this.gateway.sendToSdr(sdrId, { type: 'pause_finished', pauseId, state: result.state, available: result.available });
@@ -1397,12 +1413,14 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
         const updated = await this.db.query('UPDATE whatsapp_numbers SET status = $1, phone = COALESCE($2, phone) WHERE id = $3 AND tenant_id = $4 RETURNING status', [status.status, status.phone, number.id, tenantId]);
         if (updated.rows[0] && updated.rows[0].status !== number.status) {
           this.notifyOperationsChanged(tenantId, 'number_status_changed', { kind: 'number_status_changed', numberId: number.id, status: updated.rows[0].status });
+          this.emitCrmLine(tenantId, number.id, 'number.status_changed');
         }
       } catch (error) {
         if ((error as Error & { statusCode?: number }).statusCode === 404) {
           const updated = await this.db.query(`UPDATE whatsapp_numbers SET status = 'disconnected' WHERE id = $1 AND tenant_id = $2 RETURNING status`, [number.id, tenantId]);
           if (updated.rows[0] && updated.rows[0].status !== number.status) {
             this.notifyOperationsChanged(tenantId, 'number_status_changed', { kind: 'number_status_changed', numberId: number.id, status: updated.rows[0].status });
+            this.emitCrmLine(tenantId, number.id, 'number.status_changed');
           }
         } else {
           // Waxum may be temporarily unavailable; keep the last status unless
@@ -1484,6 +1502,7 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
         mediaActive: false,
         previousSdrAvailable: Boolean(sdr.available),
         previousSdrState: String(sdr.state ?? (sdr.available ? 'available' : 'offline')),
+        integrationId: integration?.integrationId,
       });
       await this.redis.incrementMetric?.('calls_started_total');
       try {
@@ -1500,6 +1519,7 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
       this.log(isAutomatic ? 'Discagem automática iniciada' : 'Discagem manual iniciada', 'info', callId, tenantId);
       const browser = this.gateway.getSocket(sdr.id);
       this.gateway.sendToSdr(sdr.id, { type: 'call_reserved', callId, lead: isAutomatic ? { id: lead.id } : { id: lead.id, name: lead.name, phone: lead.phone }, number: { id: number.id, label: number.label }, ...(integration ? { externalRef: integration.externalRef } : {}) });
+      if (integration) this.emitCrmCall(tenantId, callId, 'call.reserved');
       this.gateway.broadcastToOperations?.({
         type: 'operations_changed',
         reason: 'call_reserved',
@@ -1561,6 +1581,7 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
     }, resource.tenantId);
     if (!resource.answerEventLogged) {
       resource.answerEventLogged = true;
+      if (resource.integrationId) this.emitCrmCall(resource.tenantId, callId, 'call.answered', { answered_at: new Date().toISOString() });
       void this.campaignEvents?.record({ tenantId: resource.tenantId, campaignId: row.campaign_id ?? null, campaignVersion: row.campaign_version ?? null, eventType: 'call.connected', aggregateType: 'call', aggregateId: callId, idempotencyKey: `call.connected:${callId}`, payload: { leadId: row.lead_id, sdrId, numberId: row.number_id } });
     }
     if (resource.media?.readyState === WebSocket.OPEN) this.gateway.sendToSdr(sdrId, { type: 'media_open', callId });
@@ -1628,6 +1649,7 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
             if (metadata.type === 'call_started' && metadata.call_id && !resource.answerWatcherStarted) {
               resource.waxumCallId = metadata.call_id;
               resource.answerWatcherStarted = true;
+              if (resource.integrationId) this.emitCrmCall(resource.tenantId, callId, 'call.dialing');
               this.log(`Chamada Waxum iniciada (${metadata.call_id}); aguardando atendimento`, 'info', callId);
               void this.waxum.waitForOutgoingAnswer(call.rows[0].waxum_session_id, metadata.call_id, resource.answerAbort!.signal)
                 .then((answered) => {
@@ -1920,6 +1942,7 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
     this.log(`Uma linha parece bloqueada pelo WhatsApp e foi pausada por ${hours}h para proteger a conta. O discador usará as outras linhas.`, 'error', callId, tenantId);
     this.gateway.broadcast({ type: 'number_flagged', numberId, flaggedHours: hours }, tenantId);
     this.notifyOperationsChanged(tenantId, 'number_flagged', { kind: 'number_flagged', numberId, flaggedHours: hours });
+    this.emitCrmLine(tenantId, numberId, 'number.status_changed');
   }
 
   async finishCall(callId: string, status: string, reason?: string, forceNoRetry = false, tenantId = legacyTenantId()) {
@@ -2015,6 +2038,7 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
         });
       }
       if (resource) await this.redis.release({ tenantId: resource.tenantId, token: resource.token, numberId: resource.numberId, waxumSessionId: resource.waxumSessionId, leadId: resource.leadId, sdrId: resource.sdrId });
+      if (row.integration_id) this.emitCrmCall(tenantId, callId, 'call.ended');
       const nextState = requiresPostCall ? 'post_call' : restoredState;
       const nextAvailable = requiresPostCall ? false : restoredAvailable;
       this.gateway.sendToSdr(row.sdr_id, { type: 'call_finished', callId, status: finalCallStatus, outcome, pause, state: nextState, available: nextAvailable });

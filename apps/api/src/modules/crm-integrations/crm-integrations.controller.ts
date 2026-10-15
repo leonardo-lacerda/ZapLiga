@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, Post, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, Param, Post, Query, UseGuards } from '@nestjs/common';
 import { AuthGuard, CurrentTenant, CurrentUser, Roles, RolesGuard, TenantMembershipGuard } from '../auth/auth.guards';
 import { FeatureFlagGuard, RequiresFeature } from '../feature-flags/feature-flags.guard';
 import { CreateCrmIntegrationDto } from './dto/crm-integration.dto';
@@ -23,4 +23,10 @@ export class CrmIntegrationsController {
 
   @Post('/:id/revoke')
   revoke(@Param('id') id: string, @CurrentTenant() tenantId: string, @CurrentUser() user: any) { return this.integrations.revoke(tenantId, user.id, id); }
+
+  @Get('/:id/events')
+  events(@Param('id') id: string, @Query('status') status: string | undefined, @Query('limit') limit: string | undefined, @CurrentTenant() tenantId: string) { return this.integrations.listEvents(tenantId, id, { status, limit: Number(limit) }); }
+
+  @Post('/:id/events/:eventId/retry')
+  retryEvent(@Param('id') id: string, @Param('eventId') eventId: string, @CurrentTenant() tenantId: string, @CurrentUser() user: any) { return this.integrations.retryEvent(tenantId, user.id, id, eventId); }
 }

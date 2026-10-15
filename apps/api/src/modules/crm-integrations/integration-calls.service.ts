@@ -7,6 +7,7 @@ import { ContactComplianceService, SuppressionReason } from '../contact-complian
 import { DialRefusedError, sanitizeExternalRef } from '../dialer/dial-intents';
 import { DialerService } from '../dialer/dialer.service';
 import { CALL_RESULT_CATALOG } from '../metrics/metrics.definitions';
+import { CALL_SELECT, callView, lineView } from '../crm-events/crm-events.views';
 import { CrmIntegration } from './crm-integrations.service';
 
 const CALL_CONTROL_CHANNEL = 'zapcall:crm-integration:call-control';
@@ -28,38 +29,6 @@ export function toIntegrationError(error: unknown): HttpException {
   if (error instanceof HttpException) return error;
   return new BadRequestException({ code: 'refused', message: String((error as Error)?.message ?? error).slice(0, 300) });
 }
-
-const lineView = (row: any) => {
-  const now = Date.now();
-  const protectedUntil = row.last_call_ended_at && new Date(row.last_call_ended_at).getTime() > now ? new Date(row.last_call_ended_at).toISOString() : null;
-  const quarantinedUntil = row.flagged_until && new Date(row.flagged_until).getTime() > now ? new Date(row.flagged_until).toISOString() : null;
-  return {
-    id: row.id, label: row.label, phone: row.phone ?? null, status: row.status,
-    in_call: Number(row.active_calls ?? 0) > 0,
-    available_at: quarantinedUntil ?? protectedUntil,
-    quarantined_until: quarantinedUntil,
-    protection: { cooldown_seconds: row.cooldown_seconds, max_calls_per_window: row.max_calls_per_window, call_window_seconds: row.call_window_seconds, max_concurrent_calls: row.max_concurrent_calls },
-    created_at: row.created_at,
-  };
-};
-
-const callView = (row: any) => ({
-  id: row.id, status: row.status, source: row.source, outcome: row.outcome ?? null, failure_reason: row.failure_reason ?? null,
-  call_result: row.call_result ?? null, pipeline_stage: row.pipeline_stage ?? null, notes: row.notes ?? null,
-  to_phone: row.lead_phone ?? null, lead_id: row.lead_id,
-  number: { id: row.number_id, label: row.number_label ?? null, phone: row.number_phone ?? null },
-  sdr: { id: row.sdr_id, external_user_id: row.external_user_id ?? null },
-  external_ref: row.external_ref ?? null,
-  created_at: row.created_at, started_at: row.started_at ?? null, connected_at: row.connected_at ?? null, ended_at: row.ended_at ?? null,
-  duration_seconds: row.duration_seconds ?? null, ring_duration_seconds: row.ring_duration_seconds ?? null, connected_duration_seconds: row.connected_duration_seconds ?? null,
-  wrap_up_completed_at: row.wrap_up_completed_at ?? null,
-});
-
-const CALL_SELECT = `SELECT c.*, l.phone AS lead_phone, n.label AS number_label, n.phone AS number_phone, a.external_user_id
-  FROM calls c
-  JOIN leads l ON l.tenant_id = c.tenant_id AND l.id = c.lead_id
-  JOIN whatsapp_numbers n ON n.id = c.number_id
-  LEFT JOIN crm_integration_agents a ON a.integration_id = c.integration_id AND a.sdr_id = c.sdr_id`;
 
 @Injectable()
 export class IntegrationCallsService implements OnModuleInit, OnModuleDestroy {

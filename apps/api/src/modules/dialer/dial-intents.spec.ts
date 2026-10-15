@@ -107,3 +107,37 @@ describe('DialerService dial intents', () => {
     expect(statements.some((sql) => sql.includes('current_pause_id = NULL'))).toBe(true);
   });
 });
+
+describe('DialerService CRM events', () => {
+  const callRow = {
+    id: 'call-1', tenant_id: 'tenant-1', status: 'media_active', source: 'manual', sdr_id: 'sdr-1', number_id: 'num-1', cooldown_seconds: 60,
+    lead_id: 'lead-1', attempts: 0, max_attempts_per_lead: 3, retry_delay_minutes: 5, connected_at: '2026-10-15T01:00:00Z',
+  };
+  const makeService = (row: any) => {
+    const client = { query: jest.fn().mockResolvedValue({ rows: [{ id: 'pause-1', pause_type: 'post_call', started_at: '2026-10-15T01:02:00Z' }] }) };
+    const db = { query: jest.fn().mockResolvedValue({ rows: [row] }), transaction: jest.fn(async (cb: any) => cb(client)) };
+    const gateway = { sendToSdr: jest.fn(), broadcast: jest.fn(), broadcastToOperations: jest.fn() };
+    const redis = { client: { lpush: jest.fn().mockResolvedValue(1), ltrim: jest.fn().mockResolvedValue('OK') }, release: jest.fn() };
+    const crmEvents = { recordCall: jest.fn().mockResolvedValue(undefined), recordLine: jest.fn().mockResolvedValue(undefined) };
+    const service = new DialerService(db as any, redis as any, {} as any, gateway as any, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, crmEvents as any);
+    return { service, crmEvents };
+  };
+
+  it('reports the end of a call the CRM placed', async () => {
+    const { service, crmEvents } = makeService({ ...callRow, integration_id: 'int-1' });
+    await (service as any).finishCall('call-1', 'completed', 'remote_hangup', false, 'tenant-1');
+    expect(crmEvents.recordCall).toHaveBeenCalledWith('tenant-1', 'call-1', 'call.ended', undefined);
+  });
+
+  it('stays silent for calls the CRM did not place', async () => {
+    const { service, crmEvents } = makeService({ ...callRow, integration_id: null });
+    await (service as any).finishCall('call-1', 'completed', 'remote_hangup', false, 'tenant-1');
+    expect(crmEvents.recordCall).not.toHaveBeenCalled();
+  });
+
+  it('never lets a CRM outbox failure break the call path', async () => {
+    const { service, crmEvents } = makeService({ ...callRow, integration_id: 'int-1' });
+    crmEvents.recordCall.mockRejectedValueOnce(new Error('outbox down'));
+    await expect((service as any).finishCall('call-1', 'completed', 'remote_hangup', false, 'tenant-1')).resolves.toBeUndefined();
+  });
+});

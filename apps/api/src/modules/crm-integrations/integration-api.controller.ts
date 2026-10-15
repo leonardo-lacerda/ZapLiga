@@ -22,6 +22,19 @@ export class IntegrationApiController {
   @RequiresScope('webhooks')
   handshake(@CurrentIntegration() integration: CrmIntegration, @Body() body: HandshakeDto) { return this.integrations.handshake(integration, body); }
 
+  @Post('/webhook/test')
+  @HttpCode(HttpStatus.ACCEPTED)
+  @RequiresScope('webhooks')
+  webhookTest(@CurrentIntegration() integration: CrmIntegration) { return this.integrations.sendTestEvent(integration); }
+
+  @Get('/events')
+  @RequiresScope('webhooks')
+  events(@CurrentIntegration() integration: CrmIntegration, @Query('status') status?: string, @Query('limit') limit?: string) { return this.integrations.listEvents(integration.tenant_id, integration.id, { status, limit: Number(limit) }); }
+
+  @Post('/events/:id/retry')
+  @RequiresScope('webhooks')
+  retryEvent(@CurrentIntegration() integration: CrmIntegration, @Param('id') id: string) { return this.integrations.retryEvent(integration.tenant_id, null, integration.id, id); }
+
   @Get('/catalog')
   catalog() { return this.calls.catalog(); }
 
