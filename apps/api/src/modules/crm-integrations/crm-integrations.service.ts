@@ -20,7 +20,8 @@ export type CrmIntegration = {
 };
 
 const allowsPlainHttp = () => process.env.NODE_ENV === 'development' || process.env.NODE_ENV === 'test';
-const isLocalHost = (hostname: string) => hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '[::1]' || hostname.endsWith('.localhost') || hostname.endsWith('.test');
+// host.docker.internal: a CRM running on the developer's machine, seen from the API container.
+const isLocalHost = (hostname: string) => hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '[::1]' || hostname === 'host.docker.internal' || hostname.endsWith('.localhost') || hostname.endsWith('.test');
 const newApiKey = () => `zpl_crm_${randomBytes(30).toString('base64url')}`;
 
 // Literal private or loopback addresses: a production webhook must not point the API at its own

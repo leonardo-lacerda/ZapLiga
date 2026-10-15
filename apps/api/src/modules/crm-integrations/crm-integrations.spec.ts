@@ -50,6 +50,7 @@ describe('CrmIntegrationsService', () => {
   it('accepts HTTPS URLs, and plain HTTP only for local hosts outside production', () => {
     expect(normalizeIntegrationUrl('https://crm.example.com/hook', 'URL').host).toBe('crm.example.com');
     expect(normalizeIntegrationUrl('http://localhost:13001/hook', 'URL').host).toBe('localhost:13001');
+    expect(normalizeIntegrationUrl('http://host.docker.internal:13003/hook', 'URL').host).toBe('host.docker.internal:13003');
     expect(() => normalizeIntegrationUrl('http://crm.example.com/hook', 'URL')).toThrow('HTTPS');
     expect(() => normalizeIntegrationUrl('https://user:pass@crm.example.com', 'URL')).toThrow('credenciais');
     const previous = process.env.NODE_ENV;
