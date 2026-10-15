@@ -17,6 +17,7 @@ export const TENANT_FEATURES = [
   'benchmarks',
   'lead_ingestion_api',
   'advanced_reports',
+  'crm_integration',
 ] as const;
 export type TenantFeature = typeof TENANT_FEATURES[number];
 export type TenantFeatureFlags = Record<TenantFeature, boolean>;
@@ -39,6 +40,7 @@ export const defaultTenantFeatureFlags = (): TenantFeatureFlags => ({
   benchmarks: false,
   lead_ingestion_api: false,
   advanced_reports: false,
+  crm_integration: false,
 });
 
 const normalizeFeatureFlags = (value: unknown): TenantFeatureFlags => {

@@ -7,7 +7,7 @@ import { DialerController } from './modules/dialer/dialer.controller';
 import { DialerModule } from './modules/dialer/dialer.module';
 import { LeadsController } from './modules/leads/leads.controller';
 import { HealthController } from './modules/health/health.controller';
-import { NumbersController } from './modules/numbers/numbers.controller';
+import { NumbersModule } from './modules/numbers/numbers.module';
 import { SdrsController } from './modules/sdrs/sdrs.controller';
 import { AuthModule } from './modules/auth/auth.module';
 import { AuditModule } from './modules/audit/audit.module';
@@ -34,10 +34,11 @@ import { AnalyticsLearningModule } from './modules/analytics-learning/analytics-
 import { ExperimentsModule } from './modules/experiments/experiments.module';
 import { BenchmarksModule } from './modules/benchmarks/benchmarks.module';
 import { BillingModule } from './modules/billing/billing.module';
+import { CrmIntegrationsModule } from './modules/crm-integrations/crm-integrations.module';
 
 @Module({
-  imports: [DatabaseModule, RedisModule, BillingModule, FeatureFlagsModule, AuthModule, AuditModule, InvitationsModule, MembershipsModule, TenantsModule, UsersModule, ContactComplianceModule, DialerScheduleModule, DialerModule, CallbacksModule, OnboardingModule, PrivacyModule, AdminModule, LeadFoldersModule, MetricsModule, LeadIngestionModule, CampaignsModule, RecommendationsModule, OperationHealthModule, AnalyticsEventsModule, AnalyticsLearningModule, ExperimentsModule, BenchmarksModule],
-  controllers: [CallsController, DialerController, HealthController, LeadsController, NumbersController, SdrsController],
+  imports: [DatabaseModule, RedisModule, BillingModule, FeatureFlagsModule, AuthModule, AuditModule, InvitationsModule, MembershipsModule, TenantsModule, UsersModule, ContactComplianceModule, DialerScheduleModule, DialerModule, CallbacksModule, OnboardingModule, PrivacyModule, AdminModule, LeadFoldersModule, MetricsModule, LeadIngestionModule, CampaignsModule, RecommendationsModule, OperationHealthModule, AnalyticsEventsModule, AnalyticsLearningModule, ExperimentsModule, BenchmarksModule, NumbersModule, CrmIntegrationsModule],
+  controllers: [CallsController, DialerController, HealthController, LeadsController, SdrsController],
   providers: [{ provide: APP_INTERCEPTOR, useClass: OperationalMetricsInterceptor }],
 })
 export class AppModule {}

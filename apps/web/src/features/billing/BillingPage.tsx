@@ -15,7 +15,7 @@ const reasonLabel: Record<string, string> = {
 const featureLabels: Record<string, string> = {
   schedule_enforcement: 'Agenda e horários', callbacks: 'Callbacks', privacy_requests: 'Privacidade e compliance', onboarding: 'Onboarding',
   campaigns: 'Campanhas', decision_engine: 'Motor de decisão', recommendations: 'Recomendações', operation_health: 'Saúde da operação',
-  analytics_learning: 'Aprendizado analítico', experiments: 'Experimentos', benchmarks: 'Benchmarks', lead_ingestion_api: 'API de leads', advanced_reports: 'Relatórios avançados',
+  analytics_learning: 'Aprendizado analítico', experiments: 'Experimentos', benchmarks: 'Benchmarks', lead_ingestion_api: 'API de leads', advanced_reports: 'Relatórios avançados', crm_integration: 'Integração com CRM (Franco)',
 };
 const levelLabels: Record<string, string> = { full: 'Completo', basic: 'Básico', read_only: 'Consulta' };
 const limitLabels: Record<string, string> = { leads: 'leads', retention_days: 'Histórico de métricas' };

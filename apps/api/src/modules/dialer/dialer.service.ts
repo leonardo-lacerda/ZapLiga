@@ -34,6 +34,10 @@ import {
   normalizePhone,
   shouldQuarantineLine,
 } from './dialer.rules';
+import { DIAL_INTENT_TTL_SECONDS, DialIntent, DialRefusedError, dialIntentKey } from './dial-intents';
+
+type IntegrationCallContext = { integrationId: string; externalRef: Record<string, string | number> | null; leadExternalId?: string | null };
+const CONNECTED_LINE_STATUSES = ['connected', 'online', 'ready', 'authenticated'];
 
 type CallResource = {
   tenantId: string;
@@ -490,6 +494,14 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
     return result.rows[0].id as string;
   }
 
+  // Leads created by CRM calls get their own folder so the operation can tell them apart. They are
+  // created with status 'manual', which keeps them out of the automatic queue.
+  private async integrationFolderId(tenantId: string, executor: { query: (text: string, params?: unknown[]) => Promise<any> } = this.db) {
+    await executor.query(`INSERT INTO lead_folders (id, tenant_id, name, is_active, sort_order) VALUES ($1, $2, 'Franco CRM', true, 9999) ON CONFLICT DO NOTHING`, [randomUUID(), tenantId]);
+    const result = await executor.query(`SELECT id FROM lead_folders WHERE tenant_id = $1 AND name = 'Franco CRM' LIMIT 1`, [tenantId]);
+    return (result.rows[0]?.id as string | undefined) ?? this.defaultFolderId(tenantId);
+  }
+
   async manualCall(leadId: string, tenantId = legacyTenantId()) {
     await this.entitlement?.assertCanOperate(tenantId);
     if (this.schedule) await this.schedule.assertAllowed(tenantId);
@@ -579,7 +591,7 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
     return id && this.gateway.isConnected(id) ? id : null;
   }
 
-  async manualCallWithInput(input: { leadId?: string; phone?: string; name?: string }, tenantId = legacyTenantId(), sdrUserId?: string) {
+  async manualCallWithInput(input: { leadId?: string; phone?: string; name?: string; numberId?: string; integration?: IntegrationCallContext }, tenantId = legacyTenantId(), sdrUserId?: string) {
     await this.entitlement?.assertCanOperate(tenantId, sdrUserId);
     if (this.schedule) await this.schedule.assertAllowed(tenantId);
     const settings = await this.getSettings(tenantId);
@@ -625,8 +637,8 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
             client.query('SELECT count(*)::int AS count FROM leads WHERE tenant_id = $1', [tenantId]),
           ]);
           if (Number(count.rows[0]?.count ?? 0) >= Number(tenant.rows[0]?.max_leads ?? 100000)) throw new Error('O limite de leads desta empresa foi atingido');
-          const folderId = await this.defaultFolderId(tenantId);
-          return (await client.query("INSERT INTO leads (id, tenant_id, folder_id, name, phone, status) VALUES ($1, $2, $3, $4, $5, 'manual') RETURNING *", [randomUUID(), tenantId, folderId, String(input.name ?? '').trim() || 'Ligacao manual', phone])).rows[0];
+          const folderId = input.integration ? await this.integrationFolderId(tenantId, client) : await this.defaultFolderId(tenantId);
+          return (await client.query("INSERT INTO leads (id, tenant_id, folder_id, name, phone, status, external_id) VALUES ($1, $2, $3, $4, $5, 'manual', $6) RETURNING *", [randomUUID(), tenantId, folderId, String(input.name ?? '').trim() || 'Ligacao manual', phone, input.integration?.leadExternalId ?? null])).rows[0];
         });
       }
     }
@@ -654,7 +666,8 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
           )
         ORDER BY s.last_assigned_at NULLS FIRST, s.last_assigned_at ASC
       `, [tenantId, sdrUserId ?? null]),
-      this.db.query(`SELECT * FROM whatsapp_numbers WHERE tenant_id = $1 AND status IN ('connected', 'online', 'ready', 'authenticated') AND (flagged_until IS NULL OR flagged_until <= now()) ORDER BY last_call_ended_at NULLS FIRST, last_call_ended_at ASC`, [tenantId]),
+      // A CRM call names its line: never silently swap it for another one.
+      this.db.query(`SELECT * FROM whatsapp_numbers WHERE tenant_id = $1 AND status IN ('connected', 'online', 'ready', 'authenticated') AND (flagged_until IS NULL OR flagged_until <= now()) AND ($2::text IS NULL OR id = $2) ORDER BY last_call_ended_at NULLS FIRST, last_call_ended_at ASC`, [tenantId, input.numberId ?? null]),
     ]);
     const execution = this.campaignExecution ? await this.campaignExecution.resolveForLead(tenantId, lead) : undefined;
     if (execution && !execution.allowed) throw new Error('A campanha deste lead não está em execução ou não possui recursos disponíveis');
@@ -664,7 +677,7 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
     const sdr = sdrs.rows.find((row: any) => this.gateway.isConnected(row.id)
       && (!execution?.campaignId || execution.sdrIds.includes(row.id) || (sdrUserId && row.operator_kind !== 'sdr')));
     if (!sdr) throw new Error(sdrUserId ? 'Sua estação de ligação não está conectada ou está ocupada' : 'Nenhum SDR conectado e disponivel');
-    if (!numbers.rows.length) throw new Error('Nenhum numero WhatsApp conectado');
+    if (!numbers.rows.length) throw new Error(input.numberId ? 'A linha escolhida não está conectada ou está em quarentena' : 'Nenhum numero WhatsApp conectado');
     // Protections only (see manualCall): a manual call is not paced by the cooldown.
     const readyNumbers = numbers.rows.filter((row: any) => !lineIsProtected(row.last_call_ended_at));
     if (!readyNumbers.length) throw new Error('A linha WhatsApp esta temporariamente protegida por limite de chamadas. Aguarde alguns minutos e tente novamente.');
@@ -697,7 +710,81 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
       ttlMs: (MANUAL_RING_SAFETY_SECONDS + 60) * 1000,
     });
     if (!reserved) throw new Error('Os limites de chamadas estao ocupados; tente novamente em instantes');
-    return { ...(await this.startReservedCall(sdr, number, lead, settings, token, 'manual', tenantId)), leadId: lead.id };
+    return { ...(await this.startReservedCall(sdr, number, lead, settings, token, 'manual', tenantId, input.integration)), leadId: lead.id };
+  }
+
+  /**
+   * A CRM integration pre-authorizes a manual call for one of its linked agents. The agent's
+   * station then redeems the intent over its own socket (dialFromIntent): the station lives in
+   * memory on whichever instance holds that socket, so this request cannot place the call itself.
+   * The checks here are the ones the call will face, run early so the CRM gets an actionable code.
+   */
+  async createDialIntent(input: { tenantId: string; integrationId: string; sdrId: string; numberId: string; phone: string; name?: string; externalRef?: Record<string, string | number> | null; leadExternalId?: string | null }) {
+    const { tenantId } = input;
+    await this.entitlement?.assertCanOperate(tenantId);
+    if (this.schedule) await this.schedule.assertAllowed(tenantId);
+    const phone = normalizePhone(input.phone);
+    if (phone.length < 10 || phone.length > 15) throw new DialRefusedError('invalid_phone', 'Informe um telefone válido com DDD');
+    const [sdrs, numbers, suppressed, busy] = await Promise.all([
+      this.db.query(`SELECT s.id, s.connection_instance_id FROM sdrs s WHERE s.tenant_id = $1 AND s.id = $2 AND ${eligibleOperatorSql('s')} LIMIT 1`, [tenantId, input.sdrId]),
+      this.db.query(`SELECT n.*, (SELECT count(*)::int FROM calls c WHERE c.number_id = n.id AND c.status IN ('reserved', 'dialing', 'media_active')) AS active_calls FROM whatsapp_numbers n WHERE n.tenant_id = $1 AND n.id = $2 AND n.status <> 'removed' LIMIT 1`, [tenantId, input.numberId]),
+      this.db.query(`SELECT 1 FROM contact_suppressions WHERE tenant_id = $1 AND phone = $2 AND lifted_at IS NULL LIMIT 1`, [tenantId, phone]),
+      this.db.query(`SELECT 1 FROM calls WHERE tenant_id = $1 AND sdr_id = $2 AND status IN ('reserved', 'dialing', 'media_active') LIMIT 1`, [tenantId, input.sdrId]),
+    ]);
+    const sdr = sdrs.rows[0];
+    if (!sdr) throw new DialRefusedError('agent_not_eligible', 'O agente não pode operar ligações nesta empresa');
+    const stationAlive = sdr.connection_instance_id ? Boolean(await this.redis.client.exists(`zapcall:runtime:${sdr.connection_instance_id}`)) : false;
+    if (!stationAlive) throw new DialRefusedError('station_offline', 'A estação de ligação do agente não está conectada');
+    if (busy.rows[0]) throw new DialRefusedError('agent_busy', 'O agente já está em uma ligação');
+    const number = numbers.rows[0];
+    if (!number) throw new DialRefusedError('line_not_found', 'Linha não encontrada');
+    if (!CONNECTED_LINE_STATUSES.includes(String(number.status).toLowerCase())) throw new DialRefusedError('line_disconnected', 'A linha escolhida não está conectada');
+    const secondsUntil = (value: unknown) => Math.max(1, Math.ceil((new Date(String(value)).getTime() - Date.now()) / 1000));
+    if (number.flagged_until && new Date(number.flagged_until).getTime() > Date.now()) throw new DialRefusedError('line_quarantined', 'A linha está em quarentena por sinais de bloqueio do WhatsApp', secondsUntil(number.flagged_until));
+    if (lineIsProtected(number.last_call_ended_at)) throw new DialRefusedError('line_protected', 'A linha está temporariamente protegida pelo limite de chamadas do WhatsApp', secondsUntil(number.last_call_ended_at));
+    if (Number(number.active_calls ?? 0) >= Math.max(1, Number(number.max_concurrent_calls ?? 1))) throw new DialRefusedError('line_busy', 'A linha já está em uma ligação');
+    if (number.phone && isSelfCallNumber(number.phone, phone)) throw new DialRefusedError('self_call', 'O número de destino é a própria linha de saída');
+    if (suppressed.rows[0]) throw new DialRefusedError('suppressed', 'Este telefone está na lista de não contato');
+    const intent: DialIntent = {
+      id: randomUUID(), tenantId, integrationId: input.integrationId, sdrId: sdr.id, numberId: number.id, phone,
+      name: String(input.name ?? '').trim().slice(0, 120), externalRef: input.externalRef ?? null, leadExternalId: input.leadExternalId ?? null,
+      createdAt: new Date().toISOString(),
+    };
+    await this.redis.client.set(dialIntentKey(intent.id), JSON.stringify(intent), 'EX', DIAL_INTENT_TTL_SECONDS);
+    return { intent_id: intent.id, expires_at: new Date(Date.now() + DIAL_INTENT_TTL_SECONDS * 1000).toISOString() };
+  }
+
+  /** Redeems a dial intent from the station socket of the agent it was issued for. Single use. */
+  async dialFromIntent(intentId: string, sdrId: string, tenantId: string) {
+    const raw = await this.redis.client.getdel(dialIntentKey(intentId));
+    if (!raw) throw new DialRefusedError('intent_expired', 'A autorização de discagem expirou; tente novamente');
+    const intent = JSON.parse(raw) as DialIntent;
+    if (intent.tenantId !== tenantId || intent.sdrId !== sdrId) throw new DialRefusedError('intent_mismatch', 'Esta autorização de discagem pertence a outro agente');
+    await this.releaseIntegrationPause(sdrId, tenantId);
+    const owner = await this.db.query('SELECT user_id FROM sdrs WHERE tenant_id = $1 AND id = $2', [tenantId, sdrId]);
+    return this.manualCallWithInput({
+      phone: intent.phone, name: intent.name, numberId: intent.numberId,
+      integration: { integrationId: intent.integrationId, externalRef: intent.externalRef, leadExternalId: intent.leadExternalId },
+    }, tenantId, owner.rows[0]?.user_id);
+  }
+
+  // A CRM agent records the call result in the CRM, which may or may not report it back. An
+  // unfinished post-call pause must not lock the agent out of their next call.
+  private async releaseIntegrationPause(sdrId: string, tenantId: string) {
+    await this.db.transaction(async (client) => {
+      const row = (await client.query('SELECT current_pause_id FROM sdrs WHERE tenant_id = $1 AND id = $2 FOR UPDATE', [tenantId, sdrId])).rows[0];
+      if (!row?.current_pause_id) return;
+      await client.query(`UPDATE sdr_pauses SET ended_at = now(), duration_seconds = GREATEST(0, EXTRACT(EPOCH FROM (now() - started_at))::int) WHERE tenant_id = $1 AND id = $2 AND ended_at IS NULL`, [tenantId, row.current_pause_id]);
+      await client.query(`UPDATE sdrs SET current_pause_id = NULL, available = false, state = 'offline' WHERE tenant_id = $1 AND id = $2`, [tenantId, sdrId]);
+    });
+  }
+
+  /** Hangs up a call only if this instance runs it; returns false otherwise. */
+  async hangupIfOwned(callId: string, tenantId: string, outcome = 'crm_hangup') {
+    const resource = this.active.get(callId);
+    if (!resource || resource.tenantId !== tenantId) return false;
+    await this.finishCall(callId, 'completed', outcome);
+    return true;
   }
 
   async getStatus(tenantId = legacyTenantId(), from?: string, to?: string) {
@@ -1083,6 +1170,7 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
         this.db.query(`
             SELECT s.* FROM sdrs s
             WHERE s.tenant_id = $1 AND s.available = true AND s.state = 'available'
+              AND s.station_mode = 'standard'
               AND ${eligibleOperatorSql('s')}
             AND NOT EXISTS (
               SELECT 1 FROM calls c
@@ -1326,7 +1414,7 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
     }));
   }
 
-  private async startReservedCall(sdr: any, number: any, lead: any, settings: any, token: string, source: string, tenantId = legacyTenantId()) {
+  private async startReservedCall(sdr: any, number: any, lead: any, settings: any, token: string, source: string, tenantId = legacyTenantId(), integration?: IntegrationCallContext) {
     const callId = randomUUID();
     // A call stays 'reserved' until answered, and expireReservations() cancels reserved calls past
     // offer_expires_at -- so a manual call needs the longer window here too, or it would still drop
@@ -1379,7 +1467,7 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
         });
         if (isAutomatic && Number(folder.rows[0].attempts ?? lead.attempts ?? 0) >= maxAttempts) throw new Error('O limite de tentativas desta campanha foi atingido');
         if (execution?.campaignId && !folder.rows[0].campaign_id) await client.query('UPDATE leads SET campaign_id=$1, campaign_version=$2 WHERE tenant_id=$3 AND id=$4', [execution.campaignId, execution.campaignVersion, tenantId, lead.id]);
-        await client.query(`INSERT INTO calls (id, tenant_id, folder_id, lead_id, number_id, sdr_id, campaign_id, campaign_version, experiment_id, experiment_variant_id, status, attempt_number, source, offer_expires_at, owner_instance_id) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'reserved',$11,$12,$13,$14)`, [callId, tenantId, folder.rows[0].folder_id, lead.id, number.id, sdr.id, execution?.campaignId ?? null, execution?.campaignVersion ?? null, lead.experimentAssignment?.experimentId ?? null, lead.experimentAssignment?.variant?.id ?? null, isAutomatic ? Number(lead.attempts) + 1 : 0, source, expires, runtimeInstanceId]);
+        await client.query(`INSERT INTO calls (id, tenant_id, folder_id, lead_id, number_id, sdr_id, campaign_id, campaign_version, experiment_id, experiment_variant_id, status, attempt_number, source, offer_expires_at, owner_instance_id, integration_id, external_ref) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'reserved',$11,$12,$13,$14,$15,$16::jsonb)`, [callId, tenantId, folder.rows[0].folder_id, lead.id, number.id, sdr.id, execution?.campaignId ?? null, execution?.campaignVersion ?? null, lead.experimentAssignment?.experimentId ?? null, lead.experimentAssignment?.variant?.id ?? null, isAutomatic ? Number(lead.attempts) + 1 : 0, source, expires, runtimeInstanceId, integration?.integrationId ?? null, integration?.externalRef ? JSON.stringify(integration.externalRef) : null]);
         await this.campaignEvents?.record({ tenantId, campaignId: execution?.campaignId ?? null, campaignVersion: execution?.campaignVersion ?? null, eventType: 'call.reserved', aggregateType: 'call', aggregateId: callId, idempotencyKey: `call.reserved:${callId}`, payload: { leadId: lead.id, sdrId: sdr.id, numberId: number.id, source } }, client as any);
         if (isAutomatic) {
           await client.query(`UPDATE leads SET status = 'reserved', attempts = attempts + 1, last_auto_round = $1 WHERE tenant_id = $2 AND id = $3`, [Number(settings.dialer_round ?? 1), tenantId, lead.id]);
@@ -1411,7 +1499,7 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
       // Manual calls skip this — the SDR already chose the lead themselves.
       this.log(isAutomatic ? 'Discagem automática iniciada' : 'Discagem manual iniciada', 'info', callId, tenantId);
       const browser = this.gateway.getSocket(sdr.id);
-      this.gateway.sendToSdr(sdr.id, { type: 'call_reserved', callId, lead: isAutomatic ? { id: lead.id } : { id: lead.id, name: lead.name, phone: lead.phone }, number: { id: number.id, label: number.label } });
+      this.gateway.sendToSdr(sdr.id, { type: 'call_reserved', callId, lead: isAutomatic ? { id: lead.id } : { id: lead.id, name: lead.name, phone: lead.phone }, number: { id: number.id, label: number.label }, ...(integration ? { externalRef: integration.externalRef } : {}) });
       this.gateway.broadcastToOperations?.({
         type: 'operations_changed',
         reason: 'call_reserved',

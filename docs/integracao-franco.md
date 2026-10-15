@@ -1,0 +1,132 @@
+# Integração com CRM (Franco) — contrato v1
+
+Permite que um CRM (primeiro consumidor: **Franco**, fork do Chatwoot) faça ligações pelo ZapLiga a partir da tela do lead. O agente fala pelo navegador do CRM, que funciona como uma **estação ZapLiga só-manual**.
+
+Plano completo, incluindo o lado Franco: `Franco/plano-integracao-zapliga.md`.
+
+Status: **Z1–Z3 implementados** (chave, API v1, estação só-manual, intenção de discagem). **Z4 (webhooks para o CRM) ainda não existe.** Até lá, o CRM acompanha a ligação pelo socket da estação e reconcilia por `GET /calls/:id`.
+
+## Como funciona
+
+1. **Chave.** Um líder abre **Integrações → Ligações pelo Franco** e gera a chave `zpl_crm_…`. Ela é mostrada uma vez e guardada só como hash.
+   - Feature `crm_integration`, liberada nos planos Growth e Pro.
+   - O admin da plataforma pode liberar para outros tenants em "Recursos da empresa".
+2. **Handshake.** O servidor do CRM chama `POST /api/v1/integrations/handshake` com a URL do webhook e as origens do navegador. Recebe um `webhook_secret`, mostrado uma vez.
+3. **Vínculo de agentes.** Para cada usuário que vai ligar, o CRM chama `POST /agents/ensure`, que vincula por e-mail:
+   - SDR ou líder que já existe: mantém o papel e não consome assento novo;
+   - qualquer outra pessoa: vira **SDR do tenant e ocupa 1 assento**.
+4. **Estação.** O CRM pede `POST /agents/:sdrId/station-ticket` e entrega ao navegador `{ws_url, ticket}`. O navegador abre `ws_url?ticket=…` e envia `identify`.
+   - A estação fica com `station_mode = 'manual_only'`.
+   - O discador automático **nunca** entrega ligações a ela, e `availability: true` é recusado.
+5. **Ligar.**
+   1. O servidor do CRM valida as próprias permissões e chama `POST /dial-intents`. Recebe `intent_id`, de uso único e válido por 60 s.
+   2. O navegador envia `{type:'dial', intentId}` pelo socket da estação.
+   3. A instância que segura o socket faz a ligação pela **linha escolhida**, sem trocar por outra.
+6. **Áudio** segue o protocolo normal da estação: PCM16 LE mono 16 kHz, em quadros binários no mesmo socket.
+7. **Desligar e pós-ligação.**
+   - Desligar: `{type:'hangup', callId}` no socket, ou `POST /calls/:id/hangup`, que alcança a instância dona via Redis pub/sub.
+   - Pós-ligação: `POST /calls/:id/wrap-up`.
+   - Se o CRM não enviar o pós-ligação, a pausa é liberada sozinha na próxima discagem do agente.
+
+Por que a discagem vai pelo socket: a estação vive em memória na instância (`api-a`/`api-b`) que segura o WebSocket, e o `ip_hash` do nginx não garante que a chamada servidor→servidor do CRM caia na mesma instância.
+
+## Autenticação
+
+O header é `Authorization: Bearer zpl_crm_…` ou `x-zapliga-api-key: zpl_crm_…`.
+
+- A chave sozinha define o tenant: rota ou header nenhum muda isso.
+- Escopos: `calls`, `numbers:read`, `numbers:write`, `agents`, `webhooks`. Hoje toda chave recebe todos.
+- Limite de requisições: 600 por minuto por integração (`CRM_INTEGRATION_RATE_LIMIT_PER_MINUTE`). Acima disso, responde `429` com `code: rate_limited`.
+
+| Situação | Resposta |
+|---|---|
+| Chave ausente, inválida ou revogada | `401` |
+| Escopo faltando | `403` com `code: missing_scope` |
+| Feature desligada para o tenant | `409` com `code: feature_disabled` |
+
+Erros de discagem retornam `409` com `{code, message, retry_after_seconds}`.
+
+## Rotas — `https://api.zapliga.com/api/v1/integrations`
+
+| Método e rota | Escopo | Corpo / resposta |
+|---|---|---|
+| `GET /me` | — | `{contract_version, tenant, integration, access, seats}` |
+| `POST /handshake` | `webhooks` | `{webhookUrl, allowedOrigins?, externalAccountId?}` → `{integration, webhook_secret, contract_version}` |
+| `GET /catalog` | — | `{call_results[{code,label,default_pipeline_stage,requires_notes,requires_callback_at}], pipeline_stages}` |
+| `GET /numbers` | `numbers:read` | `{items[{id,label,phone,status,in_call,available_at,quarantined_until,protection}]}` |
+| `POST /numbers` | `numbers:write` | `{label, phone?}` → linha (depois, buscar o QR) |
+| `GET /numbers/:id/qr` | `numbers:write` | Payload do Waxum (`qr`/`qr_codes`, `status: connected` quando pareado) |
+| `POST /numbers/:id/reconnect` | `numbers:write` | — |
+| `PATCH /numbers/:id/settings` | `numbers:write` | `{label?, cooldownSeconds?, maxCallsPerWindow?, callWindowSeconds?}` |
+| `DELETE /numbers/:id` | `numbers:write` | Arquiva a linha (recusa se estiver em ligação) |
+| `GET /agents` | `agents` | Vínculos com estado da estação |
+| `POST /agents/ensure` | `agents` | `{externalUserId, email, name}` → `{sdr_id, user_id, operator_kind, provisioned, external_user_id}` |
+| `DELETE /agents/:sdrId/link` | `agents` | Desvincula; libera o assento se a integração o criou |
+| `POST /agents/:sdrId/station-ticket` | `calls` | `{ticket, expires_at, ws_url, tenant_id, sdr_id}` (60 s, uso único) |
+| `POST /dial-intents` | `calls` | `{sdrId, numberId, phone, name?, externalRef?, leadExternalId?}` → `{intent_id, expires_at}` |
+| `GET /calls?external_call_id=&limit=&offset=` | `calls` | Ligações desta integração (`external_call_id` = `external_ref.call_id`) |
+| `GET /calls/:id` | `calls` | Ligação com status, durações, linha, resultado e `external_ref` |
+| `POST /calls/:id/hangup` | `calls` | `202`; encaminha à instância dona |
+| `POST /calls/:id/wrap-up` | `calls` | `{callResult, pipelineStage?, notes?, callbackAt?}` |
+| `POST /suppressions` | `calls` | `{phone, reason?, notes?}` → registra na lista de não contato |
+
+Detalhes por rota:
+
+- **`POST /handshake`** gera um segredo novo a cada chamada. URLs e origens precisam ser HTTPS; HTTP é aceito só para `localhost`/`*.test` com `NODE_ENV` development ou test.
+- **`POST /dial-intents`**:
+  - `externalRef` é um objeto plano de até 12 campos, com valores texto (≤ 200) ou número. Ele é devolvido nos eventos da estação e em `/calls`. Convenção do Franco: `{account_id, call_id, contact_id, lead_id, conversation_id, user_id}`.
+  - `leadExternalId` só é usado quando o ZapLiga precisa criar o lead "sombra".
+- **`POST /calls/:id/wrap-up`**:
+  - A etapa padrão é derivada do resultado.
+  - `retornar` exige `callbackAt` futuro.
+  - `nao_ligar_novamente` suprime o número.
+  - Se a pausa já foi liberada, responde `409` com `code: wrap_up_closed`.
+- **Suprimir não tem rota de remoção, de propósito:** retirar um "não ligar" é decisão humana no painel do ZapLiga.
+
+### Códigos de recusa da discagem
+
+Os mesmos códigos valem para `POST /dial-intents` (`409`) e para a mensagem `dial_failed` do socket.
+
+| Code | Significado |
+|---|---|
+| `agent_not_linked` (404) | O `sdrId` não pertence a esta integração |
+| `agent_not_eligible` | O operador perdeu o acesso (membership removida, papel mudou) |
+| `station_offline` | O navegador do agente não está com a estação conectada |
+| `agent_busy` | O agente já está numa ligação |
+| `line_not_found` / `line_disconnected` | A linha não existe ou não está pareada |
+| `line_quarantined` | Quarentena por sinais de bloqueio (`retry_after_seconds`) |
+| `line_protected` | Backoff de proteção do WhatsApp (`retry_after_seconds`) |
+| `line_busy` | A linha já está em ligação |
+| `self_call` | O destino é a própria linha |
+| `suppressed` | O número está na lista de não contato |
+| `invalid_phone` / `invalid_external_ref` | Entrada inválida |
+| `outside_dialer_schedule` | Fora da janela de horário do tenant |
+| `intent_expired` / `intent_mismatch` | Só no socket: intenção vencida, já usada ou de outro agente |
+
+## Mensagens do socket da estação
+
+Além do protocolo normal da estação (`connected`, `identified`, `call_reserved`, `call_started`, `media_open`, `media_active`, `call_finished`, `error`, …):
+
+| Direção | Mensagem |
+|---|---|
+| navegador → servidor | `{type:'identify'}`, `{type:'dial', intentId}`, `{type:'hangup', callId}` |
+| servidor → navegador | `{type:'dial_accepted', intentId, callId, leadId}` |
+| servidor → navegador | `{type:'dial_failed', intentId, code, message, retryAfterSeconds?}` |
+| servidor → navegador | `call_reserved` também traz `externalRef` nas ligações da integração |
+
+Um operador tem uma estação por vez. Se o mesmo usuário abrir a estação em outro lugar (outra aba do CRM ou o painel do ZapLiga), o socket anterior é fechado com código `4000` ("nova sessao SDR conectada"). O CRM deve mostrar isso e não reconectar sozinho em loop.
+
+## Dados
+
+- **Migration** `062_crm_integrations.sql`:
+  - tabelas `crm_integrations` e `crm_integration_agents`;
+  - colunas novas `websocket_tickets.integration_id`, `sdrs.station_mode`, `calls.integration_id` e `calls.external_ref`;
+  - feature `crm_integration` (coluna legada, catálogo de planos e snapshots de Growth/Pro).
+- **Leads criados por ligações do CRM** vão para a pasta **"Franco CRM"**, com status `manual` (fora da fila automática) e `external_id`. Eles contam na cota de leads do plano.
+- **Origens do navegador:** se a integração declarou `allowed_origins`, o upgrade do WebSocket de um ticket da integração exige `Origin` igual a uma delas. Integração revogada não abre estação.
+
+## Pendências
+
+- **Z4 — webhooks para o CRM:** `call.reserved/dialing/answered/ended/wrap_up_completed`, `number.status_changed/removed`. O envelope será igual ao do outbox de analytics e assinado com o `webhook_secret` do handshake, mas com payload completo (telefone e nome) e sem a trava `analytics_learning`.
+- **Painel:** últimos eventos e falhas de entrega no card da integração.
+- **Métricas Prometheus** específicas (`integration_requests_total`, `dial_intents_total{result}`).

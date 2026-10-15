@@ -277,14 +277,16 @@ export class AuthService {
     return { ok: true };
   }
 
-  async createWebsocketTicket(userId: string, tenantId: string, requireOperate = false) {
+  // `integrationId` marks a ticket issued to a CRM integration on behalf of
+  // its linked agent; the station it opens is manual-only.
+  async createWebsocketTicket(userId: string, tenantId: string, requireOperate = false, integrationId: string | null = null) {
     if (requireOperate) await this.entitlement?.assertCanOperate(tenantId, userId);
     const token = randomBytes(32).toString('base64url');
     const expiresAt = new Date(Date.now() + 60_000);
     await this.db.query(`
-      INSERT INTO websocket_tickets (id, token_hash, user_id, tenant_id, expires_at)
-      VALUES ($1, $2, $3, $4, $5)
-    `, [randomUUID(), sha256(token), userId, tenantId, expiresAt]);
+      INSERT INTO websocket_tickets (id, token_hash, user_id, tenant_id, expires_at, integration_id)
+      VALUES ($1, $2, $3, $4, $5, $6)
+    `, [randomUUID(), sha256(token), userId, tenantId, expiresAt, integrationId]);
     return { ticket: token, expiresAt };
   }
 
@@ -305,7 +307,7 @@ export class AuthService {
       const ticket = result.rows[0];
       if (!ticket || ticket.used_at || ticket.user_status !== 'active' || new Date(ticket.expires_at).getTime() <= Date.now()) return null;
       await client.query('UPDATE websocket_tickets SET used_at = now() WHERE id = $1', [ticket.id]);
-      return { userId: ticket.user_id, tenantId: ticket.tenant_id, name: ticket.name, platformRole: ticket.platform_role };
+      return { userId: ticket.user_id, tenantId: ticket.tenant_id, name: ticket.name, platformRole: ticket.platform_role, integrationId: (ticket.integration_id ?? null) as string | null };
     });
   }
 

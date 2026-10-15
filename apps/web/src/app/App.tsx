@@ -20,6 +20,7 @@ import { AdminPage } from '../features/access/AdminPage';
 import { CompliancePage } from '../features/compliance/CompliancePage';
 import { OperationSettingsPage } from '../features/settings/OperationSettingsPage';
 import { LeadIntegrationsPage } from '../features/integrations/LeadIntegrationsPage';
+import { CrmIntegrationsPanel } from '../features/integrations/CrmIntegrationsPanel';
 import { CampaignsPage } from '../features/campaigns/CampaignsPage';
 import { ProfilePage } from '../features/account/ProfilePage';
 import { CallbacksPage } from '../features/callbacks/CallbacksPage';
@@ -447,7 +448,7 @@ function AuthenticatedApp() {
         {session && session.tenants.length > 1 && <label className="tenant-selector"><span>Empresa ativa</span><select aria-label="Selecionar empresa" value={activeTenantId} disabled={Boolean(activeCall || postCall)} title={activeCall || postCall ? 'Finalize a ligação antes de trocar de empresa' : undefined} onChange={(event) => selectTenant(event.target.value)}>{session.tenants.filter((tenant) => tenant.status === 'active' && tenant.membership_status !== 'blocked').map((tenant) => <option key={tenant.id} value={tenant.id}>{tenant.name}</option>)}</select></label>}
         {tab === 'sdrMetrics' && stationEnabled && <div className="page-content"><SdrMetricsPage /></div>}
         {tab === 'settings' && <div className="page-content"><OperationSettingsPage status={status} onChanged={load} /></div>}
-        {tab === 'integrations' && <div className="page-content"><LeadIntegrationsPage tenantId={activeTenantId} folders={leadFolders} /></div>}
+        {tab === 'integrations' && <div className="page-content">{featureFlags?.crm_integration && <CrmIntegrationsPanel tenantId={activeTenantId} />}<LeadIntegrationsPage tenantId={activeTenantId} folders={leadFolders} /></div>}
         {tab === 'campaigns' && !isSdr && featureFlags && <div className="page-content"><CampaignsPage tenantId={activeTenantId} folders={leadFolders} sdrs={sdrs} numbers={numbers} featureEnabled={Boolean(featureFlags.campaigns)} decisionFeatureEnabled={Boolean(featureFlags.decision_engine)} /></div>}
         {tab === 'profile' && session && <div className="page-content"><ProfilePage session={session} reload={reload} logout={logout} /></div>}
         {tab === 'callbacks' && <div className="page-content"><CallbacksPage sdrs={sdrs} isSdr={isSdr} featureEnabled={!featureFlags || Boolean(featureFlags.callbacks)} /></div>}
