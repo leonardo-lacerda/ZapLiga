@@ -205,6 +205,10 @@ export class NumbersService {
   }
 
   private async loadQrFromSession(sessionId: string) {
+    // Waxum only shows a QR while the session is pairing. A session WhatsApp logged out, or one whose socket
+    // dropped, answers the QR request with "disconnected" and an empty list forever, so /connect starts the
+    // pairing first; new sessions answer 503 instead and are handled below.
+    if (await this.sessionIsIdle(sessionId)) await this.waxum.reconnect(sessionId);
     try {
       return await this.waitForQr(sessionId);
     } catch (error) {
@@ -214,6 +218,16 @@ export class NumbersService {
       if (typedError.statusCode !== 503) throw error;
       await this.waxum.reconnect(sessionId);
       return this.waitForQr(sessionId);
+    }
+  }
+
+  // Not logged in and without an open socket: nothing is pairing, so no QR will ever come
+  private async sessionIsIdle(sessionId: string) {
+    try {
+      const status = await this.waxum.getStatus(sessionId);
+      return !status?.is_logged_in && status?.socket_alive === false;
+    } catch {
+      return false;
     }
   }
 
