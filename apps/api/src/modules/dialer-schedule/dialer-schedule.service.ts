@@ -74,7 +74,11 @@ export class DialerScheduleService {
     return this.get(tenantId);
   }
 
+  // A tenant without "Bloqueio fora da agenda" may call at any time: manual calls, the automatic dialer and
+  // the panel's "Dentro do horário" badge all read this, so the switch has to be honored here, not only when
+  // a manual call asserts it.
   async evaluate(tenantId: string, at = new Date(), includeNextOpen = false): Promise<ScheduleState> {
+    if (this.flags && !(await this.flags.enabled(tenantId, 'schedule_enforcement'))) return { allowed: true, timezone: 'disabled', local_date: '', local_time: '', reason: 'feature_disabled' };
     const schedule = await this.get(tenantId);
     const state = evaluateSchedule(schedule, at);
     if (!state.allowed && includeNextOpen) {
@@ -87,7 +91,6 @@ export class DialerScheduleService {
   }
 
   async assertAllowed(tenantId: string, at = new Date()) {
-    if (this.flags && !(await this.flags.enabled(tenantId, 'schedule_enforcement'))) return { allowed: true, timezone: 'disabled', local_date: '', local_time: '', reason: 'feature_disabled' };
     const state = await this.evaluate(tenantId, at, true);
     if (!state.allowed) {
       await this.redis.incrementMetric?.('calls_blocked_schedule_total');
