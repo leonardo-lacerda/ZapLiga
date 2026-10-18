@@ -7,7 +7,7 @@ import { ContactComplianceService, SuppressionReason } from '../contact-complian
 import { DialRefusedError, sanitizeExternalRef } from '../dialer/dial-intents';
 import { DialerService } from '../dialer/dialer.service';
 import { CALL_RESULT_CATALOG } from '../metrics/metrics.definitions';
-import { CALL_SELECT, callView, lineView } from '../crm-events/crm-events.views';
+import { CALL_SELECT, LINE_SELECT, callView, lineView } from '../crm-events/crm-events.views';
 import { CrmIntegration } from './crm-integrations.service';
 
 const CALL_CONTROL_CHANNEL = 'zapcall:crm-integration:call-control';
@@ -56,8 +56,7 @@ export class IntegrationCallsService implements OnModuleInit, OnModuleDestroy {
   async onModuleDestroy() { await this.subscriber?.quit().catch(() => undefined); }
 
   async lines(integration: CrmIntegration) {
-    const result = await this.db.query(`SELECT n.*, (SELECT count(*)::int FROM calls c WHERE c.number_id = n.id AND c.status IN ('reserved', 'dialing', 'media_active')) AS active_calls
-      FROM whatsapp_numbers n WHERE n.tenant_id = $1 AND n.status <> 'removed' ORDER BY n.created_at ASC`, [integration.tenant_id]);
+    const result = await this.db.query(`${LINE_SELECT} WHERE n.tenant_id = $1 AND n.status <> 'removed' ORDER BY n.created_at ASC`, [integration.tenant_id]);
     return { items: result.rows.map(lineView) };
   }
 

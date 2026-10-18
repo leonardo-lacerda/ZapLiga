@@ -1,5 +1,6 @@
 import { encryptSecret, webhookSignature } from '../lead-ingestion/lead-ingestion.crypto';
 import { CrmEventsService, nextDelaySeconds } from './crm-events.service';
+import { lineView } from './crm-events.views';
 
 const callRow = {
   id: 'call-1', tenant_id: 'tenant-1', integration_id: 'int-1', status: 'completed', source: 'manual', lead_id: 'lead-1', lead_phone: '5511999990000', lead_name: 'Ana',
@@ -40,6 +41,21 @@ describe('CrmEventsService recording', () => {
     await service.recordLine('tenant-1', 'num-1', 'number.status_changed');
     expect(inserts(db).map(([, params]) => params[2])).toEqual(['int-1', 'int-2']);
     expect(JSON.parse(String(inserts(db)[0][1][5])).payload.number).toMatchObject({ id: 'num-1', status: 'disconnected', in_call: false });
+  });
+
+  it('tells the CRM when the line last called and how it was used in the last day', async () => {
+    const { service, db } = makeService((sql) => {
+      if (sql.includes('FROM crm_integrations')) return { rows: [{ id: 'int-1' }] };
+      if (sql.includes('FROM whatsapp_numbers n')) return { rows: [{ id: 'num-1', status: 'connected', active_calls: 0, last_call_at: new Date('2026-10-18T03:32:50Z'), calls_24h: 4, failed_calls_24h: 1 }] };
+      return undefined;
+    });
+    await service.recordLine('tenant-1', 'num-1', 'number.updated');
+    expect(JSON.parse(String(inserts(db)[0][1][5])).payload.number.usage).toEqual({ last_call_at: '2026-10-18T03:32:50.000Z', calls_24h: 4, failed_calls_24h: 1 });
+  });
+
+  it('leaves the usage out of a line read without it instead of reporting zeros', () => {
+    expect(lineView({ id: 'num-1', status: 'connected' })).not.toHaveProperty('usage');
+    expect(lineView({ id: 'num-1', status: 'connected', last_call_at: null, calls_24h: 0, failed_calls_24h: 0 }).usage).toEqual({ last_call_at: null, calls_24h: 0, failed_calls_24h: 0 });
   });
 
   it('skips the line lookup when the tenant has no connected integration', async () => {

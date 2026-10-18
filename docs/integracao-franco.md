@@ -53,7 +53,7 @@ Erros de discagem retornam `409` com `{code, message, retry_after_seconds}`.
 | `GET /me` | — | `{contract_version, tenant, integration, access, seats}` |
 | `POST /handshake` | `webhooks` | `{webhookUrl, allowedOrigins?, externalAccountId?}` → `{integration, webhook_secret, contract_version}` |
 | `GET /catalog` | — | `{call_results[{code,label,default_pipeline_stage,requires_notes,requires_callback_at}], pipeline_stages}` |
-| `GET /numbers` | `numbers:read` | `{items[{id,label,phone,status,in_call,available_at,quarantined_until,protection}]}` |
+| `GET /numbers` | `numbers:read` | `{items[{id,label,phone,status,in_call,available_at,quarantined_until,protection,usage{last_call_at,calls_24h,failed_calls_24h}}]}` |
 | `POST /numbers` | `numbers:write` | `{label, phone?}` → linha (depois, buscar o QR) |
 | `GET /numbers/:id/qr` | `numbers:write` | Payload do Waxum (`qr`/`qr_codes`, `status: connected` quando pareado) |
 | `POST /numbers/:id/reconnect` | `numbers:write` | — |

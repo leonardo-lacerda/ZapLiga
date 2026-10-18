@@ -4,6 +4,17 @@
  */
 const futureIso = (value: unknown) => value && new Date(String(value)).getTime() > Date.now() ? new Date(String(value)).toISOString() : null;
 
+// A line as the CRM sees it: the number row plus its live calls and how it was used in the last day,
+// so the CRM can suggest the line least at risk and show when each one last called. A failure because
+// the lead has no WhatsApp says nothing about the line, so it is not counted against it.
+export const LINE_SELECT = `SELECT n.*,
+  (SELECT count(*)::int FROM calls c WHERE c.number_id = n.id AND c.status IN ('reserved', 'dialing', 'media_active')) AS active_calls,
+  (SELECT max(c.created_at) FROM calls c WHERE c.tenant_id = n.tenant_id AND c.number_id = n.id) AS last_call_at,
+  (SELECT count(*)::int FROM calls c WHERE c.tenant_id = n.tenant_id AND c.number_id = n.id AND c.created_at > now() - interval '24 hours') AS calls_24h,
+  (SELECT count(*)::int FROM calls c WHERE c.tenant_id = n.tenant_id AND c.number_id = n.id AND c.created_at > now() - interval '24 hours'
+     AND c.status = 'failed' AND coalesce(c.failure_reason, '') NOT LIKE 'sem_whatsapp%') AS failed_calls_24h
+  FROM whatsapp_numbers n`;
+
 export const lineView = (row: any) => {
   const quarantinedUntil = futureIso(row.flagged_until);
   return {
@@ -12,6 +23,12 @@ export const lineView = (row: any) => {
     available_at: quarantinedUntil ?? futureIso(row.last_call_ended_at),
     quarantined_until: quarantinedUntil,
     protection: { cooldown_seconds: row.cooldown_seconds, max_calls_per_window: row.max_calls_per_window, call_window_seconds: row.call_window_seconds, max_concurrent_calls: row.max_concurrent_calls },
+    // Only rows read through LINE_SELECT know their usage; the others leave it out rather than report zeros
+    ...('calls_24h' in row ? { usage: {
+      last_call_at: row.last_call_at ? new Date(String(row.last_call_at)).toISOString() : null,
+      calls_24h: Number(row.calls_24h ?? 0),
+      failed_calls_24h: Number(row.failed_calls_24h ?? 0),
+    } } : {}),
     created_at: row.created_at,
   };
 };

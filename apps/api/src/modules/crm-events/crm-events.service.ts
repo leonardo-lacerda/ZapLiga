@@ -2,7 +2,7 @@ import { Injectable, Logger, NotFoundException, OnModuleDestroy, OnModuleInit } 
 import { randomUUID } from 'node:crypto';
 import { DatabaseService } from '../../database/database.service';
 import { decryptSecret, webhookSignature } from '../lead-ingestion/lead-ingestion.crypto';
-import { CALL_SELECT, callView, lineView } from './crm-events.views';
+import { CALL_SELECT, LINE_SELECT, callView, lineView } from './crm-events.views';
 
 export const CRM_EVENT_SCHEMA_VERSION = 1;
 export type CrmCallEventType = 'call.reserved' | 'call.dialing' | 'call.answered' | 'call.ended' | 'call.wrap_up_completed';
@@ -64,8 +64,7 @@ export class CrmEventsService implements OnModuleInit, OnModuleDestroy {
   async recordLine(tenantId: string, numberId: string, eventType: CrmLineEventType) {
     const integrations = await this.db.query(`SELECT id FROM crm_integrations WHERE tenant_id = $1 AND status = 'active' AND webhook_url IS NOT NULL`, [tenantId]);
     if (!integrations.rows.length) return;
-    const line = (await this.db.query(`SELECT n.*, (SELECT count(*)::int FROM calls c WHERE c.number_id = n.id AND c.status IN ('reserved', 'dialing', 'media_active')) AS active_calls
-      FROM whatsapp_numbers n WHERE n.tenant_id = $1 AND n.id = $2 LIMIT 1`, [tenantId, numberId])).rows[0];
+    const line = (await this.db.query(`${LINE_SELECT} WHERE n.tenant_id = $1 AND n.id = $2 LIMIT 1`, [tenantId, numberId])).rows[0];
     if (!line) return;
     // Line events repeat (connected -> disconnected -> connected), so each one is its own key.
     const key = `${eventType}:${numberId}:${randomUUID()}`;
