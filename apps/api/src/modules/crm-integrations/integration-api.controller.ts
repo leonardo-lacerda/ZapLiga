@@ -96,6 +96,10 @@ export class IntegrationApiController {
   @RequiresScope('calls')
   call(@CurrentIntegration() integration: CrmIntegration, @Param('id') id: string) { return this.calls.get(integration, id); }
 
+  @Get('/calls/:id/recording')
+  @RequiresScope('calls')
+  recording(@CurrentIntegration() integration: CrmIntegration, @Param('id') id: string) { return this.calls.recording(integration, id); }
+
   @Post('/calls/:id/hangup')
   @HttpCode(HttpStatus.ACCEPTED)
   @RequiresScope('calls')

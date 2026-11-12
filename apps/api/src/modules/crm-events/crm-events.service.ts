@@ -5,7 +5,7 @@ import { decryptSecret, webhookSignature } from '../lead-ingestion/lead-ingestio
 import { CALL_SELECT, LINE_SELECT, callView, lineView } from './crm-events.views';
 
 export const CRM_EVENT_SCHEMA_VERSION = 1;
-export type CrmCallEventType = 'call.reserved' | 'call.dialing' | 'call.answered' | 'call.ended' | 'call.wrap_up_completed';
+export type CrmCallEventType = 'call.reserved' | 'call.dialing' | 'call.answered' | 'call.ended' | 'call.wrap_up_completed' | 'call.transcribed';
 export type CrmLineEventType = 'number.created' | 'number.updated' | 'number.status_changed' | 'number.removed';
 
 const MAX_ATTEMPTS = 10;

@@ -49,6 +49,11 @@ x-api-environment: &api-environment
   BILLING_WORKER_INTERVAL_MS: ${BILLING_WORKER_INTERVAL_MS:-15000}
   BILLING_RECONCILE_INTERVAL_MS: ${BILLING_RECONCILE_INTERVAL_MS:-300000}
   BILLING_STALE_AFTER_MS: ${BILLING_STALE_AFTER_MS:-1800000}
+  # Call recording (tenant flag `call_recording`) and transcription with Whisper on Groq.
+  GROQ_API_KEY: ${GROQ_API_KEY:-}
+  GROQ_TRANSCRIPTION_MODEL: ${GROQ_TRANSCRIPTION_MODEL:-whisper-large-v3}
+  GROQ_TRANSCRIPTION_PROMPT: ${GROQ_TRANSCRIPTION_PROMPT:-}
+  CALL_TRANSCRIPTION_MIN_SECONDS: ${CALL_TRANSCRIPTION_MIN_SECONDS:-15}
 
 x-api-common: &api-common
   init: true
@@ -188,6 +193,9 @@ services:
       API_INSTANCE_ID: api-a
     ports:
       - "127.0.0.1:${API_A_HOST_PORT:-3000}:3000"
+    # Shared by both instances: any of them encodes, transcribes and serves a recording.
+    volumes:
+      - call_recordings:/var/lib/zapliga/recordings
 
   api-b:
     <<: *api-common
@@ -197,6 +205,8 @@ services:
       API_INSTANCE_ID: api-b
     ports:
       - "127.0.0.1:${API_B_HOST_PORT:-3001}:3000"
+    volumes:
+      - call_recordings:/var/lib/zapliga/recordings
 
   web:
     build:
@@ -218,3 +228,4 @@ volumes:
   redis_data:
   nats_data:
   waxum_data:
+  call_recordings:

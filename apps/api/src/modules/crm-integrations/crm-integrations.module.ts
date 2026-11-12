@@ -3,6 +3,7 @@ import { AuditModule } from '../audit/audit.module';
 import { BillingModule } from '../billing/billing.module';
 import { ContactComplianceModule } from '../contact-compliance/contact-compliance.module';
 import { CrmEventsModule } from '../crm-events/crm-events.module';
+import { CallRecordingsModule } from '../call-recordings/call-recordings.module';
 import { DialerModule } from '../dialer/dialer.module';
 import { NumbersModule } from '../numbers/numbers.module';
 import { UsersModule } from '../users/users.module';
@@ -14,7 +15,7 @@ import { IntegrationApiController } from './integration-api.controller';
 import { IntegrationCallsService } from './integration-calls.service';
 
 @Module({
-  imports: [AuditModule, BillingModule, ContactComplianceModule, CrmEventsModule, DialerModule, NumbersModule, UsersModule],
+  imports: [AuditModule, BillingModule, CallRecordingsModule, ContactComplianceModule, CrmEventsModule, DialerModule, NumbersModule, UsersModule],
   controllers: [CrmIntegrationsController, IntegrationApiController],
   providers: [CrmIntegrationsService, IntegrationAgentsService, IntegrationCallsService, IntegrationKeyGuard],
   exports: [CrmIntegrationsService],

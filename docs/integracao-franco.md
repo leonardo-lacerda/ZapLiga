@@ -66,6 +66,7 @@ Erros de discagem retornam `409` com `{code, message, retry_after_seconds}`.
 | `POST /dial-intents` | `calls` | `{sdrId, numberId, phone, name?, externalRef?, leadExternalId?}` → `{intent_id, expires_at}` |
 | `GET /calls?external_call_id=&limit=&offset=` | `calls` | Ligações desta integração (`external_call_id` = `external_ref.call_id`) |
 | `GET /calls/:id` | `calls` | Ligação com status, durações, linha, resultado e `external_ref` |
+| `GET /calls/:id/recording` | `calls` | Gravação em Ogg/Opus estéreo (esquerda = vendedor, direita = lead); `404 recording_not_found` sem gravação |
 | `POST /calls/:id/hangup` | `calls` | `202`; encaminha à instância dona |
 | `POST /calls/:id/wrap-up` | `calls` | `{callResult, pipelineStage?, notes?, callbackAt?}` |
 | `POST /suppressions` | `calls` | `{phone, reason?, notes?}` → registra na lista de não contato |
@@ -156,6 +157,7 @@ O ZapLiga entrega eventos na `webhookUrl` registrada no handshake.
 | `call.answered` | O destino atendeu | `{call, answered_at}` |
 | `call.ended` | Terminou (`status`: `completed`/`no_answer`/`failed`/`cancelled`, mais `outcome` e `failure_reason`) | `{call}` |
 | `call.wrap_up_completed` | Pós-ligação registrado no ZapLiga | `{call, callback_at}` |
+| `call.transcribed` | A gravação da ligação foi transcrita (empresa com `call_recording` ligado) | `{call, recording{duration_seconds, audio_path}, transcript{language, segments[{speaker: agent\|lead, start, end, text}], text}}` |
 | `number.created` / `number.updated` / `number.removed` | Linha criada, ajustada ou arquivada | `{number}` |
 | `number.status_changed` | Linha conectou, desconectou ou entrou em quarentena | `{number}` |
 | `integration.ping` | Enviado após cada handshake e por `POST /webhook/test` | `{message}` |

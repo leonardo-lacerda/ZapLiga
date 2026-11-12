@@ -36,6 +36,8 @@ import {
 } from './dialer.rules';
 import { DIAL_INTENT_TTL_SECONDS, DialIntent, DialRefusedError, dialIntentKey } from './dial-intents';
 import { CrmCallEventType, CrmEventsService, CrmLineEventType } from '../crm-events/crm-events.service';
+import { CallRecordingsService } from '../call-recordings/call-recordings.service';
+import { CallRecorder } from '../call-recordings/call-recorder';
 
 type IntegrationCallContext = { integrationId: string; externalRef: Record<string, string | number> | null; leadExternalId?: string | null };
 const CONNECTED_LINE_STATUSES = ['connected', 'online', 'ready', 'authenticated'];
@@ -104,6 +106,9 @@ type CallResource = {
   };
   previousSdrAvailable: boolean;
   previousSdrState: string;
+  // Tenant has `call_recording` on; the recorder starts when the call is answered.
+  recordingEnabled?: boolean;
+  recorder?: CallRecorder;
 };
 
 const safeOperationalError = (error: unknown) => String(error instanceof Error ? error.message : error)
@@ -185,6 +190,7 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
     @Optional() private readonly entitlement?: EntitlementService,
     @Optional() private readonly planLimits?: PlanLimitsService,
     @Optional() private readonly crmEvents?: CrmEventsService,
+    @Optional() private readonly recordings?: CallRecordingsService,
   ) {}
 
   // CRM events are best-effort: a webhook outbox hiccup must never touch the call itself.
@@ -1596,6 +1602,7 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
     resource.answerAbort = new AbortController();
     try {
       const settings = await this.getSettings(tenantId);
+      resource.recordingEnabled = (await this.recordings?.enabled(tenantId)) ?? false;
       let recipient: string;
       try {
         recipient = await this.resolveRecipient(call.rows[0].waxum_session_id, call.rows[0].phone);
@@ -1717,6 +1724,7 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
         const firstActiveFrame = !resource.mediaActive;
         resource.mediaActive = true;
         if (firstActiveFrame) {
+          if (resource.recordingEnabled) resource.recorder = this.recordings!.start(callId);
           if (resource.ringTimeout) clearTimeout(resource.ringTimeout);
           resource.ringTimeout = undefined;
           try {
@@ -1730,6 +1738,7 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
           this.gateway.sendToSdr(sdrId, { type: 'media_active', callId });
           this.log('Cliente aceitou a chamada; áudio liberado para o SDR', 'info', callId);
         }
+        resource.recorder?.append('lead', pcmBytes);
         if (browser.readyState === WebSocket.OPEN) {
           if (this.relayAudio(browser, data)) resource.inboundRelayed = (resource.inboundRelayed ?? 0) + 1;
         }
@@ -1803,6 +1812,7 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
           resource.micPcmSamples = (resource.micPcmSamples ?? 0) + Math.floor(pcmBytes.length / 2);
           resource.micPcmNonZeroSamples = (resource.micPcmNonZeroSamples ?? 0) + nonZero;
           resource.micPcmPeak = Math.max(resource.micPcmPeak ?? 0, framePeak);
+          resource.recorder?.append('agent', pcmBytes);
           if (this.relayAudio(media, data)) resource.micFramesRelayed = (resource.micFramesRelayed ?? 0) + 1;
         }
         if (!isBinary) {
@@ -2056,6 +2066,14 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
         pause: Boolean(pause),
       });
     } finally {
+      if (resource?.recorder) {
+        const recorder = resource.recorder;
+        resource.recorder = undefined;
+        void this.recordings!.complete(callId, tenantId, recorder).catch((error) => {
+          this.logger.error(`Could not save recording of ${callId}: ${safeOperationalError(error)}`);
+          Sentry.captureException(error);
+        });
+      }
       this.active.delete(callId);
       this.finishingCalls.delete(callId);
     }

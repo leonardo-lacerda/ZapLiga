@@ -191,7 +191,7 @@ describe('IntegrationCallsService', () => {
     const redis = { client: { publish: jest.fn().mockResolvedValue(1) } };
     const dialer = { createDialIntent: jest.fn().mockResolvedValue({ intent_id: 'intent-1' }), hangupIfOwned: jest.fn().mockResolvedValue(false), finishPause: jest.fn().mockResolvedValue({ ok: true }) };
     const audit = { record: jest.fn().mockResolvedValue(undefined) };
-    const service = new IntegrationCallsService(db as any, redis as any, dialer as any, audit as any, {} as any);
+    const service = new IntegrationCallsService(db as any, redis as any, dialer as any, audit as any, {} as any, {} as any);
     return { service, dialer, redis };
   };
 

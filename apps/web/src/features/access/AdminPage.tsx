@@ -81,6 +81,7 @@ export function AdminPage({ onChanged, onOpenTenant }: { onChanged?: () => Promi
     ['experiments', 'Experimentos controlados'],
     ['benchmarks', 'Benchmarks privados'],
     ['crm_integration', 'Integração com CRM (Franco)'],
+    ['call_recording', 'Gravação de chamadas'],
   ] as const;
 
   const tenants = tenantPage.items as AnyRow[];

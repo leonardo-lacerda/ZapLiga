@@ -18,6 +18,7 @@ export const TENANT_FEATURES = [
   'lead_ingestion_api',
   'advanced_reports',
   'crm_integration',
+  'call_recording',
 ] as const;
 export type TenantFeature = typeof TENANT_FEATURES[number];
 export type TenantFeatureFlags = Record<TenantFeature, boolean>;
@@ -41,6 +42,8 @@ export const defaultTenantFeatureFlags = (): TenantFeatureFlags => ({
   lead_ingestion_api: false,
   advanced_reports: false,
   crm_integration: false,
+  // Needs a legal basis, notice to the lead and a retention policy before turning on.
+  call_recording: false,
 });
 
 const normalizeFeatureFlags = (value: unknown): TenantFeatureFlags => {

@@ -1,4 +1,5 @@
-import { BadRequestException, ConflictException, HttpException, Injectable, Logger, NotFoundException, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
+import { BadRequestException, ConflictException, HttpException, Injectable, Logger, NotFoundException, OnModuleDestroy, OnModuleInit, StreamableFile } from '@nestjs/common';
+import { createReadStream } from 'node:fs';
 import type Redis from 'ioredis';
 import { DatabaseService } from '../../database/database.service';
 import { RedisService } from '../../infrastructure/redis/redis.service';
@@ -9,6 +10,7 @@ import { DialerService } from '../dialer/dialer.service';
 import { CALL_RESULT_CATALOG } from '../metrics/metrics.definitions';
 import { CALL_SELECT, LINE_SELECT, callView, lineView } from '../crm-events/crm-events.views';
 import { CrmIntegration } from './crm-integrations.service';
+import { CallRecordingsService } from '../call-recordings/call-recordings.service';
 
 const CALL_CONTROL_CHANNEL = 'zapcall:crm-integration:call-control';
 const ACTIVE_STATUSES = ['reserved', 'dialing', 'media_active'];
@@ -35,7 +37,7 @@ export class IntegrationCallsService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(IntegrationCallsService.name);
   private subscriber?: Redis;
 
-  constructor(private readonly db: DatabaseService, private readonly redis: RedisService, private readonly dialer: DialerService, private readonly audit: AuditService, private readonly compliance: ContactComplianceService) {}
+  constructor(private readonly db: DatabaseService, private readonly redis: RedisService, private readonly dialer: DialerService, private readonly audit: AuditService, private readonly compliance: ContactComplianceService, private readonly recordings: CallRecordingsService) {}
 
   // A hang-up requested over HTTP reaches whichever instance runs the call.
   async onModuleInit() {
@@ -87,6 +89,14 @@ export class IntegrationCallsService implements OnModuleInit, OnModuleDestroy {
   }
 
   async get(integration: CrmIntegration, callId: string) { return callView(await this.findCall(integration, callId)); }
+
+  /** The call's stereo Ogg/Opus recording (left = SDR, right = lead). */
+  async recording(integration: CrmIntegration, callId: string) {
+    await this.findCall(integration, callId);
+    const path = await this.recordings.filePath(integration.tenant_id, callId);
+    if (!path) throw new NotFoundException({ code: 'recording_not_found', message: 'Gravação não encontrada' });
+    return new StreamableFile(createReadStream(path), { type: 'audio/ogg', disposition: `attachment; filename="${callId}.ogg"` });
+  }
 
   async list(integration: CrmIntegration, filters: { externalCallId?: string; limit?: number; offset?: number }) {
     const limit = Math.min(200, Math.max(1, Number(filters.limit) || 50));

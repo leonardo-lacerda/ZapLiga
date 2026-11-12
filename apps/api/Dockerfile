@@ -8,6 +8,8 @@ COPY apps/api apps/api
 RUN npm --workspace apps/api run build
 
 FROM node:20-alpine
+# ffmpeg encodes call recordings to Ogg/Opus.
+RUN apk add --no-cache ffmpeg
 WORKDIR /app
 ENV NODE_ENV=production
 COPY --from=build /app/package.json ./package.json

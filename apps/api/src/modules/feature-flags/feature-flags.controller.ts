@@ -18,6 +18,7 @@ class UpdateFeatureFlagsDto {
   @IsOptional() @IsBoolean() lead_ingestion_api?: boolean;
   @IsOptional() @IsBoolean() advanced_reports?: boolean;
   @IsOptional() @IsBoolean() crm_integration?: boolean;
+  @IsOptional() @IsBoolean() call_recording?: boolean;
 }
 
 @Controller('/api/tenants/:tenantId/feature-flags')
