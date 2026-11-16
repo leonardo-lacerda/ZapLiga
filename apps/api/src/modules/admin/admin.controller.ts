@@ -2,13 +2,15 @@ import { BadRequestException, Body, Controller, Delete, Get, Param, Post, Query,
 import { AuditService } from '../audit/audit.service';
 import { AuthGuard, CurrentUser, Roles, RolesGuard, TenantAction, TenantMembershipGuard } from '../auth/auth.guards';
 import { DialerService } from '../dialer/dialer.service';
+import { waxumNodes } from '../../infrastructure/waxum/waxum.client';
+import { NumbersService } from '../numbers/numbers.service';
 import { AdminService } from './admin.service';
 
 @Controller('/api/admin')
 @UseGuards(AuthGuard, RolesGuard)
 @Roles('super_admin')
 export class AdminController {
-  constructor(private readonly admin: AdminService, private readonly audit: AuditService, private readonly dialer: DialerService) {}
+  constructor(private readonly admin: AdminService, private readonly audit: AuditService, private readonly dialer: DialerService, private readonly numbers: NumbersService) {}
 
   @Get('/overview')
   overview(@Query('tenantId') tenantId?: string) { return this.admin.overview(tenantId); }
@@ -82,6 +84,17 @@ export class AdminController {
   @UseGuards(TenantMembershipGuard)
   tenantNumbers(@Param('tenantId') tenantId: string, @Query('limit') limit?: string, @Query('offset') offset?: string) {
     return this.admin.tenantNumbers(tenantId, { limit: Number(limit), offset: Number(offset) });
+  }
+
+  // Internet exits a line can use: `main` (the VPS) and each attendant's PC.
+  @Get('/waxum-nodes')
+  waxumNodes() { return { items: [...waxumNodes().keys()] }; }
+
+  @Post('/tenants/:tenantId/numbers/:numberId/waxum-node')
+  @UseGuards(TenantMembershipGuard)
+  moveNumberToWaxumNode(@Param('tenantId') tenantId: string, @Param('numberId') numberId: string, @Body() body: { node?: string }, @CurrentUser() actor: any) {
+    if (typeof body?.node !== 'string') throw new BadRequestException('node é obrigatório');
+    return this.numbers.moveToWaxumNode(tenantId, actor.id, numberId, body.node);
   }
 
   @Post('/tenants/:tenantId/numbers/:numberId/clear-quarantine')

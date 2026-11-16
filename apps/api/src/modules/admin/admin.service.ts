@@ -243,7 +243,7 @@ export class AdminService {
     const pagination = page(filters.limit, filters.offset);
     const total = await this.db.query(`SELECT count(*)::int AS total FROM whatsapp_numbers WHERE tenant_id = $1 AND status <> 'removed'`, [tenantId]);
     const items = await this.db.query(`
-      SELECT n.id, n.label, n.phone, n.status, n.max_concurrent_calls, n.cooldown_seconds, n.max_calls_per_window, n.call_window_seconds, n.created_at, ${NUMBER_LOCK_FIELDS}
+      SELECT n.id, n.label, n.phone, n.status, n.waxum_node, n.max_concurrent_calls, n.cooldown_seconds, n.max_calls_per_window, n.call_window_seconds, n.created_at, ${NUMBER_LOCK_FIELDS}
       FROM whatsapp_numbers n
       WHERE n.tenant_id = $1 AND n.status <> 'removed'
       ORDER BY n.created_at DESC LIMIT $2 OFFSET $3

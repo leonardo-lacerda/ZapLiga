@@ -1631,7 +1631,7 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
       // Re-check immediately before opening the external Waxum media call so
       // a webhook/tick race cannot turn a stale reservation into a new call.
       await this.entitlement?.assertCanOperate(tenantId);
-      const media = this.waxum.openMedia(call.rows[0].waxum_session_id, recipient);
+      const media = await this.waxum.openMedia(call.rows[0].waxum_session_id, recipient);
       resource.media = media;
       resource.recipient = recipient;
       resource.waxumSessionId = call.rows[0].waxum_session_id;

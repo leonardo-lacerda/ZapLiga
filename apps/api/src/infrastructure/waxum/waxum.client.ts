@@ -1,12 +1,29 @@
 import { Injectable, OnModuleDestroy } from '@nestjs/common';
 import { connect, NatsConnection, StringCodec } from 'nats';
 import WebSocket from 'ws';
+import { DatabaseService } from '../../database/database.service';
 
 type WaxumSession = { id: string; name?: string; phone_number?: string; status?: string };
 
+export const MAIN_WAXUM_NODE = 'main';
+
+// `main` goes out through the VPS; WAXUM_EDGE_NODES (`edge-1=http://tailscale-edge-1:3451,…`)
+// lists the Waxums that go out through an attendant's PC (docs/saida-pelo-pc-do-atendente.md).
+export function waxumNodes() {
+  const nodes = new Map([[MAIN_WAXUM_NODE, process.env.WAXUM_URL ?? 'http://localhost:3451']]);
+  for (const entry of (process.env.WAXUM_EDGE_NODES ?? '').split(',').filter((item) => item.trim())) {
+    const [name, url] = entry.split('=').map((part) => part.trim());
+    if (!name || !url) throw new Error(`WAXUM_EDGE_NODES inválido: "${entry}"`);
+    nodes.set(name, url);
+  }
+  return new Map([...nodes].map(([name, url]) => [name, url.replace(/\/$/, '')]));
+}
+
 @Injectable()
 export class WaxumClient implements OnModuleDestroy {
-  private readonly baseUrl = (process.env.WAXUM_URL ?? 'http://localhost:3451').replace(/\/$/, '');
+  private readonly nodes = waxumNodes();
+  // A session lives on the Waxum that created it until it is deleted, so this never goes stale.
+  private readonly sessionNodes = new Map<string, string>();
   private readonly apiKey = process.env.WAXUM_API_KEY;
   private readonly natsUrl = process.env.NATS_URL ?? 'nats://localhost:4222';
   private readonly requestIntervalMs = (() => {
@@ -18,6 +35,8 @@ export class WaxumClient implements OnModuleDestroy {
   private readonly requestChains = new Map<string, Promise<void>>();
   private readonly nextRequestAt = new Map<string, number>();
   private natsConnection?: Promise<NatsConnection>;
+
+  constructor(private readonly db: DatabaseService) {}
 
   async onModuleDestroy() {
     const connection = await this.natsConnection?.catch(() => undefined);
@@ -31,8 +50,29 @@ export class WaxumClient implements OnModuleDestroy {
 
   private headers() { return { 'content-type': 'application/json', ...(this.apiKey ? { authorization: `Bearer ${this.apiKey}` } : {}) }; }
 
-  private request<T>(path: string, init: RequestInit = {}, maxAttempts = 3): Promise<T> {
-    const run = () => this.requestWithRetry<T>(path, init, maxAttempts);
+  private nodeUrl(node: string) {
+    const url = this.nodes.get(node);
+    if (!url) throw new Error(`Waxum "${node}" não está configurado em WAXUM_EDGE_NODES`);
+    return url;
+  }
+
+  private async sessionUrl(sessionId: string) {
+    let node = this.sessionNodes.get(sessionId);
+    if (!node) {
+      const result = await this.db.query<{ waxum_node: string }>('SELECT waxum_node FROM whatsapp_numbers WHERE waxum_session_id = $1', [sessionId]);
+      node = result.rows[0]?.waxum_node;
+      if (!node) throw new Error(`Sessão Waxum ${sessionId} não pertence a nenhum número`);
+      this.sessionNodes.set(sessionId, node);
+    }
+    return this.nodeUrl(node);
+  }
+
+  private request<T>(path: string, init: RequestInit = {}, maxAttempts = 3, node?: string): Promise<T> {
+    const run = async () => {
+      const sessionId = path.match(/\/sessions\/([^/]+)/)?.[1];
+      const baseUrl = node ? this.nodeUrl(node) : await this.sessionUrl(decodeURIComponent(sessionId!));
+      return this.requestWithRetry<T>(baseUrl, path, init, maxAttempts);
+    };
     const key = this.queueKey(path);
     const previous = this.requestChains.get(key) ?? Promise.resolve();
     const queued = previous.then(run, run);
@@ -55,11 +95,11 @@ export class WaxumClient implements OnModuleDestroy {
     if (waitMs > 0) await new Promise((resolve) => setTimeout(resolve, waitMs));
   }
 
-  private async requestWithRetry<T>(path: string, init: RequestInit, maxAttempts: number): Promise<T> {
+  private async requestWithRetry<T>(baseUrl: string, path: string, init: RequestInit, maxAttempts: number): Promise<T> {
     const queueKey = this.queueKey(path);
     for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
       await this.waitForRequestSlot(queueKey);
-      const response = await fetch(`${this.baseUrl}${path}`, { ...init, signal: init.signal ?? AbortSignal.timeout(10000), headers: { ...this.headers(), ...(init.headers ?? {}) } });
+      const response = await fetch(`${baseUrl}${path}`, { ...init, signal: init.signal ?? AbortSignal.timeout(10000), headers: { ...this.headers(), ...(init.headers ?? {}) } });
       const body = await response.text();
       let parsed: any = body;
       try { parsed = body ? JSON.parse(body) : {}; } catch { /* plain response */ }
@@ -77,8 +117,16 @@ export class WaxumClient implements OnModuleDestroy {
     throw new Error('Waxum request failed');
   }
 
-  async createSession(name: string) { return (await this.request<{ session: WaxumSession }>('/api/v1/sessions', { method: 'POST', body: JSON.stringify({ name }) })).session; }
-  deleteSession(sessionId: string) { return this.request<any>(`/api/v1/sessions/${encodeURIComponent(sessionId)}`, { method: 'DELETE' }, 1); }
+  async createSession(name: string, node: string) {
+    const { session } = await this.request<{ session: WaxumSession }>('/api/v1/sessions', { method: 'POST', body: JSON.stringify({ name }) }, 3, node);
+    this.sessionNodes.set(session.id, node);
+    return session;
+  }
+  async deleteSession(sessionId: string) {
+    const result = await this.request<any>(`/api/v1/sessions/${encodeURIComponent(sessionId)}`, { method: 'DELETE' }, 1);
+    this.sessionNodes.delete(sessionId);
+    return result;
+  }
   getQr(sessionId: string) { return this.request<any>(`/api/v1/sessions/${encodeURIComponent(sessionId)}/qr`); }
   getStatus(sessionId: string) { return this.request<any>(`/api/v1/sessions/${encodeURIComponent(sessionId)}/status`, {}, 1); }
   disconnect(sessionId: string) { return this.request<any>(`/api/v1/sessions/${encodeURIComponent(sessionId)}/disconnect`, { method: 'POST' }, 1); }
@@ -135,8 +183,8 @@ export class WaxumClient implements OnModuleDestroy {
     }
   }
 
-  openMedia(sessionId: string, recipient: string) {
-    const httpUrl = `${this.baseUrl}/api/v1/sessions/${encodeURIComponent(sessionId)}/calls/media/ws?to=${encodeURIComponent(recipient)}&kind=audio`;
+  async openMedia(sessionId: string, recipient: string) {
+    const httpUrl = `${await this.sessionUrl(sessionId)}/api/v1/sessions/${encodeURIComponent(sessionId)}/calls/media/ws?to=${encodeURIComponent(recipient)}&kind=audio`;
     return new WebSocket(httpUrl.replace(/^http/, 'ws'), { headers: this.apiKey ? { authorization: `Bearer ${this.apiKey}` } : undefined });
   }
 

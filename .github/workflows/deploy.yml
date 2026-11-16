@@ -251,6 +251,16 @@ jobs:
             sleep 2
           done
 
+          # Internet exits through attendants' PCs (profile `egress`, turned on
+          # with COMPOSE_PROFILES in .env). A PC that is off must not block the
+          # deploy: its lines just wait for it (docs/saida-pelo-pc-do-atendente.md).
+          edge_services=$("${COMPOSE[@]}" config --services | grep -- '-edge-' || true)
+          if [ -n "$edge_services" ]; then
+            # shellcheck disable=SC2086
+            "${COMPOSE[@]}" up -d $edge_services </dev/null \
+              || echo "Aviso: saídas pelo PC do atendente não subiram (PC desligado?); seguindo o deploy" >&2
+          fi
+
           # These references are explicit in docker-compose.yml. Keeping the
           # names deterministic prevents `docker compose config --images`
           # from returning every service image as one invalid tag.
