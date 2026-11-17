@@ -1,6 +1,7 @@
 import {
   type AudioDeviceOption,
   STORAGE_INPUT_KEY,
+  STORAGE_SILENT_INPUT_KEY,
   STORAGE_OUTPUT_KEY,
   describeDevice,
   pickOutputForInput,
@@ -80,6 +81,9 @@ export class AudioBridge {
   private resuming?: Promise<void>;
   private socket?: WebSocket;
   private stopRequested = false;
+  // Super admin only: dial with a silent input instead of a microphone (testing lines from a PC without one).
+  private silentInput = readStoredDevice(STORAGE_SILENT_INPUT_KEY) === '1';
+  private silentContext?: AudioContext;
   private nextPlayTime = 0;
   private ringbackTimer?: number;
   private ringbackNodes?: { oscillator: OscillatorNode; envelope: GainNode };
@@ -182,6 +186,14 @@ export class AudioBridge {
   }
 
   /** Choose the microphone. Takes effect immediately if the microphone is already open. */
+  get usesSilentInput() { return this.silentInput; }
+
+  async setSilentInput(enabled: boolean) {
+    writeStoredDevice(STORAGE_SILENT_INPUT_KEY, enabled ? '1' : '');
+    this.silentInput = enabled;
+    if (this.stream && this.context) await this.restartCapture();
+  }
+
   async setInputDevice(deviceId: string) {
     writeStoredDevice(STORAGE_INPUT_KEY, deviceId);
     this.patchDeviceState({ selectedInputId: deviceId });
@@ -296,6 +308,10 @@ export class AudioBridge {
   }
 
   private async openMicrophone(): Promise<MediaStream> {
+    if (this.silentInput) {
+      this.silentContext ??= new AudioContext();
+      return this.silentContext.createMediaStreamDestination().stream;
+    }
     const selected = this.deviceState.selectedInputId;
     const constraints = (deviceId?: string): MediaStreamConstraints => ({
       audio: {

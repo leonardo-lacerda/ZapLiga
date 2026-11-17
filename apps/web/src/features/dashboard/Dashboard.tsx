@@ -62,7 +62,8 @@ function SdrWorkspace(props: AnyRow) {
       <div className="sdr-command-health"><Badge tone={status.line_ready ? 'success' : 'warning'}><Icon name="phone" size={13} />{status.line_ready ? 'Linha pronta' : 'Linha indisponível'}</Badge><Badge tone={audioReady ? 'success' : 'neutral'}><Icon name={audioReady ? 'mic' : 'mic-off'} size={13} />{audioReady ? 'Áudio verificado' : 'Áudio não verificado'}</Badge></div>
       <div className="sdr-command-actions">
         {props.billingRestricted && <div className="alert" role="status"><Icon name="lock" size={15} /><span>Assinatura inativa ({props.billingReason ?? 'sem plano'}). Operação e discagem estão bloqueadas.</span></div>}
-        {!connected ? <Button icon="plug" disabled={connecting || Boolean(props.billingRestricted)} onClick={() => void connectSdr()}>{connecting ? 'Conectando...' : 'Conectar e testar áudio'}</Button> : <>
+        {props.silentInput !== undefined && <label className="admin-inline-checkbox" title="Só para admin: liga sem pedir o microfone; o cliente ouve silêncio."><input type="checkbox" checked={props.silentInput} onChange={(event) => void props.setSilentInput(event.target.checked)} /> Ligar sem microfone</label>}
+        {!connected ? <Button icon="plug" disabled={connecting || Boolean(props.billingRestricted)} onClick={() => void connectSdr()}>{connecting ? 'Conectando...' : props.silentInput ? 'Conectar sem microfone' : 'Conectar e testar áudio'}</Button> : <>
           <Button variant={available ? 'success' : 'primary'} icon={available ? 'pause' : 'headset'} onClick={() => void setAvailability(!available)} disabled={Boolean(props.billingRestricted) || !sdrReady || Boolean(postCall)}>{available ? 'Pausar atendimento' : 'Ficar disponível'}</Button>
           <Button variant="ghost" onClick={() => void disconnectSdr()}>Desconectar</Button>
         </>}

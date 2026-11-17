@@ -4,6 +4,7 @@ export type AudioDeviceOption = { deviceId: string; label: string; groupId: stri
 const PSEUDO_IDS = new Set(['default', 'communications']);
 
 export const STORAGE_INPUT_KEY = 'zapliga.audio.inputDeviceId';
+export const STORAGE_SILENT_INPUT_KEY = 'zapliga.audio.silentInput';
 export const STORAGE_OUTPUT_KEY = 'zapliga.audio.outputDeviceId';
 
 export function isPseudoDevice(deviceId: string) {
