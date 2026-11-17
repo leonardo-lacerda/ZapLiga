@@ -10,38 +10,53 @@ import type { BubbleStatus, UiState } from './shared/types';
   const UI_KEY = 'zapliga_ui';
   const MARGIN = 12;
   const MIN_W = 300; const MIN_H = 380;
-  const BUBBLE = 56;
+  const BUBBLE = 54;
   let ui: UiState = { visible: true, collapsed: false, left: -1, top: -1, width: 340, height: 540 };
 
   const host = document.createElement('div');
   host.id = 'zapliga-extension-root';
   host.style.cssText = 'all: initial; position: fixed; z-index: 2147483647; left: 0; top: 0; width: 0; height: 0;';
   const root = host.attachShadow({ mode: 'closed' });
+  const PHONE = '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 16.9v3a2 2 0 0 1-2.2 2 19.8 19.8 0 0 1-8.6-3.1 19.5 19.5 0 0 1-6-6A19.8 19.8 0 0 1 2.1 4.2 2 2 0 0 1 4.1 2h3a2 2 0 0 1 2 1.7c.1.9.4 1.8.7 2.7a2 2 0 0 1-.5 2.1L8 9.8a16 16 0 0 0 6 6l1.3-1.3a2 2 0 0 1 2.1-.4c.9.3 1.8.6 2.7.7a2 2 0 0 1 1.7 2Z"/></svg>';
   root.innerHTML = `<style>
     * { box-sizing: border-box; }
-    .win { position: fixed; display: flex; flex-direction: column; background: #fff; border: 1px solid #d0d5dd; border-radius: 14px; overflow: hidden;
-      box-shadow: 0 16px 40px rgba(16,24,40,.18), 0 2px 6px rgba(16,24,40,.08); font: 600 13px/1 Inter, system-ui, -apple-system, 'Segoe UI', sans-serif; }
-    .bar { height: 34px; flex: none; display: flex; align-items: center; gap: 8px; padding: 0 6px 0 12px; background: #073b5c; color: #fff; cursor: grab; user-select: none; touch-action: none; }
+    .win { position: fixed; display: flex; flex-direction: column; background: #fff; border-radius: 16px; overflow: hidden;
+      box-shadow: 0 0 0 1px rgba(16,24,40,.08), 0 24px 48px -12px rgba(16,24,40,.28), 0 6px 14px rgba(16,24,40,.08);
+      font: 600 13px/1 Inter, 'Segoe UI', system-ui, -apple-system, sans-serif; animation: pop .16s ease-out; }
+    @keyframes pop { from { opacity: 0; transform: translateY(6px) scale(.985); } }
+    .bar { height: 36px; flex: none; display: flex; align-items: center; gap: 6px; padding: 0 6px 0 10px; color: #fff; cursor: grab; user-select: none; touch-action: none;
+      background: linear-gradient(90deg, #073b5c, #0a4f7c); }
     .bar:active { cursor: grabbing; }
-    .title { flex: 1; letter-spacing: .2px; } .title b { color: #5cc1ff; font-weight: 800; }
-    .bar button { all: unset; width: 26px; height: 26px; display: grid; place-items: center; border-radius: 6px; color: #fff; cursor: pointer; font-size: 16px; }
-    .bar button:hover { background: rgba(255,255,255,.14); }
+    .mark { width: 20px; height: 20px; border-radius: 6px; display: grid; place-items: center; background: linear-gradient(135deg, #2aa8ff, #078be8); }
+    .mark svg { width: 12px; height: 12px; }
+    .title { flex: 1; font-size: 13px; letter-spacing: .1px; } .title b { color: #7fd0ff; font-weight: 800; }
+    .dots { color: rgba(255,255,255,.35); letter-spacing: 1px; font-size: 14px; margin-right: 4px; }
+    .bar button { all: unset; width: 26px; height: 26px; display: grid; place-items: center; border-radius: 7px; color: rgba(255,255,255,.85); cursor: pointer; }
+    .bar button:hover { background: rgba(255,255,255,.14); color: #fff; }
+    .bar button svg { width: 15px; height: 15px; }
     iframe { flex: 1; width: 100%; border: 0; background: #fff; color-scheme: light; }
-    .grip { position: absolute; left: 0; bottom: 0; width: 18px; height: 18px; cursor: nesw-resize; touch-action: none;
-      background: linear-gradient(45deg, transparent 0 45%, #98a2b3 45% 52%, transparent 52% 64%, #98a2b3 64% 71%, transparent 71%); }
-    .grip.right { left: auto; right: 0; cursor: nwse-resize; background: linear-gradient(-45deg, transparent 0 45%, #98a2b3 45% 52%, transparent 52% 64%, #98a2b3 64% 71%, transparent 71%); }
-    .shield { position: absolute; inset: 34px 0 0; display: none; } .dragging .shield { display: block; }
-    .bubble { all: unset; position: fixed; width: ${BUBBLE}px; height: ${BUBBLE}px; border-radius: 50%; background: #078be8; color: #fff; display: grid; place-items: center;
-      box-shadow: 0 10px 28px rgba(16,24,40,.28); cursor: pointer; touch-action: none; user-select: none; font: 800 15px/1 Inter, system-ui, sans-serif; }
-    .bubble.call { background: #12b76a; animation: pulse 1.6s infinite; } .bubble.post { background: #f79009; }
-    .bubble small { position: absolute; bottom: -20px; left: 50%; transform: translateX(-50%); white-space: nowrap; background: #1d2939; color: #fff; padding: 3px 7px; border-radius: 999px; font: 600 11px/1.2 Inter, system-ui, sans-serif; }
+    .grip { position: absolute; left: 0; bottom: 0; width: 16px; height: 16px; cursor: nesw-resize; touch-action: none; }
+    .grip.right { left: auto; right: 0; cursor: nwse-resize; }
+    .grip::after { content: ''; position: absolute; bottom: 4px; left: 4px; width: 6px; height: 6px; border-left: 2px solid #c4cad4; border-bottom: 2px solid #c4cad4; border-bottom-left-radius: 2px; opacity: 0; transition: opacity .15s; }
+    .grip.right::after { left: auto; right: 4px; border-left: 0; border-right: 2px solid #c4cad4; border-bottom-left-radius: 0; border-bottom-right-radius: 2px; }
+    .win:hover .grip::after { opacity: 1; }
+    .shield { position: absolute; inset: 36px 0 0; display: none; } .dragging .shield { display: block; }
+    .bubble { all: unset; position: fixed; width: ${BUBBLE}px; height: ${BUBBLE}px; border-radius: 50%; color: #fff; display: grid; place-items: center; cursor: pointer; touch-action: none; user-select: none;
+      background: linear-gradient(135deg, #2aa8ff, #078be8 55%, #0567b8); box-shadow: 0 0 0 3px #fff, 0 12px 28px rgba(7,60,110,.35); transition: transform .12s; }
+    .bubble:hover { transform: scale(1.06); }
+    .bubble.call { background: linear-gradient(135deg, #34d58c, #12b76a 55%, #039855); animation: pulse 1.6s infinite; }
+    .bubble.post { background: linear-gradient(135deg, #fdb022, #f79009 55%, #dc6803); }
+    .bubble small { position: absolute; top: calc(100% + 6px); left: 50%; transform: translateX(-50%); white-space: nowrap; background: #0b1f33; color: #fff; padding: 4px 8px; border-radius: 999px;
+      font: 700 11px/1.2 Inter, 'Segoe UI', system-ui, sans-serif; font-variant-numeric: tabular-nums; box-shadow: 0 4px 10px rgba(16,24,40,.2); }
     .bubble small:empty { display: none; }
-    @keyframes pulse { 0%,100% { box-shadow: 0 0 0 0 rgba(18,183,106,.5), 0 10px 28px rgba(16,24,40,.28); } 50% { box-shadow: 0 0 0 10px rgba(18,183,106,0), 0 10px 28px rgba(16,24,40,.28); } }
+    @keyframes pulse { 0%,100% { box-shadow: 0 0 0 3px #fff, 0 0 0 3px rgba(18,183,106,.5), 0 12px 28px rgba(3,152,85,.35); } 50% { box-shadow: 0 0 0 3px #fff, 0 0 0 14px rgba(18,183,106,0), 0 12px 28px rgba(3,152,85,.35); } }
     [hidden] { display: none !important; }
   </style>
-  <div class="win" part="win"><div class="bar"><span class="title">Zap<b>Liga</b></span><button class="min" title="Recolher">–</button><button class="close" title="Fechar (clique no ícone da extensão para abrir de novo)">×</button></div>
+  <div class="win"><div class="bar"><span class="mark">${PHONE}</span><span class="title">Zap<b>Liga</b></span><span class="dots" aria-hidden="true">⋮⋮</span>
+    <button class="min" title="Recolher"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M5 12h14"/></svg></button>
+    <button class="close" title="Esconder (o ícone da extensão mostra de novo)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg></button></div>
   <div class="shield"></div><div class="grip" title="Arraste para mudar o tamanho"></div><div class="grip right" title="Arraste para mudar o tamanho"></div></div>
-  <button class="bubble" title="Abrir o ZapLiga"><span>ZL</span><small></small></button>`;
+  <button class="bubble" title="Abrir o ZapLiga">${PHONE}<small></small></button>`;
 
   const win = root.querySelector('.win') as HTMLDivElement;
   const bar = root.querySelector('.bar') as HTMLDivElement;
