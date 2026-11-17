@@ -13,3 +13,7 @@ output/
 tmp/
 .deploy-*.tar
 apps/web/test-results/
+
+# Browser extension build output
+apps/extension/dist/
+apps/extension/*.zip

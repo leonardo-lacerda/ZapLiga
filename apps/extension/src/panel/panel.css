@@ -1,0 +1,80 @@
+:root {
+  --primary: #078be8; --primary-hover: #0078d4; --navy: #073b5c; --text: #1d2939; --muted: #667085;
+  --border: #e4e7ec; --surface: #fff; --soft: #f5f7fa; --success: #12b76a; --success-hover: #039855;
+  --error: #d92d20; --error-soft: #fef3f2; --warning: #f79009; --warning-soft: #fff4e5;
+  color-scheme: light; font-family: Inter, system-ui, -apple-system, 'Segoe UI', sans-serif; font-size: 14px; color: var(--text);
+}
+* { box-sizing: border-box; }
+html, body, #root { margin: 0; height: 100%; background: var(--surface); }
+body.standalone { background: var(--soft); }
+button, input, select, textarea { font: inherit; color: inherit; }
+button { cursor: pointer; } button:disabled { cursor: default; opacity: .55; }
+.panel { height: 100%; display: flex; flex-direction: column; overflow-y: auto; }
+.center { margin: auto; padding: 24px; text-align: center; }
+.muted { color: var(--muted); font-size: 13px; }
+.brand { font-weight: 800; font-size: 22px; color: var(--navy); } .brand span { color: var(--primary); }
+
+label { display: grid; gap: 4px; font-size: 12px; font-weight: 600; color: var(--muted); }
+label small { font-weight: 500; }
+input, select, textarea { width: 100%; padding: 9px 10px; border: 1px solid var(--border); border-radius: 8px; background: #fff; outline: none; }
+input:focus, select:focus, textarea:focus { border-color: var(--primary); box-shadow: 0 0 0 3px rgba(7,139,232,.15); }
+textarea { resize: vertical; }
+
+.primary { padding: 10px 14px; border: 0; border-radius: 8px; background: var(--primary); color: #fff; font-weight: 700; }
+.primary:hover:not(:disabled) { background: var(--primary-hover); }
+.link { border: 0; background: none; color: var(--primary); font-weight: 600; padding: 4px; }
+.small { padding: 5px 10px; border: 1px solid var(--border); border-radius: 6px; background: #fff; font-size: 12px; font-weight: 600; white-space: nowrap; }
+.small:hover { background: var(--soft); }
+
+.login { display: grid; gap: 12px; padding: 22px 18px; }
+.alert { display: flex; gap: 8px; align-items: flex-start; margin: 0 12px; padding: 8px 10px; border-radius: 8px; background: var(--error-soft); color: var(--error); font-size: 13px; }
+.login .alert { margin: 0; }
+.alert span { flex: 1; } .alert button { border: 0; background: none; color: inherit; font-size: 16px; line-height: 1; padding: 0; }
+.banner { display: flex; gap: 8px; align-items: center; margin: 8px 12px 0; padding: 8px 10px; border-radius: 8px; background: var(--warning-soft); font-size: 12px; }
+.banner span { flex: 1; }
+
+.top { display: flex; align-items: center; gap: 4px; padding: 10px 10px 8px 14px; border-bottom: 1px solid var(--border); }
+.who { flex: 1; min-width: 0; display: grid; gap: 2px; }
+.who strong { font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.who small { color: var(--muted); font-size: 12px; }
+.who select { padding: 2px 6px; font-size: 12px; border-radius: 6px; }
+.icon { width: 30px; height: 30px; border: 0; border-radius: 6px; background: none; color: var(--muted); font-size: 15px; }
+.icon:hover:not(:disabled), .icon.on { background: var(--soft); color: var(--text); }
+
+.devices { display: grid; gap: 8px; margin: 8px 12px 0; padding: 10px; border: 1px solid var(--border); border-radius: 10px; background: var(--soft); }
+.devices .small { justify-self: start; }
+
+.dialer { display: grid; gap: 8px; padding: 14px 14px 8px; }
+.dialer .number { font-size: 22px; font-weight: 700; text-align: center; letter-spacing: .5px; padding: 10px; }
+.dialer .name { text-align: center; }
+.keypad { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
+.keypad button { height: 40px; border: 1px solid var(--border); border-radius: 10px; background: #fff; font-size: 17px; font-weight: 600; }
+.keypad button:hover { background: var(--soft); } .keypad button:active { background: #e8eef5; }
+.call { margin-top: 4px; height: 46px; border: 0; border-radius: 23px; background: var(--success); color: #fff; font-size: 16px; font-weight: 800; }
+.call:hover:not(:disabled) { background: var(--success-hover); }
+
+.active { display: grid; justify-items: center; gap: 6px; padding: 24px 14px 12px; text-align: center; }
+.avatar { width: 64px; height: 64px; border-radius: 50%; display: grid; place-items: center; background: #eaf6ff; color: var(--primary); font-size: 26px; font-weight: 800; }
+.avatar.dialing, .avatar.ringing { animation: ring 1.4s infinite; }
+.avatar.answered { background: #ecfdf3; color: var(--success); }
+@keyframes ring { 0%,100% { box-shadow: 0 0 0 0 rgba(7,139,232,.35); } 50% { box-shadow: 0 0 0 12px rgba(7,139,232,0); } }
+.callee { font-size: 18px; }
+.phase { font-weight: 700; color: var(--primary); font-variant-numeric: tabular-nums; } .phase.answered { color: var(--success); font-size: 18px; }
+.hearing { font-size: 12px; color: var(--muted); } .hearing.on { color: var(--success); }
+.actions { display: flex; gap: 28px; margin-top: 14px; }
+.round { width: 62px; height: 62px; border-radius: 50%; border: 1px solid var(--border); background: #fff; font-size: 22px; display: grid; place-items: center; position: relative; }
+.round small { position: absolute; bottom: -20px; font-size: 11px; font-weight: 600; color: var(--muted); }
+.round.on { background: var(--text); color: #fff; border-color: var(--text); }
+.round.hang { background: var(--error); color: #fff; border-color: var(--error); }
+
+.postcall { display: grid; gap: 8px; padding: 14px; }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.chips button { padding: 6px 10px; border: 1px solid var(--border); border-radius: 999px; background: #fff; font-size: 12px; font-weight: 600; }
+.chips button.on { background: var(--primary); border-color: var(--primary); color: #fff; }
+.warn { margin: 0; font-size: 12px; color: var(--warning); }
+
+.status { margin-top: auto; display: flex; align-items: center; gap: 8px; padding: 8px 14px; border-top: 1px solid var(--border); font-size: 12px; color: var(--muted); }
+.status span { flex: 1; }
+.status i { width: 8px; height: 8px; border-radius: 50%; background: #98a2b3; flex: none; }
+.status i.ready { background: var(--success); } .status i.connecting { background: var(--warning); } .status i.taken { background: var(--error); }
+.glyph { display: inline-block; line-height: 1; }

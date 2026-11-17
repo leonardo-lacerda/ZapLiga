@@ -46,6 +46,16 @@ export const pipelineStageOptions = [
   ['perdido', 'Perdido'],
 ] as const;
 
+/** Pipeline stage a call result moves the lead to (post-call form on the site and in the extension). */
+export const pipelineStageByCallResult: Record<string, string> = {
+  interessado: 'qualificado',
+  sem_interesse: 'perdido',
+  retornar: 'contatado',
+  reuniao_agendada: 'reuniao',
+  numero_invalido: 'perdido',
+  nao_ligar_novamente: 'perdido',
+};
+
 const callResultNames: Record<string, string> = Object.fromEntries(callResultOptions);
 const pipelineStageNames: Record<string, string> = Object.fromEntries(pipelineStageOptions);
 export const formatCallResult = (value: unknown) => value ? (callResultNames[String(value)] ?? String(value)) : '—';

@@ -318,10 +318,13 @@ function AuthenticatedApp() {
       if (message.type === 'error') setError(message.message);
     };
     socket.onerror = () => { if (control.current === socket) { setConnecting(false); setConnectionNotice('O canal ficou instável. Tentando recuperar…'); } };
-    socket.onclose = () => {
+    socket.onclose = (event) => {
       if (control.current !== socket) return;
       control.current = undefined; setConnecting(false); audioCall.current = ''; setAvailable(false); setConnected(false); setSdrReady(false); setMicMuted(false); setActiveCall(null);
       if (manualDisconnect.current) return;
+      // 4000 = this station was opened somewhere else (another tab, the browser extension). Reconnecting
+      // on our own would kick that one out, and it would kick us back: stop and let the user choose.
+      if (event.code === 4000) { manualDisconnect.current = true; desiredAvailable.current = false; setConnectionNotice('Sua estação foi aberta em outro lugar (outra aba ou a extensão do ZapLiga). Conecte de novo para usar aqui.'); return; }
       reconnectAttempt.current += 1;
       const delay = Math.min(15_000, 1000 * 2 ** Math.min(4, reconnectAttempt.current - 1));
       setConnectionNotice(`Conexão interrompida. Nova tentativa em ${Math.ceil(delay / 1000)}s…`);

@@ -2,16 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import type { AnyRow } from '../../types';
 import { Badge, Button, Panel } from '../../components/ui';
 import { LiveTimer, formatDuration } from '../../components/LiveTimer';
-import { callResultOptions as results, pipelineStageOptions as stages } from '../../shared/format';
-
-const stageByResult: Record<string, string> = {
-  interessado: 'qualificado',
-  sem_interesse: 'perdido',
-  retornar: 'contatado',
-  reuniao_agendada: 'reuniao',
-  numero_invalido: 'perdido',
-  nao_ligar_novamente: 'perdido',
-};
+import { callResultOptions as results, pipelineStageByCallResult as stageByResult, pipelineStageOptions as stages } from '../../shared/format';
 
 const localDateTime = (date: Date) => {
   const offset = date.getTimezoneOffset() * 60_000;
