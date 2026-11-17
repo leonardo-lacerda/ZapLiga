@@ -106,7 +106,8 @@ export class EgressService {
     const key = await this.createKey(PC_TAG, PC_KEY_SECONDS, `PC ${pc.name}`);
     const up = `up --reset --force-reauth --advertise-exit-node --hostname=${pc.tailscale_hostname} --auth-key=${key}`;
     return {
-      windows: `winget install -e --id Tailscale.Tailscale --silent --accept-source-agreements --accept-package-agreements; Start-Sleep 5; & "$env:ProgramFiles\\Tailscale\\tailscale.exe" ${up} --unattended; powercfg /change standby-timeout-ac 0`,
+      // Wrapped in `powershell -Command` so it also runs when pasted into cmd.exe.
+      windows: `powershell -NoProfile -Command "winget install -e --id Tailscale.Tailscale --silent --accept-source-agreements --accept-package-agreements; Start-Sleep 5; & (Join-Path $env:ProgramFiles 'Tailscale\\tailscale.exe') ${up} --unattended; powercfg /change standby-timeout-ac 0"`,
       linux: `curl -fsSL https://tailscale.com/install.sh | sh && sudo tailscale ${up}`,
       expiresInHours: PC_KEY_SECONDS / 3600,
     };

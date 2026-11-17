@@ -124,7 +124,7 @@ export function AdminEgressPanel() {
       {install && <div className="egress-install">
         <strong>Instalar no {install.name}</strong>
         <ol className="egress-steps">
-          <li>No PC, clique com o botão direito no menu Iniciar e abra <strong>Terminal (Admin)</strong> ou <strong>PowerShell (Admin)</strong>.</li>
+          <li>No PC, clique com o botão direito no menu Iniciar e abra <strong>Terminal (Admin)</strong>, <strong>PowerShell (Admin)</strong> ou o Prompt de Comando como administrador.</li>
           <li>Cole o comando e aperte Enter:
             <textarea className="egress-code" readOnly rows={4} value={install.windows} />
             <Button variant="ghost" type="button" onClick={() => void copy(install.windows, 'Comando copiado.')}>Copiar comando</Button>
