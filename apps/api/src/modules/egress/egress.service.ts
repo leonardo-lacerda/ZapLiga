@@ -25,7 +25,8 @@ const IP_REFRESH_MS = 60_000;
 // the PCs as an exit to the internet: the PC does not reach the VPS, and the VPS
 // does not reach the attendant's home network.
 export const TAILSCALE_POLICY = {
-  tagOwners: { [EDGE_TAG]: ['autogroup:admin'], [PC_TAG]: ['autogroup:admin'] },
+  // The edge tag owns the PC tag: Tailscale refused PC keys from a credential holding both tags otherwise.
+  tagOwners: { [EDGE_TAG]: ['autogroup:admin'], [PC_TAG]: ['autogroup:admin', EDGE_TAG] },
   grants: [{ src: [EDGE_TAG], dst: ['autogroup:internet'], ip: ['*'] }],
   autoApprovers: { exitNode: [PC_TAG] },
 };
