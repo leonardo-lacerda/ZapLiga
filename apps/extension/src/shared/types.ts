@@ -58,4 +58,6 @@ export const PANEL_PORT = 'zapliga-panel';
 export const BUBBLE_PORT = 'zapliga-bubble';
 export const UI_STORAGE_KEY = 'zapliga_ui';
 /** pinned = the window is out of the page, in an always-on-top picture-in-picture window. */
-export type UiState = { visible: boolean; collapsed: boolean; left: number; top: number; width: number; height: number; pinned?: boolean };
+export type UiState = { visible: boolean; collapsed: boolean; left: number; top: number; width: number; height: number; pinned?: boolean;
+  /** Chrome window (monitor) that shows the floating window; the other windows stay clean. */
+  windowId?: number };

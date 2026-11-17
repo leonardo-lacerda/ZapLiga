@@ -17,7 +17,23 @@ const message = (error: unknown) => {
   // Validation errors come back as a list of messages; show them instead of a bare "Bad Request".
   const list = error instanceof ApiError ? (error.details as any)?.message : undefined;
   if (Array.isArray(list) && list.length) return list.join(' · ');
+  if (error instanceof ApiError && error.status === 401) return 'Sua sessão do ZapLiga caiu. Entre de novo para continuar.';
   return error instanceof Error ? error.message : String(error);
+};
+
+/**
+ * The refresh cookie is shared with the zapliga.com tabs, and every rotation (here or on the
+ * site) invalidates the other side's access token. `json` already refreshes once on 401; if the
+ * site rotates again in between, try a couple more times before giving up. A 401 is rejected by
+ * the auth guard before the handler runs, so retrying a POST is safe.
+ */
+const api = async (path: string, init?: RequestInit): Promise<any> => {
+  for (let attempt = 0; ; attempt += 1) {
+    try { return await json(path, init); } catch (error) {
+      if (!(error instanceof ApiError) || error.status !== 401 || attempt >= 2) throw error;
+      if (!await refreshAccessToken()) throw error;
+    }
+  }
 };
 
 /** 10/11 digits = Brazilian DDD + number; WhatsApp needs the country code. */
@@ -51,8 +67,8 @@ export class Station {
       if (call && call.hearing !== level.receiving) this.patch({ call: { ...call, hearing: level.receiving } });
     });
     window.addEventListener('zapliga:access-changed', () => void this.restoreSession());
-    // The access token lasts minutes; rotate it before it expires so a long idle station keeps working.
-    window.setInterval(() => { if (this.state.auth === 'signed_in') void refreshAccessToken(); }, 10 * 60_000);
+    // No timed refresh: `json` renews an expiring token right before each request, and every
+    // extra rotation would also invalidate the token of the zapliga.com tabs.
   }
 
   // ------------------------------------------------------------------ wiring
@@ -175,7 +191,7 @@ export class Station {
     const tenant = this.state.tenants.find((t) => t.id === tenantId);
     if (!tenant || tenant.role === 'sdr') { this.patch({ lines: [], lineId: '' }); return; }
     try {
-      const page = await json('/api/numbers?limit=200');
+      const page = await api('/api/numbers?limit=200');
       if (this.state.tenantId !== tenantId) return;
       const lines = (page.items ?? [])
         .filter((n: any) => CONNECTED_LINE.has(String(n.status).toLowerCase()))
@@ -191,7 +207,7 @@ export class Station {
   private async loadPendingPostCall() {
     const tenantId = this.state.tenantId;
     try {
-      const sdr = await json('/api/me/sdr');
+      const sdr = await api('/api/me/sdr');
       if (this.state.tenantId !== tenantId) return;
       this.sdrId = String(sdr.id);
       const postCall = sdr.current_pause_id && (sdr.pause_type ?? 'post_call') === 'post_call'
@@ -251,10 +267,10 @@ export class Station {
     try {
       if (!this.sdrId) {
         // SDRs already have a station; leaders and the platform admin get one created on first use, like on the site.
-        const sdr = await json('/api/me/sdr').catch((error) => (error instanceof ApiError && error.status === 404 && tenant.role !== 'sdr' ? json('/api/me/sdr', { method: 'POST' }) : Promise.reject(error)));
+        const sdr = await api('/api/me/sdr').catch((error) => (error instanceof ApiError && error.status === 404 && tenant.role !== 'sdr' ? api('/api/me/sdr', { method: 'POST' }) : Promise.reject(error)));
         this.sdrId = String(sdr.id);
       }
-      const ticket = await json('/api/auth/ws-ticket', { method: 'POST' });
+      const ticket = await api('/api/auth/ws-ticket', { method: 'POST' });
       this.closeSocket();
       const socket = new WebSocket(`${wsUrl()}/ws/tenants/${encodeURIComponent(tenant.id)}/sdr?ticket=${encodeURIComponent(ticket.ticket)}`);
       socket.binaryType = 'arraybuffer';
@@ -397,7 +413,7 @@ export class Station {
       this.patch({ call: { phase: 'dialing', phone, name: name?.trim() || undefined, hearing: false }, muted: false });
       this.audio.setMuted(false);
       void this.audio.startRingback().catch(() => undefined);
-      const result = await json('/api/calls/manual', { method: 'POST', body: JSON.stringify({ phone, name: name?.trim() || undefined, numberId: this.state.lineId || undefined }) });
+      const result = await api('/api/calls/manual', { method: 'POST', body: JSON.stringify({ phone, name: name?.trim() || undefined, numberId: this.state.lineId || undefined }) });
       if (result?.callId) this.setCallId(String(result.callId));
       this.patch({ busy: false });
     } catch (error) {
@@ -426,7 +442,7 @@ export class Station {
     if (!pause || !this.sdrId) return;
     this.patch({ savingPostCall: true, error: '' });
     try {
-      await json(`/api/sdrs/${this.sdrId}/pauses/${pause.id}/finish`, { method: 'POST', body: JSON.stringify({ ...input, continueAvailable: false }) });
+      await api(`/api/sdrs/${this.sdrId}/pauses/${pause.id}/finish`, { method: 'POST', body: JSON.stringify({ ...input, continueAvailable: false }) });
       this.patch({ postCall: null, savingPostCall: false, notice: '' });
     } catch (error) {
       this.patch({ savingPostCall: false });

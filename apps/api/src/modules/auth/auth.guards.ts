@@ -40,10 +40,16 @@ export class AuthGuard implements CanActivate {
     let payload: any;
     try { payload = await this.auth.verifyAccessToken(header.slice(7)); }
     catch { await this.redis?.incrementMetric('access_token_failures_total'); throw new UnauthorizedException('Sessão inválida ou expirada'); }
+    // A refresh rotation replaces the session but must not kill access tokens already handed out
+    // (other tabs, the browser extension) while the family is still alive. Logout, logout-all,
+    // password changes and reuse detection revoke the live session, which ends the whole family.
     const result = await this.db.query(`SELECT u.id, u.platform_role, u.status, u.email_verified_at, u.force_password_change,
         (SELECT count(*)::int FROM legal_document_versions d WHERE d.retired_at IS NULL AND d.effective_at <= now() AND NOT EXISTS (SELECT 1 FROM user_legal_acceptances a WHERE a.user_id = u.id AND a.legal_document_version_id = d.id)) AS pending_legal_count
       FROM users u JOIN user_sessions s ON s.user_id = u.id AND s.id = $2
-      WHERE u.id = $1 AND s.revoked_at IS NULL AND s.expires_at > now() LIMIT 1`, [String(payload.sub), String(payload.sid ?? '')]);
+      WHERE u.id = $1 AND s.expires_at > now()
+        AND (s.revoked_at IS NULL OR (s.replaced_by_session_id IS NOT NULL AND EXISTS (
+          SELECT 1 FROM user_sessions live WHERE live.family_id = s.family_id AND live.revoked_at IS NULL AND live.expires_at > now())))
+      LIMIT 1`, [String(payload.sub), String(payload.sid ?? '')]);
     const user = result.rows[0];
     if (!user || user.status !== 'active') { await this.redis?.incrementMetric('revoked_session_access_total'); throw new UnauthorizedException('Usuário bloqueado ou inexistente'); }
     const gatePaths = new Set(['/api/auth/me', '/api/auth/logout', '/api/auth/logout-all', '/api/me/profile', '/api/me/password', '/api/me/sessions', '/api/me/legal-acceptance']);

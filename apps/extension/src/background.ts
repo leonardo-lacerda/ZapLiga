@@ -47,13 +47,15 @@ chrome.action.onClicked.addListener(async (tab: any) => {
   const url = String(tab?.url ?? '');
   if (!/^https?:/.test(url)) { await openPanelWindow(); return; }
   const ui = await readUi();
-  // Clicking the icon always brings the window back open; clicking again hides it.
-  const next = ui.visible && !ui.collapsed ? { ...ui, visible: false } : { ...ui, visible: true, collapsed: false };
+  // Clicking the icon brings the window open in this Chrome window (and only here); clicking again hides it.
+  const here = ui.windowId === tab.windowId;
+  const next = here && ui.visible && !ui.collapsed ? { ...ui, visible: false } : { ...ui, visible: true, collapsed: false, windowId: tab.windowId };
   await chrome.storage.local.set({ [UI_KEY]: next });
 });
 
 chrome.runtime.onMessage.addListener((request: any, _sender: any, sendResponse: (value: unknown) => void) => {
   if (request?.type === 'ensure-offscreen') { ensureOffscreen().then(() => sendResponse({ ok: true }), (error) => sendResponse({ ok: false, error: String(error) })); return true; }
+  if (request?.type === 'whoami') { sendResponse({ windowId: _sender?.tab?.windowId }); return false; }
   if (request?.type === 'pinned') { void setPinned(Boolean(request.on), _sender?.tab?.id); return false; }
     if (request?.type === 'open-permission') { void openPermissionTab(); return false; }
   if (request?.type === 'open-url' && typeof request.url === 'string' && /^https:\/\//.test(request.url)) { void chrome.tabs.create({ url: request.url }); return false; }
@@ -62,7 +64,8 @@ chrome.runtime.onMessage.addListener((request: any, _sender: any, sendResponse: 
 
 chrome.runtime.onInstalled.addListener(async (details: any) => {
   const ui = await readUi();
-  await chrome.storage.local.set({ [UI_KEY]: { ...ui, visible: true } });
+  const focused = await chrome.windows.getLastFocused().catch(() => undefined);
+  await chrome.storage.local.set({ [UI_KEY]: { ...ui, visible: true, windowId: focused?.id } });
   // Tabs opened before the install have no content script yet: add the window to them now.
   const tabs = await chrome.tabs.query({ url: ['http://*/*', 'https://*/*'] });
   await Promise.all(tabs.map((tab: any) => chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ['content.js'] }).catch(() => undefined)));

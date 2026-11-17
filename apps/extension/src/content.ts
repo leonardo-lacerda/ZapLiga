@@ -1,6 +1,6 @@
 // Floating ZapLiga window injected in every page. The window itself is an extension page
 // (panel.html) in an iframe; this script only places it: drag, resize, collapse, hide.
-// Position/size/collapsed live in chrome.storage, so every tab shows the same window.
+// Position/size/collapsed live in chrome.storage; the window shows only in the Chrome window where it was opened.
 import type { BubbleStatus, UiState } from './shared/types';
 
 (() => {
@@ -64,6 +64,13 @@ import type { BubbleStatus, UiState } from './shared/types';
   const bubble = root.querySelector('.bubble') as HTMLButtonElement;
   const bubbleLabel = bubble.querySelector('small') as HTMLElement;
   let frame: HTMLIFrameElement | null = null;
+  // The window belongs to one Chrome window (one monitor), the one where it was last opened.
+  let myWindowId: number | undefined;
+  const shown = () => ui.visible && (ui.windowId == null || ui.windowId === myWindowId);
+  const askWindow = async () => {
+    if (!chrome.runtime?.id) return;
+    try { const reply = await chrome.runtime.sendMessage({ type: 'whoami' }); myWindowId = reply?.windowId; } catch { /* extension reloaded */ }
+  };
 
   const clamp = (value: number, min: number, max: number) => Math.min(Math.max(value, min), Math.max(min, max));
   const vw = () => document.documentElement.clientWidth || window.innerWidth;
@@ -78,9 +85,9 @@ import type { BubbleStatus, UiState } from './shared/types';
     Object.assign(win.style, { left: `${left}px`, top: `${top}px`, width: `${width}px`, height: `${height}px` });
     // The bubble sits where the window's top-right corner is, so it opens back in place.
     Object.assign(bubble.style, { left: `${clamp(left + width - BUBBLE, MARGIN, vw() - BUBBLE - MARGIN)}px`, top: `${clamp(top, MARGIN, vh() - BUBBLE - 28)}px` });
-    win.hidden = !ui.visible || ui.collapsed || Boolean(ui.pinned);
-    bubble.hidden = !ui.visible || !ui.collapsed || Boolean(ui.pinned);
-    if (ui.visible && !frame) {
+    win.hidden = !shown() || ui.collapsed || Boolean(ui.pinned);
+    bubble.hidden = !shown() || !ui.collapsed || Boolean(ui.pinned);
+    if (shown() && !frame) {
       frame = document.createElement('iframe');
       frame.src = chrome.runtime.getURL('panel.html');
       frame.allow = 'autoplay';
@@ -158,7 +165,7 @@ import type { BubbleStatus, UiState } from './shared/types';
     if (status.answeredAt) timer = window.setInterval(render, 1000);
   };
   const connectBubble = async () => {
-    if (port || !ui.visible) return;
+    if (port || !shown()) return;
     // After the extension is reloaded/updated this old script loses its connection: stop quietly.
     if (!chrome.runtime?.id) return;
     try { await chrome.runtime.sendMessage({ type: 'ensure-offscreen' }); port = chrome.runtime.connect({ name: 'zapliga-bubble' }); } catch { return; }
@@ -166,7 +173,9 @@ import type { BubbleStatus, UiState } from './shared/types';
     port.onDisconnect.addListener(() => { port = null; window.setTimeout(() => void connectBubble(), 2000); });
   };
 
-  void chrome.storage.local.get(UI_KEY).then((stored: any) => { ui = { ...ui, ...(stored[UI_KEY] ?? {}) }; layout(); void connectBubble(); });
+  void Promise.all([chrome.storage.local.get(UI_KEY), askWindow()]).then(([stored]: any) => { ui = { ...ui, ...(stored[UI_KEY] ?? {}) }; layout(); void connectBubble(); });
+  // A tab dragged to another window changes owner: check again when it comes back into view.
+  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') void askWindow().then(() => { layout(); void connectBubble(); }); });
   chrome.storage.onChanged.addListener((changes: any, area: string) => {
     if (area !== 'local' || !changes[UI_KEY]) return;
     ui = { ...ui, ...(changes[UI_KEY].newValue ?? {}) };
