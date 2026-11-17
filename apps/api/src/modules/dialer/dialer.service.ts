@@ -59,6 +59,7 @@ type CallResource = {
   answerConfirmedAt?: number;
   answerAbort?: AbortController;
   answerWatcherStarted?: boolean;
+  ringingNotified?: boolean;
   sdrNotified?: boolean;
   waxumCallId?: string;
   answerEventLogged?: boolean;
@@ -1658,7 +1659,13 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
               resource.answerWatcherStarted = true;
               if (resource.integrationId) this.emitCrmCall(resource.tenantId, callId, 'call.dialing');
               this.log(`Chamada Waxum iniciada (${metadata.call_id}); aguardando atendimento`, 'info', callId);
-              void this.waxum.waitForOutgoingAnswer(call.rows[0].waxum_session_id, metadata.call_id, resource.answerAbort!.signal)
+              const onRinging = () => {
+                if (resource.ringingNotified || resource.finishing || resource.mediaActive || resource.answerSignalReceived) return;
+                resource.ringingNotified = true;
+                this.gateway.sendToSdr(sdrId, { type: 'call_ringing', callId });
+                this.log('Celular do cliente tocando (pré-aceite do WhatsApp)', 'info', callId);
+              };
+              void this.waxum.waitForOutgoingAnswer(call.rows[0].waxum_session_id, metadata.call_id, resource.answerAbort!.signal, onRinging)
                 .then((answered) => {
                   if (!answered || resource.finishing || resource.mediaActive) return;
                   resource.answerSignalReceived = true;

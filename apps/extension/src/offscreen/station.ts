@@ -104,7 +104,7 @@ export class Station {
 
   private bubble(): BubbleStatus {
     const { call, postCall } = this.state;
-    const label = call ? (call.phase === 'answered' ? 'Em ligação' : 'Chamando…') : postCall ? 'Registrar resultado' : '';
+    const label = call ? (call.phase === 'answered' ? 'Em ligação' : call.phase === 'ringing' ? 'Chamando…' : 'Ligando…') : postCall ? 'Registrar resultado' : '';
     return { inCall: Boolean(call), label, answeredAt: call?.answeredAt, postCall: Boolean(postCall) };
   }
 
@@ -360,7 +360,12 @@ export class Station {
         break;
       }
       case 'call_reserved':
-        if (this.state.call) { this.patch({ call: { ...this.state.call, phase: 'ringing', name: data.lead?.name ?? this.state.call.name, line: data.number ? String(data.number.label || data.number.phone || '') : this.state.call.line } }); if (data.callId) this.setCallId(String(data.callId)); }
+        // Still "Ligando…": WhatsApp is reaching the person's phone. It becomes "Chamando…" on call_ringing.
+        if (this.state.call) { this.patch({ call: { ...this.state.call, name: data.lead?.name ?? this.state.call.name, line: data.number ? String(data.number.label || data.number.phone || '') : this.state.call.line } }); if (data.callId) this.setCallId(String(data.callId)); }
+        break;
+      case 'call_ringing':
+        // The person's phone got the call and is ringing (WhatsApp's pre-accept).
+        if (this.state.call && this.state.call.phase === 'dialing') this.patch({ call: { ...this.state.call, phase: 'ringing' } });
         break;
       case 'call_started':
         if (this.state.call && data.callId) this.setCallId(String(data.callId));

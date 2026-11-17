@@ -190,7 +190,9 @@ export class WaxumClient implements OnModuleDestroy {
       throw error;
     }
   }
-  async waitForOutgoingAnswer(sessionId: string, callId: string, signal: AbortSignal) {
+  // Resolves true on the callee's Accept. `onRinging` fires on its PreAccept: the
+  // callee's phone got the offer and is ringing (WhatsApp's "Chamando…").
+  async waitForOutgoingAnswer(sessionId: string, callId: string, signal: AbortSignal, onRinging?: () => void) {
     const connection = await this.getNatsConnection();
     const subscription = connection.subscribe(`wa.events.${sessionId}.incoming_call`);
     const codec = StringCodec();
@@ -201,7 +203,9 @@ export class WaxumClient implements OnModuleDestroy {
         try {
           const payload = JSON.parse(codec.decode(message.data)) as { event?: string; data?: { call_id?: string; action?: string } };
           const action = String(payload.data?.action ?? '');
-          if (payload.event === 'incoming_call' && payload.data?.call_id === callId && /\bAccept\b/.test(action)) return true;
+          if (payload.event !== 'incoming_call' || payload.data?.call_id !== callId) continue;
+          if (/^\s*PreAccept\b/.test(action)) { onRinging?.(); continue; }
+          if (/\bAccept\b/.test(action)) return true;
         } catch {
           // Ignore unrelated or malformed events on the session subject.
         }

@@ -140,7 +140,7 @@ function ActiveCall({ state, send }: ViewProps) {
       <strong className="callee">{call.name || formatPhone(call.phone)}</strong>
       {call.name && <span className="sub">{formatPhone(call.phone)}</span>}
       {call.line && <span className="via"><Icon name="whatsapp" size={12} />pelo número {call.line}</span>}
-      <span className="phase">{answered ? elapsed(call.answeredAt) : call.phase === 'ringing' ? 'Tocando…' : 'Chamando…'}</span>
+      <span className="phase">{answered ? elapsed(call.answeredAt) : call.phase === 'ringing' ? 'Chamando…' : 'Ligando…'}</span>
       {answered && <span className={`hearing ${call.hearing ? 'on' : ''}`}><span className="bars"><i /><i /><i /><i /></span>{call.hearing ? 'Ouvindo o cliente' : 'Sem áudio do cliente'}</span>}
     </div>
     <div className="actions">
