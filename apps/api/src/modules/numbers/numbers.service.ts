@@ -122,6 +122,24 @@ export class NumbersService {
     }
   }
 
+  async pairCode(tenantId: string, actorUserId: string, id: string, phone: string) {
+    await this.entitlement.assertAction(tenantId, 'write', actorUserId);
+    const digits = phone.replace(/\D/g, '');
+    if (digits.length < 10 || digits.length > 15) throw new BadRequestException('Informe o telefone com DDI e DDD, ex.: 5527999999999');
+    let number = await this.find(id, tenantId);
+    let result: { code: string; timeout_seconds: number };
+    try { result = await this.waxum.pairCode(number.waxum_session_id, digits); }
+    catch (error) {
+      const statusCode = (error as Error & { statusCode?: number }).statusCode;
+      if (statusCode === 409) throw new BadRequestException('Este número já está conectado ao WhatsApp');
+      if (statusCode !== 404) throw error;
+      number = await this.replaceMissingSession(number);
+      result = await this.waxum.pairCode(number.waxum_session_id, digits);
+    }
+    await this.audit.record({ actorUserId, tenantId, action: 'number.pair_code_requested', entityType: 'whatsapp_number', entityId: id });
+    return { code: result.code, timeout_seconds: result.timeout_seconds };
+  }
+
   async updateSettings(tenantId: string, actorUserId: string | null, id: string, body: UpdateNumberInput) {
     await this.entitlement.assertAction(tenantId, 'write', actorUserId ?? undefined);
     const result = await this.db.query(`UPDATE whatsapp_numbers SET max_concurrent_calls = COALESCE($1,max_concurrent_calls), cooldown_seconds = COALESCE($2,cooldown_seconds), max_calls_per_window = COALESCE($3,max_calls_per_window), call_window_seconds = COALESCE($4,call_window_seconds), label = COALESCE($5,label) WHERE id = $6 AND tenant_id = $7 AND status <> 'removed' RETURNING *`, [body.maxConcurrentCalls == null ? null : Number(body.maxConcurrentCalls), body.cooldownSeconds == null ? null : Number(body.cooldownSeconds), body.maxCallsPerWindow == null ? null : Number(body.maxCallsPerWindow), body.callWindowSeconds == null ? null : Number(body.callWindowSeconds), body.label ? String(body.label) : null, id, tenantId]);

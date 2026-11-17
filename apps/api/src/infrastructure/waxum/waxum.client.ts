@@ -152,6 +152,11 @@ export class WaxumClient implements OnModuleDestroy {
     this.sessionNodes.delete(sessionId);
     return result;
   }
+  // Links the line by typing an 8-character code on the phone instead of reading the QR.
+  // Waxum waits up to 20 s for WhatsApp to hand out the code, hence the longer timeout.
+  pairCode(sessionId: string, phone: string) {
+    return this.request<{ code: string; timeout_seconds: number }>(`/api/v1/sessions/${encodeURIComponent(sessionId)}/pair`, { method: 'POST', body: JSON.stringify({ phone_number: phone }), signal: AbortSignal.timeout(30000) }, 1);
+  }
   getQr(sessionId: string) { return this.request<any>(`/api/v1/sessions/${encodeURIComponent(sessionId)}/qr`); }
   getStatus(sessionId: string) { return this.request<any>(`/api/v1/sessions/${encodeURIComponent(sessionId)}/status`, {}, 1); }
   disconnect(sessionId: string) { return this.request<any>(`/api/v1/sessions/${encodeURIComponent(sessionId)}/disconnect`, { method: 'POST' }, 1); }

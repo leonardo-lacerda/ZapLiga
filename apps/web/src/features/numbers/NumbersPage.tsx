@@ -1,4 +1,7 @@
+import { useState } from 'react';
+import type React from 'react';
 import { QRCodeSVG } from 'qrcode.react';
+import { json } from '../../services/api';
 import type { AnyRow } from '../../types';
 import { Badge, Button, EmptyState, Icon, Pagination, Panel, SectionHeader } from '../../components/ui';
 import { PAGE_SIZE, formatNumber, labelStatus } from '../../shared/format';
@@ -9,7 +12,7 @@ function updateNumberField(setNumberForm: AnyRow['setNumberForm'], numberForm: A
   setNumberForm({ ...numberForm, [field]: value });
 }
 
-export function NumbersPage({ numbers, numbersTotal, numbersOffset, onNumbersPageChange, numberForm, setNumberForm, createNumber, showQr, reconnectNumber, removeNumber, qrLoading, qr, closeQr, canManageNumbers = false }: AnyRow) {
+export function NumbersPage({ numbers, numbersTotal, numbersOffset, onNumbersPageChange, numberForm, setNumberForm, createNumber, showQr, reconnectNumber, removeNumber, qrLoading, qr, qrNumberId, closeQr, canManageNumbers = false }: AnyRow) {
   return <>
     <div className="page-heading">
       <div><span className="eyebrow">WHATSAPP</span><h1>Números</h1><p>{canManageNumbers ? 'Gerencie as sessões conectadas à sua operação.' : 'Consulte as sessões conectadas à sua operação.'}</p></div>
@@ -69,15 +72,27 @@ export function NumbersPage({ numbers, numbersTotal, numbersOffset, onNumbersPag
       {!numbers.length && <div className="full-span"><EmptyState title="Nenhum número cadastrado" description={canManageNumbers ? 'Adicione uma sessão para conectar seu WhatsApp.' : 'Os números serão configurados pelo administrador da plataforma.'} /></div>}
     </div>
     <Pagination offset={numbersOffset} limit={PAGE_SIZE} total={numbersTotal} onChange={onNumbersPageChange} />
-    {qr && <QrModal qr={qr} closeQr={closeQr} />}
+    {qr && <QrModal qr={qr} closeQr={closeQr} numberId={qrNumberId} defaultPhone={numbers.find((number: AnyRow) => number.id === qrNumberId)?.phone ?? ''} />}
   </>;
 }
 
-export function QrModal({ qr, closeQr }: AnyRow) {
+export function QrModal({ qr, closeQr, numberId, defaultPhone = '' }: AnyRow) {
+  const [phone, setPhone] = useState(defaultPhone);
+  const [pair, setPair] = useState<{ code: string; timeout_seconds: number } | null>(null);
+  const [pairing, setPairing] = useState(false);
+  const [pairError, setPairError] = useState('');
   const payload = Array.isArray(qr.qr_codes) && typeof qr.qr_codes[0] === 'string' ? qr.qr_codes[0] : typeof qr.qr === 'string' ? qr.qr : '';
   const isDataImage = payload.startsWith('data:');
   const isLoggedIn = connectedStatuses.includes(String(qr.status).toLowerCase());
   const isError = qr.status === 'error';
+
+  const requestPairCode = async (event: React.FormEvent) => {
+    event.preventDefault();
+    setPairing(true); setPairError('');
+    try { setPair(await json(`/api/numbers/${numberId}/pair`, { method: 'POST', body: JSON.stringify({ phone }) })); }
+    catch (error) { setPairError(error instanceof Error ? error.message : String(error)); }
+    finally { setPairing(false); }
+  };
 
   return <div className="modal-backdrop" onClick={closeQr}>
     <div className="modal-card" role="dialog" aria-modal="true" aria-labelledby="qr-title" onClick={(e) => e.stopPropagation()}>
@@ -94,6 +109,18 @@ export function QrModal({ qr, closeQr }: AnyRow) {
                   : <pre>{JSON.stringify(qr, null, 2)}</pre>}
           </div>}
       <small className="modal-hint">Atualização automática a cada 15s · validade informada: {qr.timeout_seconds ?? '—'}s.</small>
+      {numberId && !isLoggedIn && <div className="pair-code">
+        <strong>Ou conecte com o número de telefone</strong>
+        {pair ? <>
+          <div className="pair-code-value" aria-label="Código de conexão">{pair.code.length === 8 ? `${pair.code.slice(0, 4)}-${pair.code.slice(4)}` : pair.code}</div>
+          <p>No celular: WhatsApp → Aparelhos conectados → Conectar aparelho → <strong>Conectar com número de telefone</strong>, e digite o código. Vale por {Math.round(pair.timeout_seconds / 60)} min.</p>
+          <Button variant="ghost" type="button" onClick={() => setPair(null)}>Gerar outro código</Button>
+        </> : <form className="form-row" onSubmit={requestPairCode}>
+          <input aria-label="Telefone do WhatsApp" placeholder="Ex.: 5527999999999" inputMode="tel" value={phone} onChange={(event) => setPhone(event.target.value)} required />
+          <Button disabled={pairing}>{pairing ? 'Gerando...' : 'Gerar código'}</Button>
+        </form>}
+        {pairError && <div className="alert" role="alert"><Icon name="alert" /><span>{pairError}</span></div>}
+      </div>}
     </div>
   </div>;
 }

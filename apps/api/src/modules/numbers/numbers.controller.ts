@@ -1,6 +1,7 @@
 import { Body, Controller, Delete, Get, Param, Patch, Post, Query, UseGuards } from '@nestjs/common';
 import { AuthGuard, CurrentTenant, CurrentUser, Roles, RolesGuard, TenantMembershipGuard } from '../auth/auth.guards';
 import { CreateNumberDto } from './dto/create-number.dto';
+import { PairNumberDto } from './dto/pair-number.dto';
 import { UpdateNumberDto } from './dto/update-number.dto';
 import { NumbersService } from './numbers.service';
 
@@ -24,6 +25,10 @@ export class NumbersController {
   @Roles('leader', 'super_admin')
   @Get(['/api/numbers/:id/qr', '/api/tenants/:tenantId/numbers/:id/qr'])
   qr(@Param('id') id: string, @CurrentTenant() tenantId: string) { return this.numbers.qr(tenantId, id); }
+
+  @Roles('leader', 'super_admin')
+  @Post(['/api/numbers/:id/pair', '/api/tenants/:tenantId/numbers/:id/pair'])
+  pair(@Param('id') id: string, @Body() body: PairNumberDto, @CurrentTenant() tenantId: string, @CurrentUser() user: any) { return this.numbers.pairCode(tenantId, user.id, id, body.phone); }
 
   @Roles('leader', 'super_admin')
   @Post(['/api/numbers/:id/reconnect', '/api/tenants/:tenantId/numbers/:id/reconnect'])
