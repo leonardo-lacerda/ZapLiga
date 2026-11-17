@@ -18,6 +18,9 @@ export type UpdateNumberInput = { label?: string; maxConcurrentCalls?: number; c
  * WhatsApp line management shared by the panel (NumbersController) and the CRM
  * integration API. `actorUserId` is null when an integration key acts.
  */
+// Seconds to wait for a moved line to log in on its new Waxum.
+const MOVE_CONNECT_CHECKS = 20;
+
 @Injectable()
 export class NumbersService {
   private readonly logger = new Logger(NumbersService.name);
@@ -139,27 +142,61 @@ export class NumbersService {
    * session cannot be carried over, so the line gets a new one there and has
    * to scan the QR again; the old session is deleted.
    */
-  async moveToWaxumNode(tenantId: string, actorUserId: string, id: string, node: string) {
+  /**
+   * Moves a line to another Waxum (another internet exit) without a new QR: every
+   * Waxum mounts the same session storage, so the source lets go of the session
+   * without logging out and the target opens the same device keys. The session id
+   * stays the same. `actorUserId` is null when the egress pool moves the line.
+   */
+  async moveToWaxumNode(tenantId: string, actorUserId: string | null, id: string, node: string) {
     if (!waxumNodes().has(node)) throw new BadRequestException(`Saída "${node}" não existe`);
-    const number = await this.find(id, tenantId);
-    if (number.status === 'removed') throw new NotFoundException('Número não encontrado');
-    if (number.waxum_node === node) return number;
-    if (node !== MAIN_WAXUM_NODE) {
-      // The new session reads its QR through the PC, so the PC has to be answering now.
-      const pc = await this.db.query("SELECT 1 FROM egress_pcs WHERE slot = $1 AND route = 'pc' AND route_reported_at > now() - interval '1 minute'", [node]);
-      if (!pc.rows[0]) throw new BadRequestException('O PC dessa saída não está online. Confira em Admin → Saídas de internet.');
-    }
-    const active = await this.db.query("SELECT 1 FROM calls WHERE number_id = $1 AND status IN ('reserved', 'dialing', 'media_active') LIMIT 1", [id]);
-    if (active.rows[0]) throw new BadRequestException('Nao e possivel trocar a saida de um numero durante uma chamada');
+    const lockKey = `zapcall:global:lock:number-move:${id}`;
+    const lockToken = randomUUID();
+    if (!await this.redis.acquireLock(lockKey, lockToken, 90_000)) throw new HttpException('Esta linha já está trocando de saída', HttpStatus.CONFLICT);
+    try {
+      const number = await this.find(id, tenantId);
+      if (number.status === 'removed') throw new NotFoundException('Número não encontrado');
+      if (number.waxum_node === node) return number;
+      if (node !== MAIN_WAXUM_NODE) {
+        const pc = await this.db.query("SELECT 1 FROM egress_pcs WHERE slot = $1 AND route = 'pc' AND route_reported_at > now() - interval '1 minute'", [node]);
+        if (!pc.rows[0]) throw new BadRequestException('O PC dessa saída não está online. Confira em Admin → Saídas de internet.');
+      }
+      // Out of the dialer first, then check for calls: none can start halfway through the move.
+      await this.db.query("UPDATE whatsapp_numbers SET status = 'reconnecting' WHERE id = $1", [id]);
+      const active = await this.db.query("SELECT 1 FROM calls WHERE number_id = $1 AND status IN ('reserved', 'dialing', 'media_active') LIMIT 1", [id]);
+      if (active.rows[0]) {
+        await this.db.query('UPDATE whatsapp_numbers SET status = $2 WHERE id = $1', [id, number.status]);
+        throw new BadRequestException('Nao e possivel trocar a saida de um numero durante uma chamada');
+      }
 
-    const session = await this.createWaxumSession(number.label, node);
-    const result = await this.db.query(`UPDATE whatsapp_numbers SET waxum_session_id = $1, waxum_node = $2, status = 'disconnected' WHERE id = $3 AND tenant_id = $4 RETURNING *`, [session.id, node, id, tenantId]);
-    await this.waxum.deleteSession(number.waxum_session_id).catch((error) => {
-      if ((error as Error & { statusCode?: number }).statusCode !== 404) this.logger.warn(`Old Waxum session ${number.waxum_session_id} of line ${id} not deleted: ${String((error as Error)?.message ?? error).slice(0, 200)}`);
-    });
-    await this.audit.record({ actorUserId, tenantId, action: 'number.waxum_node_changed', entityType: 'whatsapp_number', entityId: id, metadata: { from: number.waxum_node, to: node } });
-    this.emitCrmLine(tenantId, id, 'number.updated');
-    return result.rows[0];
+      const sessionId = number.waxum_session_id;
+      await this.waxum.releaseSession(sessionId, number.waxum_node).catch((error: Error & { statusCode?: number }) => {
+        // A 4xx means the source no longer holds a live client. Unreachable means its
+        // container is down, so nothing is live there either.
+        if (error.statusCode && error.statusCode >= 500) throw error;
+        if (!error.statusCode) this.logger.warn(`Waxum ${number.waxum_node} unreachable while releasing line ${id}: ${String(error.message).slice(0, 200)}`);
+      });
+      try {
+        await this.waxum.adoptSession(sessionId, number.label, node);
+      } catch (error) {
+        await this.waxum.adoptSession(sessionId, number.label, number.waxum_node).catch(() => undefined);
+        await this.db.query("UPDATE whatsapp_numbers SET status = 'disconnected' WHERE id = $1", [id]);
+        throw error;
+      }
+      await this.db.query('UPDATE whatsapp_numbers SET waxum_node = $2 WHERE id = $1', [id, node]);
+
+      let status = normalizeWaxumStatus(await this.waxum.statusOn(sessionId, node).catch(() => ({})));
+      for (let attempt = 0; !status.connected && attempt < MOVE_CONNECT_CHECKS; attempt += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 1000));
+        status = normalizeWaxumStatus(await this.waxum.statusOn(sessionId, node).catch(() => ({})));
+      }
+      const result = await this.db.query('UPDATE whatsapp_numbers SET status = $2, phone = COALESCE($3, phone) WHERE id = $1 RETURNING *', [id, status.status, status.phone]);
+      await this.audit.record({ actorUserId, tenantId, action: 'number.waxum_node_changed', entityType: 'whatsapp_number', entityId: id, metadata: { from: number.waxum_node, to: node, connected: status.connected } });
+      this.emitCrmLine(tenantId, id, 'number.updated');
+      return result.rows[0];
+    } finally {
+      await this.redis.releaseLock(lockKey, lockToken).catch(() => undefined);
+    }
   }
 
   private async replaceMissingSession(number: any) {

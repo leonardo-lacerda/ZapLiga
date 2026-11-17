@@ -13,7 +13,9 @@ const server = http.createServer(async (request, response) => {
   const url = new URL(request.url ?? '/', 'http://localhost');
   if (url.pathname === '/' || url.pathname === '/livez') return json(response, 200, { ok: true, service: 'fake-waxum' });
   if (request.method === 'POST' && url.pathname === '/api/v1/sessions') {
-    const body = await readBody(request); const id = `fake-${randomUUID()}`;
+    const body = await readBody(request); const id = body.id ? String(body.id) : `fake-${randomUUID()}`;
+    // Like Waxum: an existing id is reconnected with `reuse`, refused without it.
+    if (sessions.has(id)) return body.reuse ? json(response, 200, { session: sessions.get(id) }) : json(response, 409, { error: 'already_exists' });
     const session = { id, name: String(body.name ?? 'CI'), status: 'connected', phone_number: '5511999999999' };
     sessions.set(id, session); return json(response, 201, { session });
   }

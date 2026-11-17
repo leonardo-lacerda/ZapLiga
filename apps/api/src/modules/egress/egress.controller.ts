@@ -21,17 +21,29 @@ export class EgressAdminController {
     return this.egress.saveSettings(actor.id, text(body?.clientId, 'Client ID'), text(body?.clientSecret, 'Client secret', 500));
   }
 
+  @Patch('/settings/pool')
+  savePoolSettings(@Body() body: { poolEnabled?: unknown; maxNumbersPerPc?: unknown; offlineGraceSeconds?: unknown }, @CurrentUser() actor: any) {
+    if (body?.poolEnabled !== undefined && typeof body.poolEnabled !== 'boolean') throw new BadRequestException('poolEnabled inválido');
+    const integer = (value: unknown, field: string, min: number, max: number) => {
+      if (value === undefined) return undefined;
+      if (!Number.isInteger(value) || (value as number) < min || (value as number) > max) throw new BadRequestException(`${field} precisa ser um inteiro entre ${min} e ${max}`);
+      return value as number;
+    };
+    return this.egress.savePoolSettings(actor.id, {
+      poolEnabled: body?.poolEnabled as boolean | undefined,
+      maxNumbersPerPc: integer(body?.maxNumbersPerPc, 'maxNumbersPerPc', 1, 50),
+      offlineGraceSeconds: integer(body?.offlineGraceSeconds, 'offlineGraceSeconds', 30, 86400),
+    });
+  }
+
+  @Get('/install-command')
+  installCommand() { return this.egress.installCommand(); }
+
   @Get('/nodes')
   nodes() { return this.egress.nodes(); }
 
   @Get('/pcs')
   pcs() { return this.egress.listPcs(); }
-
-  @Post('/pcs')
-  addPc(@Body() body: { name?: unknown }, @CurrentUser() actor: any) { return this.egress.addPc(actor.id, text(body?.name, 'Nome', 60)); }
-
-  @Post('/pcs/:id/install-command')
-  installCommand(@Param('id') id: string) { return this.egress.installCommand(id); }
 
   @Patch('/pcs/:id')
   updatePc(@Param('id') id: string, @Body() body: { name?: unknown; fallback?: unknown }, @CurrentUser() actor: any) {

@@ -10,24 +10,24 @@ const REFRESH_MS = 10_000;
 const TAILSCALE_LINKS = {
   signup: 'https://login.tailscale.com/start',
   policy: 'https://login.tailscale.com/admin/acls/file',
-  oauth: 'https://login.tailscale.com/admin/settings/oauth',
+  credentials: 'https://login.tailscale.com/admin/settings/trust-credentials',
 };
 const pcStatus: Record<string, [string, string]> = {
   online: ['Online', 'success'],
   pc_offline: ['PC sem resposta', 'warning'],
-  waiting_install: ['Aguardando instalação', 'info'],
   slot_down: ['Vaga parada na VPS', 'warning'],
+  no_slot: ['Sem vaga livre', 'info'],
 };
 
-type Install = { name: string; windows: string; linux: string; expiresInHours: number };
+type Install = { windows: string; linux: string };
 
 export function AdminEgressPanel() {
   const [settings, setSettings] = useState<AnyRow | null>(null);
-  const [pcs, setPcs] = useState<AnyRow>({ items: [], slots: 0 });
+  const [pcs, setPcs] = useState<AnyRow>({ items: [], slots: 0, vpsNumbers: 0 });
   const [editingSettings, setEditingSettings] = useState(false);
   const [clientId, setClientId] = useState('');
   const [clientSecret, setClientSecret] = useState('');
-  const [newName, setNewName] = useState('');
+  const [pool, setPool] = useState<AnyRow | null>(null);
   const [install, setInstall] = useState<Install | null>(null);
   const [busy, setBusy] = useState('');
   const [message, setMessage] = useState('');
@@ -37,6 +37,7 @@ export function AdminEgressPanel() {
     try {
       const nextSettings = await json('/api/admin/egress/settings');
       setSettings(nextSettings);
+      setPool((current: AnyRow | null) => current ?? { poolEnabled: nextSettings.poolEnabled, maxNumbersPerPc: nextSettings.maxNumbersPerPc, graceMinutes: Math.round(nextSettings.offlineGraceSeconds / 60) });
       if (nextSettings.configured) setPcs(await json('/api/admin/egress/pcs'));
     } catch (error) { setMessage(error instanceof Error ? error.message : String(error)); }
   }, []);
@@ -64,24 +65,18 @@ export function AdminEgressPanel() {
     }, 'Tailscale conectada.');
   };
 
-  const addPc = (event: React.FormEvent) => {
+  const savePool = (event: React.FormEvent) => {
     event.preventDefault();
-    void act('add', async () => {
-      const result = await json('/api/admin/egress/pcs', { method: 'POST', body: JSON.stringify({ name: newName }) });
-      setInstall({ name: result.pc.name, windows: result.windows, linux: result.linux, expiresInHours: result.expiresInHours });
-      setNewName('');
-    });
+    if (!pool) return;
+    void act('pool', () => json('/api/admin/egress/settings/pool', { method: 'PATCH', body: JSON.stringify({ poolEnabled: pool.poolEnabled, maxNumbersPerPc: Number(pool.maxNumbersPerPc), offlineGraceSeconds: Number(pool.graceMinutes) * 60 }) }), 'Distribuição salva. Vale na próxima rodada, em até 30 segundos.');
   };
 
-  const showInstall = (pc: AnyRow) => void act(`install-${pc.id}`, async () => {
-    const result = await json(`/api/admin/egress/pcs/${pc.id}/install-command`, { method: 'POST' });
-    setInstall({ name: pc.name, ...result });
-  });
+  const showInstall = () => void act('install', async () => setInstall(await json('/api/admin/egress/install-command')));
 
   const changeFallback = (pc: AnyRow, fallback: string) => void act(`fallback-${pc.id}`, () => json(`/api/admin/egress/pcs/${pc.id}`, { method: 'PATCH', body: JSON.stringify({ fallback }) }), `${pc.name}: modo salvo. Vale em até 10 segundos.`);
 
   const removePc = (pc: AnyRow) => {
-    if (!window.confirm(`Remover ${pc.name}? Ele sai da Tailscale e a vaga fica livre.`)) return;
+    if (!window.confirm(`Remover ${pc.name}? Os números dele passam para a VPS sem pedir QR, e o PC sai da Tailscale.`)) return;
     void act(`remove-${pc.id}`, () => json(`/api/admin/egress/pcs/${pc.id}`, { method: 'DELETE' }), `${pc.name} removido.`);
   };
 
@@ -92,14 +87,14 @@ export function AdminEgressPanel() {
   if (!settings.configured || editingSettings) {
     const policy = JSON.stringify(settings.policy, null, 2);
     return <Panel>
-      <SectionHeader title="Conectar a Tailscale" description="Uma vez só. Depois disso, cada PC é adicionado com um comando de colar." action={settings.configured ? <Button variant="ghost" onClick={() => setEditingSettings(false)}>Cancelar</Button> : undefined} />
+      <SectionHeader title="Conectar a Tailscale" description="Uma vez só. Depois disso, cada PC entra com um comando de colar." action={settings.configured ? <Button variant="ghost" onClick={() => setEditingSettings(false)}>Cancelar</Button> : undefined} />
       <ol className="egress-steps">
         <li>Crie uma conta grátis na Tailscale: <a href={TAILSCALE_LINKS.signup} target="_blank" rel="noreferrer">tailscale.com</a>.</li>
         <li>Em <a href={TAILSCALE_LINKS.policy} target="_blank" rel="noreferrer">Access controls</a>, apague o que estiver lá, cole esta política e salve:
           <textarea className="egress-code" readOnly rows={8} value={policy} />
           <Button variant="ghost" type="button" onClick={() => void copy(policy, 'Política copiada.')}>Copiar política</Button>
         </li>
-        <li>Em <a href={TAILSCALE_LINKS.oauth} target="_blank" rel="noreferrer">Settings → OAuth clients</a>, crie um client com os escopos <strong>Auth Keys: Write</strong> e <strong>Devices Core: Write</strong>, marcando as tags <code>tag:zapliga-edge</code> e <code>tag:atendente-pc</code>.</li>
+        <li>Em <a href={TAILSCALE_LINKS.credentials} target="_blank" rel="noreferrer">Settings → Trust credentials</a>, crie uma credencial OAuth com os escopos <strong>Auth Keys: Write</strong> e <strong>Devices Core: Write</strong>, marcando as tags <code>tag:zapliga-edge</code> e <code>tag:atendente-pc</code>.</li>
         <li>Cole aqui o Client ID e o Client secret:
           <form className="form-row" onSubmit={saveSettings}>
             <input aria-label="Client ID" placeholder="Client ID" value={clientId} onChange={(event) => setClientId(event.target.value)} required />
@@ -113,44 +108,48 @@ export function AdminEgressPanel() {
   }
 
   const items = pcs.items as AnyRow[];
+  const used = items.filter((pc) => pc.slot).length;
   return <>
     <Panel>
-      <SectionHeader title="PCs de saída" description={`Os números de um PC saem para a internet pela casa do atendente. ${items.length} de ${pcs.slots} vagas em uso.`} action={<Button variant="ghost" onClick={() => setEditingSettings(true)}>Trocar credenciais da Tailscale</Button>} />
-      <form className="form-row" onSubmit={addPc}>
-        <input aria-label="Nome do PC" placeholder="Ex.: PC da Ana" value={newName} onChange={(event) => setNewName(event.target.value)} maxLength={60} required />
-        <Button icon="plus" disabled={busy === 'add' || items.length >= pcs.slots}>{busy === 'add' ? 'Criando...' : 'Adicionar PC'}</Button>
-      </form>
-      {notices}
-      {install && <div className="egress-install">
-        <strong>Instalar no {install.name}</strong>
+      <SectionHeader title="Instalar num PC" description="O mesmo comando para todos os PCs. O PC aparece na lista sozinho e passa a receber números." action={<Button variant="ghost" onClick={() => setEditingSettings(true)}>Trocar credenciais da Tailscale</Button>} />
+      {!install ? <Button icon="plus" onClick={showInstall} disabled={busy === 'install'}>{busy === 'install' ? 'Gerando...' : 'Mostrar comando de instalação'}</Button> : <div className="egress-install">
         <ol className="egress-steps">
-          <li>No PC, clique com o botão direito no menu Iniciar e abra <strong>Terminal (Admin)</strong>, <strong>PowerShell (Admin)</strong> ou o Prompt de Comando como administrador.</li>
+          <li>No PC do atendente, clique com o botão direito no menu Iniciar e abra <strong>Terminal (Admin)</strong>, <strong>PowerShell (Admin)</strong> ou o Prompt de Comando como administrador.</li>
           <li>Cole o comando e aperte Enter:
             <textarea className="egress-code" readOnly rows={4} value={install.windows} />
             <Button variant="ghost" type="button" onClick={() => void copy(install.windows, 'Comando copiado.')}>Copiar comando</Button>
           </li>
-          <li>Em até 1 minuto o PC aparece como <strong>Online</strong> aqui embaixo. Deixe o PC ligado.</li>
+          <li>Em até 1 minuto o PC aparece abaixo como <strong>Online</strong>. Deixe-o ligado.</li>
         </ol>
-        <small className="text-muted">O comando vale por {install.expiresInHours} h e funciona uma vez. Linux: <code>{install.linux}</code></small>
+        <small className="text-muted">Guarde o comando só com quem instala: ele coloca qualquer PC na rede. Linux: <code>{install.linux}</code></small>
         <div className="table-actions"><Button variant="ghost" onClick={() => setInstall(null)}>Fechar</Button></div>
       </div>}
+      {notices}
+    </Panel>
+    {pool && <Panel>
+      <SectionHeader title="Distribuição automática" description="Leia o QR do número na VPS. A plataforma leva o número para o PC online com menos números e tira os números de um PC que fica fora, sem pedir QR de novo." />
+      <form className="form-row" onSubmit={savePool}>
+        <label className="admin-inline-checkbox"><input type="checkbox" checked={Boolean(pool.poolEnabled)} onChange={(event) => setPool({ ...pool, poolEnabled: event.target.checked })} /> Distribuir sozinho</label>
+        <label>Números por PC <input type="number" min={1} max={50} value={pool.maxNumbersPerPc} onChange={(event) => setPool({ ...pool, maxNumbersPerPc: event.target.value })} aria-label="Números por PC" /></label>
+        <label>Tirar números de um PC fora há (min) <input type="number" min={1} max={1440} value={pool.graceMinutes} onChange={(event) => setPool({ ...pool, graceMinutes: event.target.value })} aria-label="Minutos fora antes de tirar os números" /></label>
+        <Button disabled={busy === 'pool'}>{busy === 'pool' ? 'Salvando...' : 'Salvar'}</Button>
+      </form>
+    </Panel>}
+    <Panel>
+      <SectionHeader title="PCs" description={`${used} de ${pcs.slots} vagas em uso · ${pcs.vpsNumbers} número(s) saindo pela VPS.`} />
       {items.map((pc) => {
         const [label, tone] = pcStatus[pc.status] ?? [pc.status, 'info'];
         return <div className="admin-compact-row" key={pc.id}>
-          <div><strong>{pc.name}</strong><small>{pc.tailscale_ip ?? 'ainda não instalado'} · {pc.number_count} número(s)</small></div>
+          <div><strong>{pc.name}</strong><small>{pc.tailscale_ip ?? '—'} · {pc.number_count} número(s)</small></div>
           <Badge tone={tone}>{label}</Badge>
-          <select aria-label="Se o PC desligar" title="Se o PC desligar" value={pc.fallback} disabled={busy === `fallback-${pc.id}`} onChange={(event) => changeFallback(pc, event.target.value)}>
-            <option value="offline">PC desligado: números param</option>
-            <option value="vps">PC desligado: saem pela VPS</option>
+          <select aria-label="Se o PC desligar e não houver outro PC" title="Se o PC desligar e não houver outro PC livre" value={pc.fallback} disabled={busy === `fallback-${pc.id}`} onChange={(event) => changeFallback(pc, event.target.value)}>
+            <option value="offline">Sem outro PC: números param</option>
+            <option value="vps">Sem outro PC: saem pela VPS</option>
           </select>
-          <div className="table-actions">
-            <Button variant="ghost" onClick={() => showInstall(pc)} disabled={busy === `install-${pc.id}`}>Comando de instalação</Button>
-            <Button variant="danger" onClick={() => removePc(pc)} disabled={busy === `remove-${pc.id}`}>Remover</Button>
-          </div>
+          <div className="table-actions"><Button variant="danger" onClick={() => removePc(pc)} disabled={busy === `remove-${pc.id}`}>Remover</Button></div>
         </div>;
       })}
-      {!items.length && <EmptyState title="Nenhum PC ainda" description="Adicione o PC de um atendente para começar." />}
+      {!items.length && <EmptyState title="Nenhum PC ainda" description="Rode o comando de instalação no PC de um atendente." />}
     </Panel>
-    <small className="form-hint">Para um número sair por um PC: Empresas → Detalhes → Números, escolha o PC em “Saída de internet” e leia o QR do número.</small>
   </>;
 }

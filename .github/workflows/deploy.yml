@@ -255,6 +255,20 @@ jobs:
           # Saídas de internet (docs/saida-pelo-pc-do-atendente.md). A slot with
           # no PC idles; a slot that fails to start (no /dev/net/tun, say) must
           # not block the deploy of everything else.
+          # One-off move of the layout: slot Waxums used to keep their sessions in
+          # their own volume (now their registry). Copy those sessions into the
+          # shared storage, with the slot stopped so SQLite is consistent.
+          waxum_image=$(awk '/^  waxum:/ { found = 1 } found && /image:/ { print $2; exit }' docker-compose.yml)
+          for volume in $(docker volume ls -q --filter name=zapliga_waxum_edge_); do
+            legacy=$(docker run --rm -v "$volume":/registry --entrypoint sh "$waxum_image" -c 'for d in /registry/*/; do [ -f "$d/whatsapp.db" ] && echo "$d"; done; true')
+            [ -n "$legacy" ] || continue
+            service=$(printf '%s' "${volume#zapliga_}" | sed 's/_data$//; s/_/-/g')
+            echo "Movendo as sessões de $service para o armazenamento compartilhado"
+            "${COMPOSE[@]}" stop "$service" </dev/null || true
+            docker run --rm -v "$volume":/registry -v zapliga_waxum_data:/sessions --entrypoint sh "$waxum_image" -c \
+              'for d in /registry/*/; do [ -f "$d/whatsapp.db" ] || continue; n=$(basename "$d"); [ -e "/sessions/$n" ] || cp -a "$d" "/sessions/$n"; rm -rf "$d"; done'
+          done
+
           edge_services=$("${COMPOSE[@]}" config --services | grep -- '-edge-' || true)
           if [ -n "$edge_services" ]; then
             # shellcheck disable=SC2086

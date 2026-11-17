@@ -17,20 +17,39 @@ serve de porta de saída para a internet. Tudo é configurado em
 ## Usar
 
 1. **Uma vez:** em Admin → Saídas de internet, siga os 4 passos da tela: criar a
-   conta na Tailscale, colar a política, criar o OAuth client e colar o Client ID
-   e o secret.
-2. **Por PC:** "Adicionar PC" mostra um comando. No PC (Windows), abra o
-   Terminal como administrador, cole e aperte Enter. Em até 1 minuto o PC
-   aparece como **Online**. O comando instala a Tailscale, liga o PC como saída,
-   mantém a Tailscale rodando com o Windows bloqueado e desliga a suspensão.
-3. **Por número:** em Empresas → Detalhes → Números, escolha o PC em "Saída" e
-   leia o QR. O QR é lido uma vez; o PC desligar e ligar não pede QR de novo.
-   Trocar a saída de novo pede.
+   conta na Tailscale, colar a política, criar a credencial OAuth e colar o
+   Client ID e o secret.
+2. **Por PC:** "Mostrar comando de instalação" mostra um comando, o mesmo para
+   todos os PCs. No PC (Windows), abra o Terminal como administrador, cole e
+   aperte Enter. O PC aparece sozinho na lista e ocupa uma vaga. O comando
+   instala a Tailscale, liga o PC como saída, mantém a Tailscale rodando com o
+   Windows bloqueado e desliga a suspensão. Guarde o comando só com quem
+   instala: ele coloca qualquer PC na rede.
+3. **Por número:** leia o QR na VPS, como sempre. Com a distribuição automática
+   ligada, a plataforma leva o número para o PC online com menos números (até
+   o limite por PC). Também dá para escolher a saída à mão em Empresas →
+   Detalhes → Números. Em nenhum dos casos é preciso ler o QR de novo.
+
+## Distribuição automática
+
+A cada 30 s, uma instância da API (`EgressPoolService`):
+
+- leva os números conectados que estão na VPS para o PC online com menos
+  números, até "Números por PC";
+- tira os números de um PC que está fora há mais que o tempo configurado e os
+  leva para outro PC online com vaga. Sem PC com vaga, eles vão para a VPS se o
+  modo do PC for "saem pela VPS", e esperam o PC voltar se for "números param";
+- move no máximo 2 números por rodada e nunca um número em ligação;
+- não devolve um número ao PC de onde ele saiu, para o IP dele não ficar
+  mudando.
+
+Remover um PC passa os números dele para a VPS e tira o PC da Tailscale.
 
 ## Quando o PC desliga
 
-Cada PC tem um modo, escolhido na lista de PCs. A vaga testa o PC a cada 10 s e
-só considera que ele caiu depois de 3 falhas seguidas (cerca de 30 s).
+A vaga testa o PC a cada 10 s e só considera que ele caiu depois de 3 falhas
+seguidas (cerca de 30 s). Até a distribuição tirar os números de lá, vale o
+modo do PC:
 
 | Modo | PC fora | PC volta |
 |---|---|---|
@@ -40,12 +59,12 @@ só considera que ele caiu depois de 3 falhas seguidas (cerca de 30 s).
 A troca de rota derruba uma ligação em andamento.
 
 Status na lista: **Online**; **PC sem resposta** (PC desligado ou sem
-internet); **Aguardando instalação** (o comando ainda não rodou no PC);
-**Vaga parada na VPS** (o contêiner da vaga não está respondendo: veja os logs).
+internet); **Vaga parada na VPS** (o contêiner da vaga não está respondendo:
+veja os logs); **Sem vaga livre** (todas as vagas ocupadas).
 
 ## Como funciona por dentro
 
-- `docker-compose.yml` tem 5 vagas, cada uma um par:
+- `docker-compose.yml` tem 10 vagas, cada uma um par:
   - `tailscale-edge-N` roda a Tailscale e o vigia `infra/egress/edge-entrypoint.sh`.
     A cada 10 s ele pergunta à API (`/api/internal/egress/slots/edge-N`, com a
     `WAXUM_API_KEY`) qual PC atende a vaga, entra na Tailscale com uma chave
@@ -53,13 +72,22 @@ internet); **Aguardando instalação** (o comando ainda não rodou no PC);
   - `waxum-edge-N` roda dentro da rede do `tailscale-edge-N`. Ele só sobe depois
     que a vaga tem um PC (`infra/egress/waxum-edge-guard.sh`), para nunca sair
     pela VPS por engano.
-- Vaga sem PC fica parada. Mais vagas: copie os blocos de `edge-5` e
-  acrescente a vaga em `WAXUM_EDGE_NODES`.
+- **Sessões compartilhadas:** todos os waxums montam o mesmo `waxum_data`, onde
+  fica a pasta de cada sessão (as chaves do aparelho conectado). Cada waxum das
+  vagas tem a própria lista de sessões (`SQLITE_PATH` no volume
+  `waxum_edge_N_data`). Trocar a saída de um número
+  (`NumbersService.moveToWaxumNode`) é: tirar o número do discador, o waxum de
+  origem soltar a sessão (`/disconnect`, sem deslogar) e o de destino abri-la
+  (`POST /sessions` com o mesmo `id` e `reuse`). O id da sessão não muda e não
+  há QR. Um lock no Redis impede duas trocas do mesmo número.
+- Mais vagas: copie os blocos de `edge-10` e acrescente a vaga em
+  `WAXUM_EDGE_NODES`.
 - `whatsapp_numbers.waxum_node` diz em qual waxum cada número está (`main` ou
   `edge-N`). Um número só passa para um PC que esteja online.
-- A API guarda o OAuth client criptografado (`egress_settings`) e os PCs em
-  `egress_pcs`. Remover um PC exige tirar os números dele antes; o PC sai da
-  Tailscale.
+- A API guarda a credencial OAuth e a chave reutilizável do comando de
+  instalação criptografadas (`egress_settings`, renovada uma semana antes de
+  vencer os 90 dias) e os PCs em `egress_pcs`. Todo aparelho da Tailscale com a
+  tag `tag:atendente-pc` vira um PC.
 - A política da Tailscale só deixa as vagas usarem os PCs como saída para a
   internet: o PC não acessa a VPS, e a VPS não acessa a rede da casa.
 

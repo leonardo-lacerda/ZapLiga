@@ -6,6 +6,7 @@ import { DatabaseService } from '../../database/database.service';
 type WaxumSession = { id: string; name?: string; phone_number?: string; status?: string };
 
 export const MAIN_WAXUM_NODE = 'main';
+const SESSION_NODE_TTL_MS = 3000;
 
 // `main` goes out through the VPS; WAXUM_EDGE_NODES (`edge-1=http://tailscale-edge-1:3451,…`)
 // lists the Waxums that go out through an attendant's PC (docs/saida-pelo-pc-do-atendente.md).
@@ -22,8 +23,9 @@ export function waxumNodes() {
 @Injectable()
 export class WaxumClient implements OnModuleDestroy {
   private readonly nodes = waxumNodes();
-  // A session lives on the Waxum that created it until it is deleted, so this never goes stale.
-  private readonly sessionNodes = new Map<string, string>();
+  // Which Waxum holds each session. Sessions move between Waxums (NumbersService.moveToWaxumNode),
+  // possibly from the other API instance, so an entry only lives a few seconds.
+  private readonly sessionNodes = new Map<string, { node: string; until: number }>();
   private readonly apiKey = process.env.WAXUM_API_KEY;
   private readonly natsUrl = process.env.NATS_URL ?? 'nats://localhost:4222';
   private readonly requestIntervalMs = (() => {
@@ -57,14 +59,17 @@ export class WaxumClient implements OnModuleDestroy {
   }
 
   private async sessionUrl(sessionId: string) {
-    let node = this.sessionNodes.get(sessionId);
-    if (!node) {
-      const result = await this.db.query<{ waxum_node: string }>('SELECT waxum_node FROM whatsapp_numbers WHERE waxum_session_id = $1', [sessionId]);
-      node = result.rows[0]?.waxum_node;
-      if (!node) throw new Error(`Sessão Waxum ${sessionId} não pertence a nenhum número`);
-      this.sessionNodes.set(sessionId, node);
-    }
+    const cached = this.sessionNodes.get(sessionId);
+    if (cached && cached.until > Date.now()) return this.nodeUrl(cached.node);
+    const result = await this.db.query<{ waxum_node: string }>('SELECT waxum_node FROM whatsapp_numbers WHERE waxum_session_id = $1', [sessionId]);
+    const node = result.rows[0]?.waxum_node;
+    if (!node) throw new Error(`Sessão Waxum ${sessionId} não pertence a nenhum número`);
+    this.rememberNode(sessionId, node);
     return this.nodeUrl(node);
+  }
+
+  private rememberNode(sessionId: string, node: string) {
+    this.sessionNodes.set(sessionId, { node, until: Date.now() + SESSION_NODE_TTL_MS });
   }
 
   private request<T>(path: string, init: RequestInit = {}, maxAttempts = 3, node?: string): Promise<T> {
@@ -119,8 +124,28 @@ export class WaxumClient implements OnModuleDestroy {
 
   async createSession(name: string, node: string) {
     const { session } = await this.request<{ session: WaxumSession }>('/api/v1/sessions', { method: 'POST', body: JSON.stringify({ name }) }, 3, node);
-    this.sessionNodes.set(session.id, node);
+    this.rememberNode(session.id, node);
     return session;
+  }
+
+  /**
+   * Moving a line between Waxums. Every Waxum mounts the same session storage
+   * (docker-compose.yml), so the device keys stay put: the source lets go of the
+   * session without logging out, and the target opens it from storage — no QR.
+   */
+  releaseSession(sessionId: string, node: string) {
+    return this.request<any>(`/api/v1/sessions/${encodeURIComponent(sessionId)}/disconnect`, { method: 'POST' }, 1, node);
+  }
+
+  async adoptSession(sessionId: string, name: string, node: string) {
+    // `reuse` reconnects a session this Waxum already knows (it held the line before).
+    const result = await this.request<any>('/api/v1/sessions', { method: 'POST', body: JSON.stringify({ id: sessionId, name, reuse: true }) }, 1, node);
+    this.rememberNode(sessionId, node);
+    return result;
+  }
+
+  statusOn(sessionId: string, node: string) {
+    return this.request<any>(`/api/v1/sessions/${encodeURIComponent(sessionId)}/status`, {}, 1, node);
   }
   async deleteSession(sessionId: string) {
     const result = await this.request<any>(`/api/v1/sessions/${encodeURIComponent(sessionId)}`, { method: 'DELETE' }, 1);

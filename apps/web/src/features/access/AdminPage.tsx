@@ -233,8 +233,8 @@ export function AdminPage({ onChanged, onOpenTenant }: { onChanged?: () => Promi
 
   const moveNumberToWaxumNode = async (tenantId: string, number: AnyRow, node: string) => {
     const label = waxumNodes.find((item) => item.node === node)?.label ?? node;
-    if (!window.confirm(`Trocar a saída de ${number.label} para ${label}? O número desconecta e precisa ler o QR de novo.`)) return;
-    await act(`number-node-${number.id}`, () => tenantJson(tenantId, `/api/admin/tenants/${tenantId}/numbers/${number.id}/waxum-node`, { method: 'POST', body: JSON.stringify({ node }) }), `${number.label} agora sai por ${label}. Leia o QR de novo.`);
+    if (!window.confirm(`Trocar a saída de ${number.label} para ${label}? A linha fica fora por alguns segundos, sem precisar de QR.`)) return;
+    await act(`number-node-${number.id}`, () => tenantJson(tenantId, `/api/admin/tenants/${tenantId}/numbers/${number.id}/waxum-node`, { method: 'POST', body: JSON.stringify({ node }) }), `${number.label} agora sai por ${label}.`);
     await openTenantDetails(tenantId);
   };
 
