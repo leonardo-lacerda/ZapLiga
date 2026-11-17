@@ -19,6 +19,7 @@ class UpdateFeatureFlagsDto {
   @IsOptional() @IsBoolean() advanced_reports?: boolean;
   @IsOptional() @IsBoolean() crm_integration?: boolean;
   @IsOptional() @IsBoolean() call_recording?: boolean;
+  @IsOptional() @IsBoolean() whatsapp_provisioning?: boolean;
 }
 
 @Controller('/api/tenants/:tenantId/feature-flags')

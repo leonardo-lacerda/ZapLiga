@@ -91,6 +91,54 @@ veja os logs); **Sem vaga livre** (todas as vagas ocupadas).
 - A política da Tailscale só deixa as vagas usarem os PCs como saída para a
   internet: o PC não acessa a VPS, e a VPS não acessa a rede da casa.
 
+## Proxy do cadastro (GeeLark)
+
+O cadastro de números em cloud phones do GeeLark
+([`provisioning-contract.md`](provisioning-contract.md), seção 4) usa a mesma vaga do PC: o
+phone fala SOCKS5 com a VPS e sai pela internet do PC, com o mesmo IP das linhas daquela vaga.
+
+```
+cloud phone ──SOCKS5──► socks-gateway (porta pública) ──► socks-edge-N ══► PC do atendente ──► internet
+             usuário edge-N + senha                     (rede do tailscale-edge-N)
+```
+
+- `socks-edge-N` roda dentro da rede do `tailscale-edge-N` e só aceita conexão enquanto
+  `/egress/route` for `pc`: com o PC fora (`offline`/`vps`) ou sem PC, recusa — o cadastro nunca
+  sai pela VPS. Ele não mexe na vaga: `tailscale-edge-N` e `waxum-edge-N` continuam iguais e
+  as linhas que já saem pelo PC não caem.
+- `socks-gateway` pede usuário = vaga (`edge-1`…`edge-10`) e senha = `EGRESS_SOCKS_PASSWORD`, e
+  repassa para o `socks-edge-N` da vaga. Senha vazia recusa todo mundo.
+- Antes de ligar o phone, o `geelark-worker` pergunta o IP do PC pelo mesmo proxy (pela rede
+  interna) e depois exige o mesmo IP de dentro do phone.
+
+**A porta vem fechada.** Por padrão ela só escuta em `127.0.0.1`. Para o GeeLark alcançar, no
+`.env` de produção (`/opt/zapliga/.env`):
+
+```bash
+EGRESS_SOCKS_BIND=0.0.0.0
+EGRESS_SOCKS_PORT=1080                       # porta pública (o padrão)
+EGRESS_SOCKS_PASSWORD=<senha longa e aleatória>   # ex.: openssl rand -base64 32 | tr -d '/+='
+EGRESS_SOCKS_PUBLIC_HOST=<IP ou nome público da VPS>
+```
+
+e libere `EGRESS_SOCKS_PORT` (TCP) no firewall da VPS / do provedor. O próximo deploy recria o
+`socks-gateway` com a porta aberta (ou, à mão, `docker compose up -d --no-deps socks-gateway`, e
+`api-a`/`api-b` para eles lerem a senha). Nunca abra a porta com a senha vazia ou fraca: quem
+tiver a senha sai pela internet dos PCs.
+
+Testar de fora da VPS (deve imprimir o IP do PC da vaga, não o da VPS):
+
+```bash
+curl --socks5-hostname edge-1:<senha>@<host>:1080 https://api.ipify.org
+```
+
+Com o PC da vaga desligado o `curl` falha (o proxy recusa a conexão). Logs: uma
+linha por conexão, com vaga, destino e resultado (sem a senha):
+
+```bash
+docker compose logs --tail=50 socks-gateway socks-edge-1
+```
+
 ## Diagnóstico
 
 ```bash

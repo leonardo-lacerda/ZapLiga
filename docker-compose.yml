@@ -57,6 +57,15 @@ x-api-environment: &api-environment
   GROQ_TRANSCRIPTION_MODEL: ${GROQ_TRANSCRIPTION_MODEL:-whisper-large-v3}
   GROQ_TRANSCRIPTION_PROMPT: ${GROQ_TRANSCRIPTION_PROMPT:-}
   CALL_TRANSCRIPTION_MIN_SECONDS: ${CALL_TRANSCRIPTION_MIN_SECONDS:-15}
+  # Cadastro de WhatsApp em cloud phones (docs/provisioning-contract.md). O phone sai
+  # pelo PC do atendente através do socks-gateway (seção 4). Sem
+  # EGRESS_SOCKS_PUBLIC_HOST/EGRESS_SOCKS_PASSWORD o assistente fica bloqueado.
+  GEELARK_WORKER_URL: ${GEELARK_WORKER_URL:-http://geelark-worker:8080}
+  GEELARK_WORKER_TOKEN: ${GEELARK_WORKER_TOKEN:-zapcall-local-worker-token}
+  EGRESS_SOCKS_PUBLIC_HOST: ${EGRESS_SOCKS_PUBLIC_HOST:-}
+  EGRESS_SOCKS_PORT: ${EGRESS_SOCKS_PORT:-1080}
+  EGRESS_SOCKS_PASSWORD: ${EGRESS_SOCKS_PASSWORD:-}
+  EGRESS_SOCKS_INTERNAL_URL: ${EGRESS_SOCKS_INTERNAL_URL:-socks-gateway:1080}
 
 x-edge-tailscale: &edge-tailscale
   image: tailscale/tailscale:v1.104.7
@@ -91,6 +100,28 @@ x-edge-waxum-environment: &edge-waxum-environment
   EGRESS_ROUTE_FILE: /egress/route
   # This Waxum's own list of sessions; the sessions themselves are shared.
   SQLITE_PATH: /app/registry/waxum.db
+
+# Registration proxy (docs/provisioning-contract.md, section 4): the GeeLark cloud
+# phone talks SOCKS5 to socks-gateway, which hands the connection to the slot's
+# socks-edge-N. Same image as geelark-worker (built by the deploy, light Python).
+x-socks-common: &socks-common
+  image: zapliga-geelark-worker:latest
+  # Built locally from services/geelark-worker; never pulled from a registry.
+  pull_policy: never
+  init: true
+  restart: unless-stopped
+  healthcheck:
+    test: ["CMD", "python", "-c", "import socket; socket.create_connection(('127.0.0.1', 1080), 3).close()"]
+    interval: 30s
+    timeout: 5s
+    start_period: 10s
+    retries: 3
+
+# One per PC slot, inside tailscale-edge-N's network: accepts only while
+# /egress/route is `pc`, so a registration never goes out through the VPS.
+x-socks-edge: &socks-edge
+  <<: *socks-common
+  command: ["python", "-m", "app.socks5", "edge"]
 
 x-api-common: &api-common
   init: true
@@ -531,6 +562,134 @@ services:
       - "127.0.0.1:${API_B_HOST_PORT:-3001}:3000"
     volumes:
       - call_recordings:/var/lib/zapliga/recordings
+
+  # Automação dos cloud phones do GeeLark (ADB + uiautomator2). Só a rede interna
+  # do Compose fala com ele (sem porta publicada). O deploy builda a imagem (Python,
+  # leve) e sobe este serviço e o socks-gateway depois do web.
+  geelark-worker:
+    build:
+      context: services/geelark-worker
+    image: zapliga-geelark-worker:latest
+    init: true
+    restart: unless-stopped
+    environment:
+      GEELARK_API_TOKEN: ${GEELARK_API_TOKEN:-}
+      GEELARK_WORKER_TOKEN: ${GEELARK_WORKER_TOKEN:-zapcall-local-worker-token}
+      WORKER_MAX_JOBS: ${GEELARK_WORKER_MAX_JOBS:-2}
+    stop_grace_period: 30s
+
+  # Proxy SOCKS5 do cadastro (docs/saida-pelo-pc-do-atendente.md, "Proxy do cadastro").
+  # Usuário = vaga (edge-N), senha = EGRESS_SOCKS_PASSWORD (vazia recusa tudo). A porta
+  # fica só em 127.0.0.1 até o .env de produção definir EGRESS_SOCKS_BIND=0.0.0.0.
+  socks-gateway:
+    <<: *socks-common
+    command: ["python", "-m", "app.socks5", "gateway"]
+    environment:
+      EGRESS_SOCKS_PASSWORD: ${EGRESS_SOCKS_PASSWORD:-}
+    ports:
+      - "${EGRESS_SOCKS_BIND:-127.0.0.1}:${EGRESS_SOCKS_PORT:-1080}:1080"
+
+  # One SOCKS5 per PC slot, in the slot's network (reachable as tailscale-edge-N:1080).
+  # The slot containers above are untouched: these only attach to them.
+  socks-edge-1:
+    <<: *socks-edge
+    network_mode: service:tailscale-edge-1
+    environment:
+      EGRESS_SLOT: edge-1
+    volumes:
+      - egress_edge_1:/egress:ro
+    depends_on:
+      - tailscale-edge-1
+
+  socks-edge-2:
+    <<: *socks-edge
+    network_mode: service:tailscale-edge-2
+    environment:
+      EGRESS_SLOT: edge-2
+    volumes:
+      - egress_edge_2:/egress:ro
+    depends_on:
+      - tailscale-edge-2
+
+  socks-edge-3:
+    <<: *socks-edge
+    network_mode: service:tailscale-edge-3
+    environment:
+      EGRESS_SLOT: edge-3
+    volumes:
+      - egress_edge_3:/egress:ro
+    depends_on:
+      - tailscale-edge-3
+
+  socks-edge-4:
+    <<: *socks-edge
+    network_mode: service:tailscale-edge-4
+    environment:
+      EGRESS_SLOT: edge-4
+    volumes:
+      - egress_edge_4:/egress:ro
+    depends_on:
+      - tailscale-edge-4
+
+  socks-edge-5:
+    <<: *socks-edge
+    network_mode: service:tailscale-edge-5
+    environment:
+      EGRESS_SLOT: edge-5
+    volumes:
+      - egress_edge_5:/egress:ro
+    depends_on:
+      - tailscale-edge-5
+
+  socks-edge-6:
+    <<: *socks-edge
+    network_mode: service:tailscale-edge-6
+    environment:
+      EGRESS_SLOT: edge-6
+    volumes:
+      - egress_edge_6:/egress:ro
+    depends_on:
+      - tailscale-edge-6
+
+  socks-edge-7:
+    <<: *socks-edge
+    network_mode: service:tailscale-edge-7
+    environment:
+      EGRESS_SLOT: edge-7
+    volumes:
+      - egress_edge_7:/egress:ro
+    depends_on:
+      - tailscale-edge-7
+
+  socks-edge-8:
+    <<: *socks-edge
+    network_mode: service:tailscale-edge-8
+    environment:
+      EGRESS_SLOT: edge-8
+    volumes:
+      - egress_edge_8:/egress:ro
+    depends_on:
+      - tailscale-edge-8
+
+  socks-edge-9:
+    <<: *socks-edge
+    network_mode: service:tailscale-edge-9
+    environment:
+      EGRESS_SLOT: edge-9
+    volumes:
+      - egress_edge_9:/egress:ro
+    depends_on:
+      - tailscale-edge-9
+
+  socks-edge-10:
+    <<: *socks-edge
+    network_mode: service:tailscale-edge-10
+    environment:
+      EGRESS_SLOT: edge-10
+    volumes:
+      - egress_edge_10:/egress:ro
+    depends_on:
+      - tailscale-edge-10
 
   web:
     build:

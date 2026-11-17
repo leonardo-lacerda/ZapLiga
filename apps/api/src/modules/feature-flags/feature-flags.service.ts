@@ -19,6 +19,7 @@ export const TENANT_FEATURES = [
   'advanced_reports',
   'crm_integration',
   'call_recording',
+  'whatsapp_provisioning',
 ] as const;
 export type TenantFeature = typeof TENANT_FEATURES[number];
 export type TenantFeatureFlags = Record<TenantFeature, boolean>;
@@ -44,7 +45,16 @@ export const defaultTenantFeatureFlags = (): TenantFeatureFlags => ({
   crm_integration: false,
   // Needs a legal basis, notice to the lead and a retention policy before turning on.
   call_recording: false,
+  // Internal operation tool (GeeLark cloud phone provisioning); never offered to customers.
+  whatsapp_provisioning: false,
 });
+
+/**
+ * Internal-operation features. No commercial plan snapshot (current or historical) can grant
+ * them: only the super admin toggle ("Recursos da empresa") or an explicit per-tenant
+ * entitlement override decides. The operational kill switch still applies.
+ */
+export const INTERNAL_TENANT_FEATURES: ReadonlySet<TenantFeature> = new Set<TenantFeature>(['whatsapp_provisioning']);
 
 const normalizeFeatureFlags = (value: unknown): TenantFeatureFlags => {
   const flags = defaultTenantFeatureFlags();
@@ -122,15 +132,18 @@ export class FeatureFlagsService {
     `, [tenantId])).rows[0];
     const legacy = normalizeFeatureFlags(row);
     // Overrides are the admin's explicit per-tenant, per-feature decision and win over the plan.
-    const active = { ...normalizeLevels(row?.feature_entitlements), ...(await this.overrideLevels(tenantId)) };
+    const overrides = await this.overrideLevels(tenantId);
+    const active = { ...normalizeLevels(row?.feature_entitlements), ...overrides };
     const historical = normalizeLevels(row?.last_active_feature_entitlements);
     const operational = row?.operational_flags && typeof row.operational_flags === 'object' ? row.operational_flags as Record<string, unknown> : {};
     const planDecides = planDecidesFeatures(row);
     const flags = { ...legacy };
     for (const feature of TENANT_FEATURES) {
-      const level = planDecides
-        ? (active[feature] ?? 'none')
-        : (active[feature] ?? historical[feature]);
+      const level = INTERNAL_TENANT_FEATURES.has(feature)
+        ? overrides[feature]
+        : planDecides
+          ? (active[feature] ?? 'none')
+          : (active[feature] ?? historical[feature]);
       if (level) flags[feature] = level !== 'none';
       if (operational[feature] === false) flags[feature] = false;
     }
@@ -153,7 +166,8 @@ export class FeatureFlagsService {
       WHERE t.id = $1
     `, [tenantId]);
     const row = result.rows[0] ?? {};
-    const active = { ...normalizeLevels(row.feature_entitlements), ...(await this.overrideLevels(tenantId)) };
+    const overrides = await this.overrideLevels(tenantId);
+    const active = { ...normalizeLevels(row.feature_entitlements), ...overrides };
     const historical = normalizeLevels(row.last_active_feature_entitlements);
     const operational = row.operational_flags && typeof row.operational_flags === 'object' ? row.operational_flags as Record<string, unknown> : {};
     const fullyEntitled = row.access_mode === 'full' && (!row.access_until || new Date(row.access_until).getTime() > Date.now());
@@ -164,7 +178,9 @@ export class FeatureFlagsService {
     const toggles = normalizeFeatureFlags(row);
     const levels = {} as TenantFeatureEntitlements;
     for (const feature of TENANT_FEATURES) {
-      const configured = active[feature] ?? historical[feature] ?? (fullyEntitled && planDecides ? 'none' : (toggles[feature] ? 'full' : 'none'));
+      const configured = INTERNAL_TENANT_FEATURES.has(feature)
+        ? (overrides[feature] ?? (toggles[feature] ? 'full' : 'none'))
+        : (active[feature] ?? historical[feature] ?? (fullyEntitled && planDecides ? 'none' : (toggles[feature] ? 'full' : 'none')));
       levels[feature] = operational[feature] === false ? 'none' : (fullyEntitled ? configured : (configured === 'none' ? 'none' : 'read_only'));
     }
     return levels;

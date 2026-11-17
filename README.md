@@ -232,3 +232,4 @@ As migrations são de ida e rodam no boot da API. Se uma migration causar proble
 - [Roadmap de vantagens defensáveis](docs/roadmap-diferenciais/README.md)
 - [Postmortem — áudio unidirecional nas chamadas (causas, correções e como diagnosticar)](docs/postmortem-audio-unidirecional.md)
 - [Imagem do Waxum: patch, build reproduzível e troca de versão](infra/waxum/README.md)
+- [Plano de cadastro de WhatsApp em cloud phones GeeLark](docs/plano-cadastro-whatsapp-geelark.md) e [contrato web ↔ API ↔ worker](docs/provisioning-contract.md) (recurso interno, flag `whatsapp_provisioning`)

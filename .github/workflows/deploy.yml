@@ -269,7 +269,19 @@ jobs:
               'for d in /registry/*/; do [ -f "$d/whatsapp.db" ] || continue; n=$(basename "$d"); [ -e "/sessions/$n" ] || cp -a "$d" "/sessions/$n"; rm -rf "$d"; done'
           done
 
+          # The registration proxies (socks-edge-N, inside each slot's network) and
+          # socks-gateway / geelark-worker run the geelark-worker image: a light
+          # Python image (no Rust), built here like api/web, before the slot block
+          # below starts socks-edge-N. A failed build must not block the deploy of
+          # everything else; without the image the socks-edge-N are left out.
+          WORKER_IMAGE=zapliga-geelark-worker:latest
+          "${COMPOSE[@]}" build geelark-worker </dev/null \
+            || echo "Aviso: a imagem do geelark-worker não buildou; seguindo o deploy" >&2
+
           edge_services=$("${COMPOSE[@]}" config --services | grep -- '-edge-' || true)
+          if ! docker image inspect "$WORKER_IMAGE" >/dev/null 2>&1; then
+            edge_services=$(printf '%s\n' "$edge_services" | grep -v '^socks-edge-' || true)
+          fi
           if [ -n "$edge_services" ]; then
             # shellcheck disable=SC2086
             "${COMPOSE[@]}" up -d $edge_services </dev/null \
@@ -366,6 +378,16 @@ jobs:
           if [ -z "$web_asset" ] || ! curl -fsS "$WEB_BASE$web_asset" | grep -F '/app/cobranca' >/dev/null; then
             echo "Frontend publicado sem a rota /app/cobranca" >&2
             exit 1
+          fi
+
+          # WhatsApp registration on GeeLark cloud phones (docs/provisioning-contract.md):
+          # the worker and the public SOCKS5 gateway. Optional feature: a failure here
+          # is reported but does not fail the deploy of the API/web already live.
+          if docker image inspect "$WORKER_IMAGE" >/dev/null 2>&1; then
+            "${COMPOSE[@]}" up -d --no-deps geelark-worker socks-gateway </dev/null \
+              || echo "Aviso: geelark-worker/socks-gateway não subiram" >&2
+          else
+            echo "Aviso: sem a imagem $WORKER_IMAGE; geelark-worker e socks-gateway não foram atualizados" >&2
           fi
 
           # Keep the rollback tag plus the last 5 SHA tags per API image so the

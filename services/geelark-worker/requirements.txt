@@ -1,0 +1,5 @@
+fastapi==0.115.6
+uvicorn[standard]==0.32.1
+uiautomator2==3.2.8
+adbutils==2.8.0
+requests==2.32.3

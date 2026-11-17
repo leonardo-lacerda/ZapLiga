@@ -4,7 +4,7 @@ import userEvent from '@testing-library/user-event';
 import { vi } from 'vitest';
 import { NumbersPage } from './NumbersPage';
 
-function Harness({ onCreate }: { onCreate: (payload: Record<string, unknown>) => void }) {
+function Harness({ onCreate, canProvision = false, onOpenProvisioning }: { onCreate: (payload: Record<string, unknown>) => void; canProvision?: boolean; onOpenProvisioning?: () => void }) {
   const [numberForm, setNumberForm] = useState({ label: '', phone: '' });
   const createNumber = (event: FormEvent) => {
     event.preventDefault();
@@ -26,9 +26,22 @@ function Harness({ onCreate }: { onCreate: (payload: Record<string, unknown>) =>
       qr={null}
       closeQr={() => undefined}
       canManageNumbers
+      canProvision={canProvision}
+      onOpenProvisioning={onOpenProvisioning}
     />
   );
 }
+
+it('esconde o botão do GeeLark sem a flag/permissão e abre o cadastro com ela', async () => {
+  const { unmount } = render(<Harness onCreate={vi.fn()} />);
+  expect(screen.queryByRole('button', { name: /Cadastrar número no GeeLark/i })).not.toBeInTheDocument();
+  unmount();
+
+  const onOpenProvisioning = vi.fn();
+  render(<Harness onCreate={vi.fn()} canProvision onOpenProvisioning={onOpenProvisioning} />);
+  await userEvent.click(screen.getByRole('button', { name: /Cadastrar número no GeeLark/i }));
+  expect(onOpenProvisioning).toHaveBeenCalled();
+});
 
 it('mostra labels claros no formulário de adicionar número, sem duplicar Configurações do discador', () => {
   render(<Harness onCreate={vi.fn()} />);

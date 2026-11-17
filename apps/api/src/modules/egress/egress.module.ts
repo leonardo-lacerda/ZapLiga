@@ -6,5 +6,5 @@ import { EgressAdminController, EgressInternalController } from './egress.contro
 import { EgressPoolService } from './egress-pool.service';
 import { EgressService } from './egress.service';
 
-@Module({ imports: [AuthModule, AuditModule, NumbersModule], controllers: [EgressAdminController, EgressInternalController], providers: [EgressService, EgressPoolService] })
+@Module({ imports: [AuthModule, AuditModule, NumbersModule], controllers: [EgressAdminController, EgressInternalController], providers: [EgressService, EgressPoolService], exports: [EgressService] })
 export class EgressModule {}

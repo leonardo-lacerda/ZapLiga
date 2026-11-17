@@ -176,8 +176,21 @@ export class EgressService {
 
   // The exits a line can be moved to: the VPS plus every slot with a PC.
   async nodes() {
-    const pcs = await this.db.query(`SELECT slot, name, route = 'pc' AND route_reported_at > now() - make_interval(secs => $1) AS online FROM egress_pcs WHERE slot IS NOT NULL ORDER BY created_at`, [REPORT_STALE_SECONDS]);
-    return { items: [{ node: MAIN_WAXUM_NODE, label: 'VPS', online: true }, ...pcs.rows.map((pc) => ({ node: pc.slot, label: pc.name, online: pc.online }))] };
+    const pcs = await this.pcExits();
+    return { items: [{ node: MAIN_WAXUM_NODE, label: 'VPS', online: true }, ...pcs.map((pc) => ({ node: pc.slot, label: pc.name, online: pc.online }))] };
+  }
+
+  /**
+   * The PCs that hold a slot, with the id that identifies them while their slot
+   * may change. `online`: the slot reports going out through the PC, recently.
+   * Also read by the WhatsApp provisioning (docs/provisioning-contract.md, section 4).
+   */
+  async pcExits(id?: string): Promise<Array<{ id: string; name: string; slot: string; online: boolean }>> {
+    const result = await this.db.query(`
+      SELECT id, name, slot, COALESCE(route = 'pc' AND route_reported_at > now() - make_interval(secs => $1), false) AS online
+      FROM egress_pcs WHERE slot IS NOT NULL AND ($2::text IS NULL OR id = $2) ORDER BY created_at
+    `, [REPORT_STALE_SECONDS, id ?? null]);
+    return result.rows.map((pc) => ({ id: pc.id, name: pc.name, slot: pc.slot, online: pc.online === true }));
   }
 
   /**

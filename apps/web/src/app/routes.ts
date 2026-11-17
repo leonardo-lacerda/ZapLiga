@@ -5,6 +5,7 @@ export const tabPaths: Record<TabKey, string> = {
   sdrMetrics: '/app/meus-resultados',
   metrics: '/app/metricas',
   numbers: '/app/numeros',
+  numbersProvisioning: '/app/numeros/cadastrar',
   leads: '/app/leads',
   campaigns: '/app/campanhas',
   callbacks: '/app/retornos',

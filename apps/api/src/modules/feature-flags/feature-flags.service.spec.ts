@@ -116,6 +116,25 @@ describe('FeatureFlagsService', () => {
     expect((await paidService.getLevels('tenant-1')).campaigns).toBe('none');
   });
 
+  it('never lets a plan grant the internal whatsapp_provisioning feature; only the super admin toggle does', async () => {
+    const redis = () => ({ client: { get: jest.fn().mockResolvedValue(null), set: jest.fn().mockResolvedValue('OK'), del: jest.fn() } });
+    const serviceFor = (row: Record<string, unknown>) => new FeatureFlagsService({ query: jest.fn(async (sql: string) => ({ rows: sql.includes('tenant_entitlement_overrides') ? [] : [row] })) } as any, redis() as any, { record: jest.fn() } as any);
+    const paidPlan = { access_mode: 'full', source: 'stripe', access_until: new Date(Date.now() + 60_000), feature_entitlements: { campaigns: 'full', whatsapp_provisioning: 'full' }, last_active_feature_entitlements: { whatsapp_provisioning: 'full' }, operational_flags: {} };
+
+    expect(defaultTenantFeatureFlags().whatsapp_provisioning).toBe(false);
+    // Even a (mis)configured plan snapshot does not turn it on...
+    const withoutToggle = serviceFor({ ...paidPlan, whatsapp_provisioning: false });
+    expect((await withoutToggle.get('tenant-1')).whatsapp_provisioning).toBe(false);
+    expect((await withoutToggle.getLevels('tenant-1')).whatsapp_provisioning).toBe('none');
+    // ...while the admin toggle does, even for a tenant whose Stripe plan decides the roadmap features.
+    const withToggle = serviceFor({ ...paidPlan, feature_entitlements: { campaigns: 'full' }, whatsapp_provisioning: true });
+    expect((await withToggle.get('tenant-1')).whatsapp_provisioning).toBe(true);
+    expect((await withToggle.getLevels('tenant-1')).whatsapp_provisioning).toBe('full');
+    // The operational kill switch still wins.
+    const killed = serviceFor({ ...paidPlan, whatsapp_provisioning: true, operational_flags: { whatsapp_provisioning: false } });
+    expect((await killed.getLevels('tenant-1')).whatsapp_provisioning).toBe('none');
+  });
+
   it('does not let concurrent toggles of different flags clobber each other', async () => {
     // Regression for the "select all, refresh, most reverted" bug: each update() used to read a
     // `current` snapshot and write ALL 12 columns from it. Two overlapping requests toggling

@@ -12,11 +12,15 @@ function updateNumberField(setNumberForm: AnyRow['setNumberForm'], numberForm: A
   setNumberForm({ ...numberForm, [field]: value });
 }
 
-export function NumbersPage({ numbers, numbersTotal, numbersOffset, onNumbersPageChange, numberForm, setNumberForm, createNumber, showQr, reconnectNumber, removeNumber, qrLoading, qr, qrNumberId, closeQr, canManageNumbers = false }: AnyRow) {
+// `canProvision`: flag whatsapp_provisioning + papel leader/super_admin (calculado em App com canUseProvisioning).
+export function NumbersPage({ numbers, numbersTotal, numbersOffset, onNumbersPageChange, numberForm, setNumberForm, createNumber, showQr, reconnectNumber, removeNumber, qrLoading, qr, qrNumberId, closeQr, canManageNumbers = false, canProvision = false, onOpenProvisioning }: AnyRow) {
   return <>
     <div className="page-heading">
       <div><span className="eyebrow">WHATSAPP</span><h1>Números</h1><p>{canManageNumbers ? 'Gerencie as sessões conectadas à sua operação.' : 'Consulte as sessões conectadas à sua operação.'}</p></div>
-      <Badge tone="info">{formatNumber(numbersTotal)} sessões</Badge>
+      <div className="page-heading-actions">
+        {canProvision && <Button variant="secondary" icon="plus" onClick={() => onOpenProvisioning?.()}>Cadastrar número no GeeLark</Button>}
+        <Badge tone="info">{formatNumber(numbersTotal)} sessões</Badge>
+      </div>
     </div>
     {canManageNumbers && <Panel>
       <SectionHeader title="Adicionar número" description="Crie uma sessão e escaneie o QR Code para conectar um WhatsApp autorizado." />
