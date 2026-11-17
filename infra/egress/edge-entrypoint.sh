@@ -83,7 +83,8 @@ while kill -0 "$daemon" 2>/dev/null; do
         log "não consegui entrar na Tailscale"
       fi
     else
-      if tailscale ping -c 1 --timeout 3s "$exit_node" >/dev/null 2>&1; then
+      # A pong through a DERP relay still exits 1 ("direct connection not established"): judge by the pong.
+      if tailscale ping -c 1 --timeout 3s "$exit_node" 2>&1 | grep -q '^pong from'; then
         misses=0
         wanted=pc
       else
