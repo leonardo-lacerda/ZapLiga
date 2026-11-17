@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import time
 
 import pytest
 
@@ -70,6 +71,40 @@ def test_happy_path_sms_profile_link_pair_code(manager, factory):
     assert job.to_dict()["number"] == "5511999998888"
     assert manager.busy_job_for("phone-1") is None
     assert manager.known_apps("phone-1") == {"whatsapp": True, "business": False}
+
+
+def run_to_handoff(manager):
+    manager.create(make_spec())
+    for awaited, inp in (("sms", {"type": "sms", "code": "123456"}),
+                         ("profile", {"type": "profile", "name": "Loja", "photo": None, "photoMime": None}),
+                         ("link_decision", {"type": "link"}),
+                         ("pair_code", {"type": "pair_code", "code": "ABCDEFGH"})):
+        awaiting(manager, "job-1", awaited)
+        manager.submit_input("job-1", inp)
+    job = finished(manager, "job-1")
+    assert job.status == "done" and job.step == "linking"
+
+
+def test_watchdog_powers_off_a_phone_the_api_never_turned_off():
+    stopped = []
+    manager = JobManager(FakeFactory(), input_timeout_s=5, job_timeout_s=10, stop_phone=stopped.append, handoff_max_s=600)
+    run_to_handoff(manager)
+
+    # Dentro do prazo do pareamento: a API ainda pode precisar do phone ligado.
+    assert manager.sweep_handed() == [] and stopped == []
+    assert manager.sweep_handed(now=time.monotonic() + 601) == ["phone-1"]
+    assert stopped == ["phone-1"]
+    # Só uma vez.
+    assert manager.sweep_handed(now=time.monotonic() + 1200) == []
+
+
+def test_watchdog_leaves_a_phone_that_a_new_job_took_over():
+    stopped = []
+    manager = JobManager(FakeFactory(), input_timeout_s=5, job_timeout_s=10, stop_phone=stopped.append, handoff_max_s=0)
+    run_to_handoff(manager)
+    manager.create(make_spec("job-2"))  # novo job no mesmo phone: ele é quem desliga no fim
+    assert manager.sweep_handed() == [] and stopped == []
+    manager.cancel("job-2")
 
 
 def test_finish_without_linking(manager, factory):

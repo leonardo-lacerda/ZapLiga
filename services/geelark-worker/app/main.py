@@ -53,7 +53,11 @@ def create_app(
         input_timeout_s=settings.input_timeout_s,
         job_timeout_s=settings.job_timeout_s,
         debug_dir=settings.debug_dir,
+        stop_phone=geelark.stop_phone,
     )
+    # Só o manager real (não o dos testes) tem como desligar phones.
+    if getattr(manager, "_stop_phone", None) is not None:
+        manager.start_watchdog()
     if not settings.worker_token:
         log.warning("GEELARK_WORKER_TOKEN vazio: todas as rotas (exceto /health) vão responder 401")
     if not settings.geelark_api_token:

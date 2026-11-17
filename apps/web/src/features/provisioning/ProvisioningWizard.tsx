@@ -27,7 +27,6 @@ export function ProvisioningWizard({ tenantId, currentUserId, prefill, onJobCrea
   const [app, setApp] = useState<ProvisioningApp>(prefill?.app ?? 'whatsapp');
   const [countryCode, setCountryCode] = useState(prefill?.countryCode ?? '55');
   const [number, setNumber] = useState(prefill?.number ?? '');
-  const [powerOffWhenDone, setPowerOffWhenDone] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState('');
   const [numberTouched, setNumberTouched] = useState(false);
@@ -115,7 +114,7 @@ export function ProvisioningWizard({ tenantId, currentUserId, prefill, onJobCrea
     if (!selectedNode || !selectedPhone || numberError) return;
     setSubmitting(true); setSubmitError('');
     try {
-      const job = await createJob(tenantId, { egressNode: selectedNode.node, geelarkPhoneId: selectedPhone.id, app, countryCode: digitsOnly(countryCode), number: digitsOnly(number), powerOffWhenDone });
+      const job = await createJob(tenantId, { egressNode: selectedNode.node, geelarkPhoneId: selectedPhone.id, app, countryCode: digitsOnly(countryCode), number: digitsOnly(number) });
       onJobCreated(job);
     } catch (error) {
       const code = apiErrorCode(error);
@@ -173,10 +172,7 @@ export function ProvisioningWizard({ tenantId, currentUserId, prefill, onJobCrea
         </div>
         {digitsOnly(number) && !numberError && <p className="form-hint">O WhatsApp vai enviar o SMS para <strong>{formatPhoneParts(countryCode, number)}</strong>.</p>}
         {numberTouched && numberError && <p className="provisioning-field-error" role="alert">{numberError}</p>}
-        <label className="check-card provisioning-check">
-          <input type="checkbox" checked={powerOffWhenDone} onChange={(event) => setPowerOffWhenDone(event.target.checked)} />
-          <span className="pick-copy"><strong>Desligar o phone ao terminar</strong><small>Phone ligado é cobrado por minuto no GeeLark.</small></span>
-        </label>
+        <p className="form-hint"><Icon name="clock" size={14} /> O phone é desligado sozinho ao terminar, falhar ou cancelar (também se você fechar esta página): o GeeLark cobra cada minuto ligado.</p>
         <div className="provisioning-summary">
           <span>Rede: <strong>{selectedNode?.label ?? '—'}</strong></span>
           <span>Phone: <strong>{selectedPhone?.name ?? '—'}</strong></span>

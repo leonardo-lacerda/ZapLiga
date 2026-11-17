@@ -167,6 +167,11 @@ Regras da API:
 
 - `POST jobs` recusa (`409 egress_offline`) se o nó não estiver online agora, e
   (`400`) se `number`/`countryCode` não forem dígitos válidos (só no `register`).
+- **O phone sempre é desligado no fim** (cobrança por minuto): `powerOffWhenDone` ainda é aceito,
+  mas ignorado. Quem desliga: o worker ao terminar/falhar/cancelar; a API depois do pareamento
+  (conectado, timeout ou cancelado). Para não depender da aba aberta, a cada 60 s **uma** instância
+  da API (lock no Redis) faz o mesmo que um `GET` nos jobs abertos parados há mais de 30 s; e o worker
+  desliga sozinho um phone entregue à API no pareamento que continue ligado depois de 10 min.
 - `POST phones` também exige o PC online e grava `provisioning.phone_created` na auditoria. A
   cobrança do GeeLark começa só quando o phone liga (no teste de internet ou no cadastro).
 - `GET jobs/{id}` consulta o worker, atualiza a cópia no banco e devolve. Se o worker

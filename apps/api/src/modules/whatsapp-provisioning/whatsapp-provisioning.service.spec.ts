@@ -45,6 +45,10 @@ const makeDb = () => {
       const row = jobs.get(params[0]);
       return { rows: row && row.tenant_id === params[1] ? [{ ...row }] : [] };
     }
+    if (text.startsWith('SELECT * FROM provisioning_jobs WHERE finished_at IS NULL')) {
+      const idleBefore = Date.now() - params[0] * 1000;
+      return { rows: [...jobs.values()].filter((row) => !row.finished_at && new Date(row.updated_at).getTime() < idleBefore).slice(0, params[1]).map((row) => ({ ...row })) };
+    }
     if (text.startsWith('SELECT * FROM provisioning_jobs WHERE tenant_id')) return { rows: [...jobs.values()].filter((row) => row.tenant_id === params[0]) };
     if (text.startsWith('UPDATE provisioning_jobs SET status = $3, step = $4')) {
       const row = jobs.get(params[0]);
@@ -570,16 +574,46 @@ describe('WhatsappProvisioningService — link to ZapLiga', () => {
     expect(ctx.numbers.moveToWaxumNode).not.toHaveBeenCalled();
   });
 
-  it('keeps the phone on after linking when powerOffWhenDone is false', async () => {
+  it('powers the phone off after linking even when an old client asks to keep it on', async () => {
     const ctx = makeService();
     const id = await linkingJob(ctx, { powerOffWhenDone: false });
+    expect(ctx.worker.createJob).toHaveBeenCalledWith(expect.objectContaining({ powerOffWhenDone: true }));
     connect(ctx);
 
     const job = await ctx.service.getJob(TENANT, USER, id);
 
     expect(job).toMatchObject({ status: 'done', linked: true });
     expect(ctx.numbers.moveToWaxumNode).toHaveBeenCalled();
-    expect(ctx.worker.stopPhone).not.toHaveBeenCalled();
+    expect(ctx.worker.stopPhone).toHaveBeenCalledWith('phone-1');
+  });
+
+  it('the sweep settles a linking job nobody is watching and powers the phone off', async () => {
+    const ctx = makeService();
+    const id = await linkingJob(ctx);
+    ctx.worker.stopPhone.mockClear();
+    // Tab closed: nobody polls. A job polled seconds ago is left to the panel.
+    expect(await ctx.service.sweepOpenJobs()).toBe(0);
+    ctx.db.jobs.get(id).updated_at = new Date(Date.now() - 60_000);
+    connect(ctx);
+
+    expect(await ctx.service.sweepOpenJobs()).toBe(1);
+
+    expect(ctx.db.jobs.get(id)).toMatchObject({ status: 'done', linked: true });
+    expect(ctx.worker.stopPhone).toHaveBeenCalledWith('phone-1');
+  });
+
+  it('the sweep powers off the phone of a job the worker lost, and only one API instance sweeps', async () => {
+    const ctx = makeService();
+    const id = await startJob(ctx);
+    ctx.db.jobs.get(id).updated_at = new Date(Date.now() - 60_000);
+    ctx.worker.getJob.mockResolvedValue(null);
+
+    await ctx.service.sweepOpenJobs();
+
+    expect(ctx.db.jobs.get(id)).toMatchObject({ status: 'failed', error_code: 'worker_lost' });
+    expect(ctx.worker.stopPhone).toHaveBeenCalledWith('phone-1');
+    ctx.redis.acquireLock.mockResolvedValueOnce(false);
+    expect(await ctx.service.sweepOpenJobs()).toBe(0);
   });
 
   it('gives up when the phone never reaches the pair-code screen and powers it off', async () => {

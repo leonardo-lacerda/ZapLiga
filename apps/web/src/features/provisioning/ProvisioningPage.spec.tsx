@@ -93,7 +93,7 @@ it('faz o cadastro completo: rede → phone → app → número → SMS → perf
   set({ status: 'done', step: 'done', awaiting: null, linked: true, numberId: 'number-9', history: historyOf('registered', 'opening_link_screen', 'waiting_pair_code', 'entering_pair_code', 'linking', 'done') });
 
   expect(await screen.findByText('Número cadastrado e conectado ao ZapLiga')).toBeInTheDocument();
-  expect(bodies.create).toEqual({ egressNode: 'a55241de-0000-4000-8000-000000000001', geelarkPhoneId: 'phone-2', app: 'whatsapp', countryCode: '55', number: '11987654321', powerOffWhenDone: true });
+  expect(bodies.create).toEqual({ egressNode: 'a55241de-0000-4000-8000-000000000001', geelarkPhoneId: 'phone-2', app: 'whatsapp', countryCode: '55', number: '11987654321' });
 
   // Terminado, a consulta para.
   const callsAtDone = getCalls;

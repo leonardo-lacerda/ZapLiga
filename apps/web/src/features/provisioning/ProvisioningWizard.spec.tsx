@@ -144,7 +144,9 @@ describe('ProvisioningWizard — passos 1 a 3', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Continuar' }));
 
     expect(screen.getByLabelText('Código do país')).toHaveValue('55');
-    expect(screen.getByRole('checkbox', { name: /Desligar o phone ao terminar/ })).toBeChecked();
+    // Sem opção de manter ligado: o phone sempre desliga no fim (cobrança por minuto).
+    expect(screen.queryByRole('checkbox', { name: /Desligar o phone/ })).not.toBeInTheDocument();
+    expect(screen.getByText(/desligado sozinho ao terminar/)).toBeInTheDocument();
     await userEvent.type(screen.getByLabelText('Número'), '1198');
     await userEvent.click(screen.getByRole('button', { name: 'Iniciar cadastro' }));
     expect(await screen.findByText(/DDD \+ número/)).toBeInTheDocument();
@@ -153,11 +155,10 @@ describe('ProvisioningWizard — passos 1 a 3', () => {
     await userEvent.clear(screen.getByLabelText('Número'));
     await userEvent.type(screen.getByLabelText('Número'), '(11) 98765-4321');
     expect(screen.getByText('+55 11 98765-4321')).toBeInTheDocument();
-    await userEvent.click(screen.getByRole('checkbox', { name: /Desligar o phone ao terminar/ }));
     await userEvent.click(screen.getByRole('button', { name: 'Iniciar cadastro' }));
 
     await vi.waitFor(() => expect(onJobCreated).toHaveBeenCalled());
-    expect(created).toEqual({ egressNode: 'a55241de-0000-4000-8000-000000000001', geelarkPhoneId: 'phone-2', app: 'business', countryCode: '55', number: '11987654321', powerOffWhenDone: false });
+    expect(created).toEqual({ egressNode: 'a55241de-0000-4000-8000-000000000001', geelarkPhoneId: 'phone-2', app: 'business', countryCode: '55', number: '11987654321' });
   });
 
   it('volta para a rede quando a API recusa porque o PC ficou offline', async () => {

@@ -34,6 +34,9 @@ TERMINAL = frozenset({"done", "failed", "cancelled"})
 MAX_SMS_ATTEMPTS = 5
 FINISHED_RETENTION_S = 6 * 3600
 MAX_FINISHED_JOBS = 200
+# Phone deixado ligado para a API concluir o pareamento: se ela não desligar (fora do ar,
+# deploy...), o worker desliga depois disso. O pareamento leva no máximo ~2 min.
+HANDOFF_MAX_S = 600
 
 # awaiting -> tipos de JobInput aceitos
 ACCEPTED_INPUTS = {
@@ -130,8 +133,13 @@ class JobManager:
         job_timeout_s: float = 1200,
         debug_dir: str | None = None,
         egress_probe: EgressProbe = probe_egress_ip,
+        stop_phone: Callable[[str], None] | None = None,
+        handoff_max_s: float = HANDOFF_MAX_S,
     ):
         self._factory = factory
+        self._stop_phone = stop_phone
+        self.handoff_max_s = handoff_max_s
+        self._handed: dict[str, float] = {}         # phoneId -> quando foi entregue à API ligado
         self._egress_probe = egress_probe
         self.max_jobs = max_jobs
         self.input_timeout_s = input_timeout_s
@@ -177,6 +185,7 @@ class JobManager:
             job = Job(spec)
             self._jobs[spec.job_id] = job
             self._busy[spec.phone_id] = spec.job_id
+            self._handed.pop(spec.phone_id, None)  # um job novo passa a cuidar do phone
         thread = threading.Thread(target=self._run, args=(job,), name=f"job-{spec.job_id[:8]}", daemon=True)
         thread.start()
         log.info("[%s] job criado (phone %s, app %s)", spec.job_id, spec.phone_id, spec.app)
@@ -225,6 +234,42 @@ class JobManager:
         for i, job in enumerate(finished):
             if i < excess or now - (job.finished_mono or now) > FINISHED_RETENTION_S:
                 self._jobs.pop(job.spec.job_id, None)
+
+    # ---------------------------------------------------------- vigia
+    def sweep_handed(self, now: float | None = None) -> list[str]:
+        """Desliga os phones entregues à API ligados há mais de `handoff_max_s`.
+
+        GeeLark cobra por minuto ligado: é a rede de segurança caso a API não desligue
+        depois do pareamento. Devolve os phones desligados (ou que tentou desligar).
+        """
+        now = time.monotonic() if now is None else now
+        with self._lock:
+            due = [pid for pid, at in self._handed.items()
+                   if now - at >= self.handoff_max_s and pid not in self._busy]
+            for pid in due:
+                self._handed.pop(pid, None)
+        for pid in due:
+            try:
+                if self._stop_phone is not None:
+                    self._stop_phone(pid)
+                log.info("phone %s desligado pelo vigia (a API não desligou depois do pareamento)", pid)
+            except Exception as exc:
+                log.warning("vigia: falha ao desligar o phone %s (%s)", pid, type(exc).__name__)
+        return due
+
+    def start_watchdog(self, interval_s: float = 60) -> threading.Event:
+        """Thread que roda `sweep_handed` a cada `interval_s`; set() no Event para parar."""
+        stop = threading.Event()
+
+        def loop() -> None:
+            while not stop.wait(interval_s):
+                try:
+                    self.sweep_handed()
+                except Exception:
+                    log.exception("vigia de phones falhou")
+
+        threading.Thread(target=loop, name="phone-watchdog", daemon=True).start()
+        return stop
 
     # ------------------------------------------------------- transições
     def _set_step(self, job: Job, step: str, message: str | None = None, *,
@@ -322,6 +367,9 @@ class JobManager:
             # Pareamento por código: o phone principal precisa ficar online até o
             # Waxum confirmar a conexão. Nesse caso quem desliga é a API (contrato §1).
             handed_to_api = job.status == "done" and job.step == "linking"
+            if handed_to_api:
+                with self._lock:
+                    self._handed[spec.phone_id] = time.monotonic()
             if spec.power_off_when_done and not handed_to_api:
                 try:
                     if auto is not None:

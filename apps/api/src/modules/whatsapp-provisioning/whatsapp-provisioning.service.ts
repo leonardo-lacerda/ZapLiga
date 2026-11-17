@@ -1,4 +1,4 @@
-import { BadRequestException, ConflictException, HttpException, HttpStatus, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, HttpException, HttpStatus, Injectable, Logger, NotFoundException, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
 import { DatabaseService } from '../../database/database.service';
 import { GeelarkWorkerClient, GeelarkWorkerError, WorkerJob, WorkerJobStatus } from '../../infrastructure/geelark-worker/geelark-worker.client';
@@ -15,6 +15,14 @@ import { egressSocksConfig, socksProxiesFor } from './egress-socks';
 export const MAX_PROFILE_PHOTO_BYTES = 2 * 1024 * 1024;
 
 type JobMode = 'register' | 'network_check';
+
+// Every minute one API instance settles the open jobs nobody is watching (tab closed):
+// the link result, a worker that lost the job, and above all powering the phone off.
+const SWEEP_INTERVAL_MS = 60_000;
+const SWEEP_LOCK = 'zapcall:provisioning:sweeper';
+// A job the panel polled this recently is left to the panel (it polls every 2 s).
+const SWEEP_IDLE_SECONDS = 30;
+const SWEEP_BATCH = 50;
 
 const JOB_STATUSES = new Set<WorkerJobStatus>(['running', 'waiting_input', 'done', 'failed', 'cancelled']);
 const FINISHED_STATUSES = new Set<string>(['done', 'failed', 'cancelled']);
@@ -84,8 +92,9 @@ const sanitizeHistory = (value: unknown) => (Array.isArray(value) ? value : []).
  * written to the database, logs or audit metadata.
  */
 @Injectable()
-export class WhatsappProvisioningService {
+export class WhatsappProvisioningService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(WhatsappProvisioningService.name);
+  private sweepTimer?: NodeJS.Timeout;
   /** Overridable in tests. */
   timing = { pollIntervalMs: 2_000, pairCodeWaitMs: 90_000, linkTimeoutMs: 120_000 };
 
@@ -99,6 +108,29 @@ export class WhatsappProvisioningService {
     private readonly numbers: NumbersService,
     private readonly waxum: WaxumClient,
   ) {}
+
+  onModuleInit() {
+    if (process.env.NODE_ENV === 'test') return;
+    this.sweepTimer = setInterval(() => void this.sweepOpenJobs().catch((error) => this.logger.warn(`Provisioning sweep failed: ${errorMessage(error)}`)), SWEEP_INTERVAL_MS);
+    this.sweepTimer.unref?.();
+  }
+
+  onModuleDestroy() { if (this.sweepTimer) clearInterval(this.sweepTimer); }
+
+  /**
+   * Phones are billed per minute while on. The panel's polling normally drives
+   * each job to its end, but a closed tab would leave a linking phone on forever;
+   * this settles idle open jobs the same way a GET would (and powers them off).
+   */
+  async sweepOpenJobs() {
+    if (!await this.redis.acquireLock(SWEEP_LOCK, randomUUID(), SWEEP_INTERVAL_MS - 5_000).catch(() => false)) return 0;
+    const rows = (await this.db.query(`SELECT * FROM provisioning_jobs WHERE finished_at IS NULL AND updated_at < now() - make_interval(secs => $1)
+      ORDER BY updated_at LIMIT $2`, [SWEEP_IDLE_SECONDS, SWEEP_BATCH])).rows as ProvisioningJobRow[];
+    for (const row of rows) {
+      await this.sync(row, null).catch((error) => this.logger.warn(`Could not settle provisioning job ${row.id}: ${errorMessage(error)}`));
+    }
+    return rows.length;
+  }
 
   // ---------------------------------------------------------------- egress
 
@@ -210,8 +242,9 @@ export class WhatsappProvisioningService {
     const id = randomUUID();
     const app = register ? input.app! : null;
     const fullNumber = register ? `${countryCode}${number}` : null;
-    // A network check always powers the phone off at the end: it is billed per minute and has nothing left to do.
-    const powerOffWhenDone = !register || input.powerOffWhenDone !== false;
+    // Always powered off at the end (also after linking): GeeLark bills every minute the phone is on.
+    // `powerOffWhenDone` is still accepted from older clients but no longer honoured.
+    const powerOffWhenDone = true;
     const inserted = (await this.db.query(`INSERT INTO provisioning_jobs (id, tenant_id, created_by, egress_node, geelark_phone_id, phone_name, mode, app, phone, status, step, power_off_when_done)
       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'running', 'queued', $10) RETURNING *`, [id, tenantId, actorUserId, pc.id, phone.id, phone.name || null, mode, app, fullNumber, powerOffWhenDone])).rows[0] as ProvisioningJobRow;
     let snapshot: WorkerJob;
@@ -554,10 +587,9 @@ export class WhatsappProvisioningService {
   /**
    * The worker leaves the phone on when it ends in `linking`: the primary device
    * must stay online until Waxum confirms the pairing. Once the link settles
-   * (connected, timeout or cancel) the API honours `powerOffWhenDone`.
+   * (connected, timeout or cancel) the API always powers it off.
    */
   private async powerOffAfterLink(row: ProvisioningJobRow) {
-    if (row.power_off_when_done === false) return;
     await this.stopPhone(row);
   }
 
