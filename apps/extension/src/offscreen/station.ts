@@ -90,6 +90,9 @@ export class Station {
     });
     chrome.runtime.onMessage.addListener((request: any) => {
       if (request?.type === 'microphone-permission-changed') void this.checkMicPermission();
+      if (request?.type === 'prefill' && typeof request.phone === 'string') {
+        this.patch({ prefill: { phone: request.phone.replace(/\D/g, '').slice(0, 15), name: typeof request.name === 'string' ? request.name.slice(0, 120) : undefined, at: Date.now() } });
+      }
     });
     void this.checkMicPermission();
     void this.restoreSession();
@@ -134,6 +137,7 @@ export class Station {
         case 'testSpeaker': return await this.audio.playTestTone();
         case 'refreshPermission': return await this.checkMicPermission();
         case 'clearError': return this.patch({ error: '' });
+        case 'clearPrefill': return this.patch({ prefill: undefined });
       }
     } catch (error) { this.fail(error); }
   }

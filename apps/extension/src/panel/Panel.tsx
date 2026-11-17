@@ -109,6 +109,13 @@ function Dialer({ state, send }: ViewProps) {
   const [phone, setPhone] = useState('');
   const [name, setName] = useState('');
   const digits = phone.replace(/\D/g, '');
+  // A "Ligar com ZapLiga" button on a page (Kommo) sent a number: fill it in, ready to call.
+  useEffect(() => {
+    if (!state.prefill) return;
+    setPhone(typingPhone(state.prefill.phone));
+    setName(state.prefill.name ?? '');
+    send({ cmd: 'clearPrefill' });
+  }, [state.prefill?.at]);
   const submit = (event: FormEvent) => { event.preventDefault(); if (digits.length >= 10) send({ cmd: 'dial', phone, name }); };
   return <form className="dialer" onSubmit={submit}>
     <div className="display">

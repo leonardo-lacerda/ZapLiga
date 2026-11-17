@@ -32,6 +32,8 @@ export type StationSnapshot = {
   devices: AudioDeviceState;
   notice: string;
   error: string;
+  /** Number sent from a page button (Kommo), waiting to be put in the dialer. */
+  prefill?: { phone: string; name?: string; at: number };
 };
 
 export type PanelCommand =
@@ -49,7 +51,8 @@ export type PanelCommand =
   | { cmd: 'setOutput'; deviceId: string }
   | { cmd: 'testSpeaker' }
   | { cmd: 'refreshPermission' }
-  | { cmd: 'clearError' };
+  | { cmd: 'clearError' }
+  | { cmd: 'clearPrefill' };
 
 /** Tiny summary for the collapsed bubble in each tab. */
 export type BubbleStatus = { inCall: boolean; label: string; answeredAt?: number; postCall: boolean };

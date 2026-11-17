@@ -182,4 +182,75 @@ import type { BubbleStatus, UiState } from './shared/types';
     layout();
     void connectBubble();
   });
+
+  // ------------------------------------------------------------------ Kommo
+  // A green call button inside every phone field of the Kommo card. It opens the window here with
+  // the number already typed (without the 55 country code); the call starts on "Ligar".
+  const localPhone = (raw: string) => {
+    const digits = raw.replace(/\D/g, '');
+    return digits.startsWith('55') && (digits.length === 12 || digits.length === 13) ? digits.slice(2) : digits;
+  };
+  const contactName = (control: Element) => {
+    for (let node = control.parentElement; node; node = node.parentElement) {
+      const name = node.querySelector<HTMLInputElement>('input.js-linked-name-view');
+      if (name) return name.value.trim();
+    }
+    return (document.querySelector<HTMLTextAreaElement>('#person_n')?.value ?? '').trim();
+  };
+  const callFromPage = async (raw: string, name: string) => {
+    const phone = localPhone(raw);
+    if (phone.length < 10 || !chrome.runtime?.id) return;
+    save({ visible: true, collapsed: false, windowId: myWindowId ?? ui.windowId });
+    try {
+      await chrome.runtime.sendMessage({ type: 'ensure-offscreen' });
+      await chrome.runtime.sendMessage({ type: 'prefill', phone, name });
+    } catch { /* extension reloaded: the page needs a refresh */ }
+  };
+  const SMALL_PHONE = PHONE.replace('width="22" height="22"', 'width="14" height="14"');
+  const phoneButtons: Array<{ input: HTMLInputElement; button: HTMLButtonElement }> = [];
+  const measure = document.createElement('canvas').getContext('2d');
+  // Right after the number's text, not at the far end of the (wide) input.
+  const placeButton = (input: HTMLInputElement, button: HTMLButtonElement) => {
+    const style = getComputedStyle(input);
+    if (measure) measure.font = style.font;
+    const textWidth = measure ? measure.measureText(input.value).width : 110;
+    const left = input.offsetLeft + parseFloat(style.paddingLeft || '0') + parseFloat(style.borderLeftWidth || '0') + textWidth + 10;
+    button.style.left = `${Math.round(Math.min(left, input.offsetLeft + input.offsetWidth - 28))}px`;
+  };
+  const scanKommo = () => {
+    document.querySelectorAll<HTMLElement>('.js-control-phone').forEach((control) => {
+      if (control.dataset.zapligaCall) return;
+      const input = control.querySelector<HTMLInputElement>('input.control-phone__formatted');
+      if (!input) return;
+      control.dataset.zapligaCall = '1';
+      if (getComputedStyle(control).position === 'static') control.style.position = 'relative';
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.title = 'Ligar com ZapLiga';
+      button.setAttribute('aria-label', 'Ligar com ZapLiga');
+      button.innerHTML = SMALL_PHONE;
+      button.style.cssText = 'all: initial; position: absolute; left: 0; top: 50%; transform: translateY(-50%); width: 24px; height: 24px; border-radius: 50%; background: #16a34a; color: #fff; display: none; align-items: center; justify-content: center; cursor: pointer; z-index: 5; box-shadow: 0 1px 3px rgba(0,0,0,.35);';
+      button.addEventListener('mouseenter', () => { button.style.background = '#15803d'; });
+      button.addEventListener('mouseleave', () => { button.style.background = '#16a34a'; });
+      button.addEventListener('mousedown', (event) => { event.preventDefault(); event.stopPropagation(); });
+      button.addEventListener('click', (event) => { event.preventDefault(); event.stopPropagation(); void callFromPage(input.value, contactName(control)); });
+      control.appendChild(button);
+      phoneButtons.push({ input, button });
+    });
+    // Show the button only on fields that hold a full number (Kommo also renders empty "add phone" fields).
+    for (let i = phoneButtons.length - 1; i >= 0; i -= 1) {
+      const { input, button } = phoneButtons[i];
+      if (!input.isConnected) { phoneButtons.splice(i, 1); continue; }
+      const show = localPhone(input.value).length >= 10;
+      button.style.display = show ? 'flex' : 'none';
+      if (show) placeButton(input, button);
+    }
+  };
+  if (/(^|\.)kommo\.com$/.test(location.hostname)) {
+    let pending: number | undefined;
+    const schedule = () => { if (pending === undefined) pending = window.setTimeout(() => { pending = undefined; scanKommo(); }, 300); };
+    new MutationObserver(schedule).observe(document.documentElement, { childList: true, subtree: true });
+    document.addEventListener('input', schedule, true);
+    scanKommo();
+  }
 })();
