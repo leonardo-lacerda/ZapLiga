@@ -9,9 +9,12 @@ import { AuditService } from '../audit/audit.service';
 import { EntitlementService } from '../billing/entitlement.service';
 import { EgressService } from '../egress/egress.service';
 import { NumbersService } from '../numbers/numbers.service';
+import { ANDROID_VERSIONS, AndroidVersion } from './dto/provisioning.dto';
 import { egressSocksConfig, socksProxiesFor } from './egress-socks';
 
 export const MAX_PROFILE_PHOTO_BYTES = 2 * 1024 * 1024;
+
+type JobMode = 'register' | 'network_check';
 
 const JOB_STATUSES = new Set<WorkerJobStatus>(['running', 'waiting_input', 'done', 'failed', 'cancelled']);
 const FINISHED_STATUSES = new Set<string>(['done', 'failed', 'cancelled']);
@@ -21,7 +24,7 @@ const NODE_ID = /^[A-Za-z0-9][A-Za-z0-9-]{0,63}$/;
 
 export type ProvisioningJobRow = {
   id: string; tenant_id: string; created_by: string | null; egress_node: string; geelark_phone_id: string; phone_name: string | null;
-  app: 'whatsapp' | 'business'; phone: string; status: string; step: string; awaiting: string | null; message: string | null;
+  mode?: JobMode | null; app: 'whatsapp' | 'business' | null; phone: string | null; status: string; step: string; awaiting: string | null; message: string | null;
   error_code: string | null; egress_ip: string | null; has_screenshot: boolean; history: unknown; linked: boolean; number_id: string | null;
   link_started_at: Date | string | null; created_at: Date | string; updated_at: Date | string; finished_at: Date | string | null;
   power_off_when_done?: boolean | null;
@@ -56,6 +59,12 @@ const errorMessage = (error: unknown) => {
     return String(Array.isArray(message) ? message.join('; ') : (message ?? error.message)).slice(0, 200);
   }
   return 'erro inesperado';
+};
+
+/** Only registration jobs carry a number; an internet test never reaches the link path. */
+const registeredPhone = (row: ProvisioningJobRow) => {
+  if (!row.phone) throw new ConflictException({ statusCode: 409, code: 'not_a_registration', message: 'Este job só testou a internet do telefone; não há número para conectar.' });
+  return row.phone;
 };
 
 const sanitizeHistory = (value: unknown) => (Array.isArray(value) ? value : []).slice(-100).map((entry: any) => ({
@@ -151,39 +160,66 @@ export class WhatsappProvisioningService {
 
   async listPhones() { return { items: await this.worker.listPhones() }; }
 
-  // ---------------------------------------------------------------- jobs
-
-  async createJob(tenantId: string, actorUserId: string, input: { egressNode: string; geelarkPhoneId: string; app: 'whatsapp' | 'business'; countryCode: string; number: string; powerOffWhenDone?: boolean }) {
+  /**
+   * Creates a GeeLark cloud phone (off; billed per minute only while on) whose
+   * network already goes out through the chosen attendant PC: GeeLark tests that
+   * proxy before creating, so a PC that is not really online fails here (409).
+   */
+  async createPhone(tenantId: string, actorUserId: string, input: { name: string; androidVersion: AndroidVersion; egressNode: string }) {
     await this.entitlement.assertAction(tenantId, 'write', actorUserId);
-    const countryCode = cleanDigits(input.countryCode);
-    const number = cleanDigits(input.number);
-    if (!/^[1-9]\d{0,2}$/.test(countryCode) || !/^\d{6,13}$/.test(number) || countryCode.length + number.length > 15) {
-      throw new BadRequestException({ statusCode: 400, code: 'invalid_number', message: 'Informe o código do país (ex.: 55) e o número com DDD, só com dígitos.' });
-    }
-    if (input.app !== 'whatsapp' && input.app !== 'business') throw new BadRequestException('App inválido');
+    const name = String(input.name ?? '').trim();
+    if (!name || name.length > 60) throw new BadRequestException({ statusCode: 400, code: 'invalid_name', message: 'Dê um nome ao telefone (até 60 caracteres).' });
+    if (!ANDROID_VERSIONS.includes(input.androidVersion)) throw new BadRequestException({ statusCode: 400, code: 'invalid_android', message: 'Versão do Android inválida.' });
+    const { pc, proxy } = await this.onlineEgress(input.egressNode);
+    const phone = await this.worker.createPhone({ name, androidVersion: input.androidVersion, proxy });
+    await this.audit.record({ actorUserId, tenantId, action: 'provisioning.phone_created', entityType: 'geelark_phone', entityId: phone.id, metadata: { androidVersion: input.androidVersion, egressNode: pc.id, slot: pc.slot } });
+    return phone;
+  }
+
+  /** The PC's slot is resolved now (it may change later) and must be going out through the PC right now. */
+  private async onlineEgress(rawNode: string) {
     const socks = egressSocksConfig();
     if (!socks || !(await this.egressConfigured())) throw this.egressNotConfigured();
-    const node = String(input.egressNode ?? '').trim();
-    // The PC's slot is resolved now (it may change later) and must be going out through the PC right now.
+    const node = String(rawNode ?? '').trim();
     const pc = NODE_ID.test(node) ? (await this.egress.pcExits(node))[0] : undefined;
     if (!pc?.online) {
       throw new ConflictException({ statusCode: 409, code: 'egress_offline', message: 'O PC escolhido não está online agora. Ligue-o ou escolha outro.' });
     }
-    const { proxy, probeProxy } = socksProxiesFor(socks, pc.slot);
+    return { pc, ...socksProxiesFor(socks, pc.slot) };
+  }
+
+  // ---------------------------------------------------------------- jobs
+
+  async createJob(tenantId: string, actorUserId: string, input: { egressNode: string; geelarkPhoneId: string; mode?: JobMode; app?: 'whatsapp' | 'business'; countryCode?: string; number?: string; powerOffWhenDone?: boolean }) {
+    await this.entitlement.assertAction(tenantId, 'write', actorUserId);
+    const mode: JobMode = input.mode === 'network_check' ? 'network_check' : 'register';
+    const register = mode === 'register';
+    const countryCode = cleanDigits(input.countryCode);
+    const number = cleanDigits(input.number);
+    if (register) {
+      if (!/^[1-9]\d{0,2}$/.test(countryCode) || !/^\d{6,13}$/.test(number) || countryCode.length + number.length > 15) {
+        throw new BadRequestException({ statusCode: 400, code: 'invalid_number', message: 'Informe o código do país (ex.: 55) e o número com DDD, só com dígitos.' });
+      }
+      if (input.app !== 'whatsapp' && input.app !== 'business') throw new BadRequestException('App inválido');
+    }
+    const { pc, proxy, probeProxy } = await this.onlineEgress(input.egressNode);
     const phone = (await this.worker.listPhones()).find((item) => item.id === input.geelarkPhoneId);
     if (!phone) throw new NotFoundException({ statusCode: 404, code: 'phone_not_found', message: 'Telefone não encontrado no GeeLark.' });
     if (phone.status === 'expired') throw new ConflictException({ statusCode: 409, code: 'phone_expired', message: 'Este telefone do GeeLark expirou.' });
 
     const id = randomUUID();
-    const fullNumber = `${countryCode}${number}`;
-    const inserted = (await this.db.query(`INSERT INTO provisioning_jobs (id, tenant_id, created_by, egress_node, geelark_phone_id, phone_name, app, phone, status, step, power_off_when_done)
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'running', 'queued', $9) RETURNING *`, [id, tenantId, actorUserId, pc.id, phone.id, phone.name || null, input.app, fullNumber, input.powerOffWhenDone !== false])).rows[0] as ProvisioningJobRow;
+    const app = register ? input.app! : null;
+    const fullNumber = register ? `${countryCode}${number}` : null;
+    // A network check always powers the phone off at the end: it is billed per minute and has nothing left to do.
+    const powerOffWhenDone = !register || input.powerOffWhenDone !== false;
+    const inserted = (await this.db.query(`INSERT INTO provisioning_jobs (id, tenant_id, created_by, egress_node, geelark_phone_id, phone_name, mode, app, phone, status, step, power_off_when_done)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'running', 'queued', $10) RETURNING *`, [id, tenantId, actorUserId, pc.id, phone.id, phone.name || null, mode, app, fullNumber, powerOffWhenDone])).rows[0] as ProvisioningJobRow;
     let snapshot: WorkerJob;
     try {
       snapshot = await this.worker.createJob({
-        jobId: id, phoneId: phone.id, app: input.app, countryCode, number, proxy, probeProxy,
+        jobId: id, phoneId: phone.id, mode, ...(register ? { app: input.app, countryCode, number } : {}), proxy, probeProxy,
         // Empty: the worker probes the PC's IP through probeProxy and expects the phone to see the same.
-        expectedEgressIps: [], powerOffWhenDone: input.powerOffWhenDone !== false,
+        expectedEgressIps: [], powerOffWhenDone,
       });
     } catch (error) {
       // Nothing started: drop the copy. On a timeout the worker may have accepted it, so ask it to stop.
@@ -191,7 +227,7 @@ export class WhatsappProvisioningService {
       await this.db.query('DELETE FROM provisioning_jobs WHERE id = $1 AND tenant_id = $2', [id, tenantId]).catch(() => undefined);
       throw error;
     }
-    await this.audit.record({ actorUserId, tenantId, action: 'provisioning.started', entityType: 'provisioning_job', entityId: id, metadata: { app: input.app, egressNode: pc.id, slot: pc.slot, geelarkPhoneId: phone.id } });
+    await this.audit.record({ actorUserId, tenantId, action: 'provisioning.started', entityType: 'provisioning_job', entityId: id, metadata: { mode, app, egressNode: pc.id, slot: pc.slot, geelarkPhoneId: phone.id } });
     return this.toJob(await this.applySnapshot(inserted, snapshot, actorUserId));
   }
 
@@ -414,7 +450,8 @@ export class WhatsappProvisioningService {
         if (!existing) throw new NotFoundException('A linha criada para este cadastro não existe mais');
         sessionId = existing.waxum_session_id;
       } else {
-        const line = await this.numbers.create(current.tenant_id, actorUserId, { label: current.phone_name?.trim() || current.phone, phone: current.phone });
+        const phone = registeredPhone(current);
+        const line = await this.numbers.create(current.tenant_id, actorUserId, { label: current.phone_name?.trim() || phone, phone });
         sessionId = line.waxum_session_id;
         const updated = (await this.db.query('UPDATE provisioning_jobs SET number_id = $3, updated_at = now() WHERE id = $1 AND tenant_id = $2 RETURNING *', [current.id, current.tenant_id, line.id])).rows[0] as ProvisioningJobRow | undefined;
         current = updated ?? { ...current, number_id: line.id };
@@ -448,13 +485,14 @@ export class WhatsappProvisioningService {
    */
   private async requestPairCode(job: ProvisioningJobRow, actorUserId: string, sessionId: string) {
     const numberId = String(job.number_id);
+    const phone = registeredPhone(job);
     try {
-      return await this.numbers.pairCode(job.tenant_id, actorUserId, numberId, job.phone);
+      return await this.numbers.pairCode(job.tenant_id, actorUserId, numberId, phone);
     } catch (error) {
       if ((error as { statusCode?: number }).statusCode !== 503) throw error;
       const line = (await this.db.query('SELECT id, waxum_session_id FROM whatsapp_numbers WHERE id = $1 AND tenant_id = $2', [numberId, job.tenant_id])).rows[0];
       await this.waxum.reconnect(line?.waxum_session_id ?? sessionId);
-      return this.numbers.pairCode(job.tenant_id, actorUserId, numberId, job.phone);
+      return this.numbers.pairCode(job.tenant_id, actorUserId, numberId, phone);
     }
   }
 
@@ -531,8 +569,9 @@ export class WhatsappProvisioningService {
       geelarkPhoneId: row.geelark_phone_id,
       phoneId: row.geelark_phone_id,
       phoneName: row.phone_name ?? null,
-      app: row.app,
-      number: row.phone,
+      mode: row.mode ?? 'register',
+      app: row.app ?? null,
+      number: row.phone ?? null,
       status: row.status,
       step: row.step,
       awaiting: row.awaiting ?? null,

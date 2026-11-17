@@ -6,8 +6,9 @@ import base64
 import binascii
 import re
 from typing import Annotated, Literal, Union
+from urllib.parse import quote
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from .automation import JobSpec, ProbeProxySpec, ProxySpec
 
@@ -38,29 +39,61 @@ class ProbeProxyIn(_Body):
 class CreateWorkerJob(_Body):
     jobId: str = Field(min_length=1, max_length=64, pattern=r"^[A-Za-z0-9_-]+$")
     phoneId: str = Field(min_length=1, max_length=64)
-    app: Literal["whatsapp", "business"]
-    countryCode: str = Field(pattern=r"^[1-9]\d{0,3}$")
-    number: str = Field(pattern=r"^\d{4,15}$")
+    # network_check: só aplica a rede, liga o phone, confere o IP e desliga (sem app nem número).
+    mode: Literal["register", "network_check"] = "register"
+    app: Literal["whatsapp", "business"] | None = None
+    countryCode: str | None = Field(default=None, pattern=r"^[1-9]\d{0,3}$")
+    number: str | None = Field(default=None, pattern=r"^\d{4,15}$")
     proxy: ProxyIn
     probeProxy: ProbeProxyIn | None = None
     expectedEgressIps: list[str] = Field(default_factory=list, max_length=32)
     powerOffWhenDone: bool = True
 
+    @model_validator(mode="after")
+    def register_needs_number(self) -> "CreateWorkerJob":
+        if self.mode == "register" and not (self.app and self.countryCode and self.number):
+            raise ValueError("app, countryCode e number são obrigatórios no cadastro")
+        return self
+
     def to_spec(self) -> JobSpec:
         p = self.proxy
         probe = self.probeProxy
+        register = self.mode == "register"
         return JobSpec(
             job_id=self.jobId,
             phone_id=self.phoneId,
-            app=self.app,
-            country_code=self.countryCode,
-            number=self.number,
+            mode=self.mode,
+            app=(self.app or "") if register else "",
+            country_code=(self.countryCode or "") if register else "",
+            number=(self.number or "") if register else "",
             proxy=ProxySpec(p.typeId, p.server, p.port, p.username, p.password),
             expected_egress_ips=tuple(ip.strip() for ip in self.expectedEgressIps if ip.strip()),
             power_off_when_done=self.powerOffWhenDone,
             probe_proxy=(ProbeProxySpec(probe.server, probe.port, probe.username, probe.password)
                          if probe is not None else None),
         )
+
+
+class CreatePhone(_Body):
+    name: str = Field(min_length=1, max_length=60)
+    # Android 10 fica de fora: o GeeLark não libera ADB nele, e sem ADB não há cadastro.
+    androidVersion: Literal["Android 12", "Android 13", "Android 14", "Android 15", "Android 16", "Android 11"] = "Android 12"
+    # Na prática, o socks-gateway do cadastro (usuário = vaga do PC); o phone já nasce saindo pelo PC.
+    proxy: ProxyIn
+
+    @field_validator("name")
+    @classmethod
+    def clean_name(cls, v: str) -> str:
+        v = v.strip()
+        if not v:
+            raise ValueError("o nome é obrigatório")
+        return v
+
+    def proxy_url(self) -> str:
+        p = self.proxy
+        scheme = {1: "socks5", 2: "http", 3: "https"}[p.typeId]
+        auth = f"{quote(p.username, safe='')}:{quote(p.password, safe='')}@" if p.username else ""
+        return f"{scheme}://{auth}{p.server}:{p.port}"
 
 
 class SmsInput(_Body):

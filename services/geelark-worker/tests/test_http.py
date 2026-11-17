@@ -99,6 +99,58 @@ def test_phones_geelark_error(client, geelark):
     assert resp.status_code == 502 and resp.json()["error"] == "geelark_error"
 
 
+PHONE_BODY = {"name": "WhatsApp 3", "androidVersion": "Android 12",
+              "proxy": {"typeId": 1, "server": "209.50.229.249", "port": 1080, "username": "edge-1", "password": "a b@c"}}
+
+
+def test_create_phone_with_proxy(client, geelark):
+    geelark.create_phone.return_value = {"code": 0, "id": "new-1", "profileName": "WhatsApp 3"}
+    geelark.get_phone.return_value = {"id": "new-1", "serialName": "WhatsApp 3", "status": 2, "systemVer": "12",
+                                      "proxy": {"type": "socks5", "server": "209.50.229.249", "port": 1080}}
+    resp = client.post("/phones", headers=H, json=PHONE_BODY)
+    assert resp.status_code == 201
+    assert resp.json() == {"id": "new-1", "name": "WhatsApp 3", "status": "off", "android": "Android 12",
+                           "proxy": "socks5 209.50.229.249:1080", "apps": {"whatsapp": None, "business": None},
+                           "busyJobId": None}
+    # Usuário/senha vão codificados na URL do proxy; Android 12+ ganha rede de dados móveis.
+    geelark.create_phone.assert_called_once_with("WhatsApp 3", "Android 12",
+                                                  "socks5://edge-1:a%20b%40c@209.50.229.249:1080", net_type=1)
+
+
+def test_create_phone_falls_back_when_list_lags(client, geelark):
+    geelark.create_phone.return_value = {"code": 0, "id": "new-2", "equipmentInfo": {"osVersion": "Android 11"}}
+    geelark.get_phone.return_value = None
+    body = dict(PHONE_BODY, androidVersion="Android 11")
+    data = client.post("/phones", headers=H, json=body).json()
+    assert data["id"] == "new-2" and data["name"] == "WhatsApp 3" and data["status"] == "off"
+    assert data["android"] == "Android 11" and data["proxy"] == "socks5 209.50.229.249:1080"
+    assert geelark.create_phone.call_args.kwargs["net_type"] is None
+
+
+def test_create_phone_errors(client, geelark):
+    geelark.create_phone.side_effect = GeeLarkError(45004, "check proxy failed", "t", "/open/v1/phone/addNew")
+    resp = client.post("/phones", headers=H, json=PHONE_BODY)
+    assert resp.status_code == 409 and resp.json()["error"] == "egress_offline"
+    geelark.create_phone.side_effect = GeeLarkError(42001, "balance not enough", "t", "/open/v1/phone/addNew")
+    resp = client.post("/phones", headers=H, json=PHONE_BODY)
+    assert resp.status_code == 502 and "balance not enough" in resp.json()["message"]
+    resp = client.post("/phones", headers=H, json=dict(PHONE_BODY, androidVersion="Android 10"))
+    assert resp.status_code == 400 and "a b@c" not in resp.text
+
+
+def test_network_check_job_over_http(client, factory):
+    body = {k: v for k, v in job_body(mode="network_check").items() if k not in ("app", "countryCode", "number")}
+    resp = client.post("/jobs", headers=H, json=body)
+    assert resp.status_code == 201 and resp.json()["mode"] == "network_check"
+    assert resp.json()["app"] is None and resp.json()["number"] is None
+    wait_for(lambda: client.manager.get(body["jobId"]).finished.is_set())
+    job = client.get(f"/jobs/{body['jobId']}", headers=H).json()
+    assert job["status"] == "done" and job["step"] == "network_ok" and job["egressIp"] == "203.0.113.7"
+    # Cadastro sem app/número continua recusado.
+    resp = client.post("/jobs", headers=H, json={k: v for k, v in job_body(jobId="j2").items() if k != "number"})
+    assert resp.status_code == 400
+
+
 def test_stop_phone(client, geelark):
     assert client.post("/phones/p1/stop", headers=H).json() == {"ok": True}
     geelark.stop_phone.assert_called_once_with("p1")
@@ -108,7 +160,7 @@ def test_job_lifecycle_over_http(client, factory):
     resp = client.post("/jobs", headers=H, json=job_body())
     assert resp.status_code == 201
     job = resp.json()
-    assert set(job) == {"jobId", "phoneId", "app", "number", "status", "step", "awaiting", "message",
+    assert set(job) == {"jobId", "phoneId", "mode", "app", "number", "status", "step", "awaiting", "message",
                         "errorCode", "hasScreenshot", "egressIp", "history", "createdAt", "updatedAt"}
     assert job["number"] == "5511999998888"
     job_id = job["jobId"]

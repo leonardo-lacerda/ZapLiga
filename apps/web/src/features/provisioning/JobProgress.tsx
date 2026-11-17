@@ -5,7 +5,7 @@ import { ProfileForm } from './ProfileForm';
 import { SmsCodeInput } from './SmsCodeInput';
 import { createObjectUrl, revokeObjectUrl } from './objectUrl';
 import { cancelJob, fetchJobScreenshot, submitLinkDecision, submitProfile, submitSmsCode } from './provisioning.api';
-import { appLabels, errorExplanation, formatPhone, isJobActive, splitJobNumber, statusLabels, statusTone, stepLabel } from './provisioning.labels';
+import { appLabels, errorExplanation, formatPhone, isJobActive, isNetworkCheck, splitJobNumber, statusLabels, statusTone, stepLabel } from './provisioning.labels';
 import type { Job, WizardPrefill } from './provisioning.types';
 import { JOB_POLL_INTERVAL_MS, useProvisioningJob } from './useProvisioningJob';
 
@@ -22,8 +22,9 @@ const linkingSteps = new Set(['creating_line', 'opening_link_screen', 'waiting_p
 const errorText = (error: unknown) => error instanceof Error ? error.message : String(error);
 
 const retryPrefill = (job: Job): WizardPrefill => {
+  if (isNetworkCheck(job)) return { egressNode: job.egressNode, phoneId: job.geelarkPhoneId };
   const { countryCode, number } = splitJobNumber(job.number);
-  return { egressNode: job.egressNode, phoneId: job.geelarkPhoneId, app: job.app, ...(countryCode ? { countryCode, number } : {}) };
+  return { egressNode: job.egressNode, phoneId: job.geelarkPhoneId, ...(job.app ? { app: job.app } : {}), ...(countryCode ? { countryCode, number } : {}) };
 };
 
 /** Tela de progresso: consulta o job a cada 2 s e pede ao usuário o que o robô precisa. */
@@ -39,7 +40,7 @@ export function JobProgress({ tenantId, jobId, pollIntervalMs = JOB_POLL_INTERVA
   };
 
   const cancel = async () => {
-    if (!window.confirm('Cancelar este cadastro? O robô para e o phone é desligado.')) return;
+    if (!window.confirm(isNetworkCheck(job ?? {}) ? 'Cancelar este teste? O phone é desligado.' : 'Cancelar este cadastro? O robô para e o phone é desligado.')) return;
     setCancelling(true);
     try { await run(() => cancelJob(tenantId, jobId)); } finally { setCancelling(false); }
   };
@@ -52,13 +53,14 @@ export function JobProgress({ tenantId, jobId, pollIntervalMs = JOB_POLL_INTERVA
   }
 
   const active = isJobActive(job);
+  const network = isNetworkCheck(job);
   return <div className="provisioning-progress-layout">
     <Panel className="provisioning-progress">
       <div className="detail-heading">
         <div>
-          <span className="eyebrow">CADASTRO {appLabels[job.app]?.toUpperCase() ?? ''}</span>
-          <h2>{formatPhone(job.number)}</h2>
-          <p>Phone {job.phoneName ?? job.geelarkPhoneId} · saída pelo PC do atendente{job.egressIp ? ` (IP ${job.egressIp})` : ''}</p>
+          <span className="eyebrow">{network ? 'TESTE DE INTERNET' : `CADASTRO ${(job.app && appLabels[job.app]?.toUpperCase()) ?? ''}`}</span>
+          <h2>{network ? (job.phoneName ?? job.geelarkPhoneId) : formatPhone(job.number)}</h2>
+          <p>{network ? 'Telefone' : `Phone ${job.phoneName ?? job.geelarkPhoneId}`} · saída pelo PC do atendente{job.egressIp ? ` (IP ${job.egressIp})` : ''}</p>
         </div>
         <Badge tone={statusTone[job.status] ?? 'neutral'}>{statusLabels[job.status] ?? job.status}</Badge>
       </div>
@@ -71,8 +73,8 @@ export function JobProgress({ tenantId, jobId, pollIntervalMs = JOB_POLL_INTERVA
       </div>
 
       <div className="provisioning-inline-actions">
-        {active && <Button variant="danger" icon="close" onClick={() => void cancel()} disabled={cancelling}>{cancelling ? 'Cancelando…' : 'Cancelar cadastro'}</Button>}
-        <Button variant="ghost" onClick={onBack}>{active ? 'Voltar (o cadastro continua)' : 'Voltar'}</Button>
+        {active && <Button variant="danger" icon="close" onClick={() => void cancel()} disabled={cancelling}>{cancelling ? 'Cancelando…' : network ? 'Cancelar teste' : 'Cancelar cadastro'}</Button>}
+        <Button variant="ghost" onClick={onBack}>{active ? (network ? 'Voltar (o teste continua)' : 'Voltar (o cadastro continua)') : 'Voltar'}</Button>
       </div>
     </Panel>
     <Panel className="provisioning-timeline-panel">
@@ -91,6 +93,16 @@ type ActionProps = {
 };
 
 function JobAction({ job, tenantId, run, onNewJob, onOpenNumbers }: ActionProps) {
+  if (job.status === 'done' && isNetworkCheck(job)) {
+    return <div className="provisioning-result is-success" role="status">
+      <Icon name="check" size={20} />
+      <h3>Internet do telefone ok</h3>
+      <p>{job.message ?? 'O telefone saiu pela internet do PC escolhido.'} Ele já foi desligado.</p>
+      <div className="provisioning-inline-actions">
+        <Button icon="phone" onClick={() => onNewJob({ egressNode: job.egressNode, phoneId: job.geelarkPhoneId })}>Cadastrar número neste telefone</Button>
+      </div>
+    </div>;
+  }
   if (job.status === 'done') {
     return <div className="provisioning-result is-success" role="status">
       <Icon name="check" size={20} />
@@ -106,7 +118,7 @@ function JobAction({ job, tenantId, run, onNewJob, onOpenNumbers }: ActionProps)
   if (job.status === 'failed') return <FailedJob job={job} tenantId={tenantId} onNewJob={onNewJob} onOpenNumbers={onOpenNumbers} />;
   if (job.status === 'cancelled') {
     return <div className="provisioning-result" role="status">
-      <h3>Cadastro cancelado</h3><p>O processo foi interrompido{job.message ? `: ${job.message}` : '.'}</p>
+      <h3>{isNetworkCheck(job) ? 'Teste cancelado' : 'Cadastro cancelado'}</h3><p>O processo foi interrompido{job.message ? `: ${job.message}` : '.'}</p>
       <div className="provisioning-inline-actions"><Button variant="secondary" icon="refresh" onClick={() => onNewJob(retryPrefill(job))}>Tentar de novo</Button></div>
     </div>;
   }

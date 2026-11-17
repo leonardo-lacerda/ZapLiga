@@ -43,13 +43,15 @@ class ProbeProxySpec:
 class JobSpec:
     job_id: str
     phone_id: str
-    app: str                 # "whatsapp" | "business"
+    app: str                 # "whatsapp" | "business" ("" no network_check)
     country_code: str
     number: str
     proxy: ProxySpec = field(repr=False)
     expected_egress_ips: tuple[str, ...] = ()
     power_off_when_done: bool = True
     probe_proxy: ProbeProxySpec | None = field(default=None, repr=False)
+    # "register" = cadastro completo; "network_check" = só aplica a rede, liga e confere o IP.
+    mode: str = "register"
 
     @property
     def full_number(self) -> str:

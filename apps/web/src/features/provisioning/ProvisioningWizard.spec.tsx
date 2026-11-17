@@ -180,3 +180,99 @@ describe('ProvisioningWizard — passos 1 a 3', () => {
     expect(screen.getByRole('button', { name: 'Continuar' })).toBeDisabled();
   });
 });
+
+describe('ProvisioningWizard — telefones criados pelo ZapLiga', () => {
+  const goToPhones = async () => {
+    await screen.findByRole('radio', { name: /^Ana/ });
+    await userEvent.click(screen.getByRole('button', { name: 'Continuar' }));
+    await screen.findByRole('radio', { name: /Phone 2/ });
+  };
+
+  it('cria o telefone já saindo pelo PC escolhido e abre o teste de internet', async () => {
+    let createdPhone: Record<string, unknown> | null = null;
+    let createdJob: Record<string, unknown> | null = null;
+    server.use(
+      http.get(`${API}/egress`, () => HttpResponse.json({ configured: true, items: [egressNode()] })),
+      http.get(`${API}/phones`, () => HttpResponse.json({ items: [phone()] })),
+      http.post(`${API}/phones`, async ({ request }) => { createdPhone = await request.json() as Record<string, unknown>; return HttpResponse.json(phone({ id: 'phone-9', name: 'Vendas 1', apps: { whatsapp: null, business: null } }), { status: 201 }); }),
+      http.post(`${API}/jobs`, async ({ request }) => { createdJob = await request.json() as Record<string, unknown>; return HttpResponse.json(job({ mode: 'network_check', app: null, number: null, geelarkPhoneId: 'phone-9' }), { status: 201 }); }),
+    );
+    const onJobCreated = vi.fn();
+    render(<ProvisioningWizard tenantId="tenant-1" onJobCreated={onJobCreated} />);
+    await goToPhones();
+
+    await userEvent.click(screen.getByRole('button', { name: 'Novo telefone' }));
+    const form = screen.getByRole('group', { name: 'Novo telefone' });
+    expect(within(form).getByText('PC da Ana')).toBeInTheDocument();
+    const name = within(form).getByLabelText('Nome');
+    expect(name).toHaveValue('WhatsApp 2');
+    await userEvent.clear(name);
+    await userEvent.type(name, 'Vendas 1');
+    await userEvent.selectOptions(within(form).getByLabelText('Sistema'), 'Android 13');
+    expect(within(form).getByRole('switch')).toBeChecked();
+    await userEvent.click(within(form).getByRole('button', { name: 'Criar telefone' }));
+
+    await vi.waitFor(() => expect(onJobCreated).toHaveBeenCalledWith(expect.objectContaining({ mode: 'network_check' })));
+    expect(createdPhone).toEqual({ name: 'Vendas 1', androidVersion: 'Android 13', egressNode: egressNode().node });
+    expect(createdJob).toEqual({ egressNode: egressNode().node, geelarkPhoneId: 'phone-9', mode: 'network_check' });
+  });
+
+  it('sem o teste, o telefone novo entra na lista já selecionado; o Enter no nome cria em vez de avançar', async () => {
+    server.use(
+      http.get(`${API}/egress`, () => HttpResponse.json({ configured: true, items: [egressNode()] })),
+      http.get(`${API}/phones`, () => HttpResponse.json({ items: [phone()] })),
+      http.post(`${API}/phones`, () => HttpResponse.json(phone({ id: 'phone-9', name: 'WhatsApp 2', apps: { whatsapp: null, business: null } }), { status: 201 })),
+    );
+    const onJobCreated = vi.fn();
+    render(<ProvisioningWizard tenantId="tenant-1" onJobCreated={onJobCreated} />);
+    await goToPhones();
+
+    await userEvent.click(screen.getByRole('button', { name: 'Novo telefone' }));
+    const form = screen.getByRole('group', { name: 'Novo telefone' });
+    await userEvent.click(within(form).getByRole('switch'));
+    await userEvent.type(within(form).getByLabelText('Nome'), '{Enter}');
+
+    const created = await screen.findByRole('radio', { name: /^WhatsApp 2/ });
+    expect(created).toHaveAttribute('aria-checked', 'true');
+    expect(screen.queryByRole('group', { name: 'Novo telefone' })).not.toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Telefone' })).toBeInTheDocument();
+    expect(onJobCreated).not.toHaveBeenCalled();
+  });
+
+  it('mostra o motivo quando o GeeLark não consegue usar a internet do PC', async () => {
+    const reason = 'O GeeLark testou a internet pelo PC escolhido e ela não respondeu. Confira se o PC está online e tente de novo.';
+    server.use(
+      http.get(`${API}/egress`, () => HttpResponse.json({ configured: true, items: [egressNode()] })),
+      http.get(`${API}/phones`, () => HttpResponse.json({ items: [phone()] })),
+      http.post(`${API}/phones`, () => HttpResponse.json({ statusCode: 409, code: 'egress_offline', message: reason }, { status: 409 })),
+    );
+    render(<ProvisioningWizard tenantId="tenant-1" onJobCreated={vi.fn()} />);
+    await goToPhones();
+
+    await userEvent.click(screen.getByRole('button', { name: 'Novo telefone' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Criar telefone' }));
+
+    expect(await screen.findByText(reason)).toBeInTheDocument();
+    // O formulário continua aberto para tentar de novo.
+    expect(screen.getByRole('group', { name: 'Novo telefone' })).toBeInTheDocument();
+  });
+
+  it('testa a internet de um telefone que já existe', async () => {
+    let createdJob: Record<string, unknown> | null = null;
+    server.use(
+      http.get(`${API}/egress`, () => HttpResponse.json({ configured: true, items: [egressNode()] })),
+      http.get(`${API}/phones`, () => HttpResponse.json({ items: [phone()] })),
+      http.post(`${API}/jobs`, async ({ request }) => { createdJob = await request.json() as Record<string, unknown>; return HttpResponse.json(job({ mode: 'network_check', app: null, number: null }), { status: 201 }); }),
+    );
+    const onJobCreated = vi.fn();
+    render(<ProvisioningWizard tenantId="tenant-1" onJobCreated={onJobCreated} />);
+    await goToPhones();
+
+    expect(screen.queryByRole('button', { name: /Testar internet/ })).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole('radio', { name: /Phone 2/ }));
+    await userEvent.click(screen.getByRole('button', { name: 'Testar internet de Phone 2' }));
+
+    await vi.waitFor(() => expect(onJobCreated).toHaveBeenCalled());
+    expect(createdJob).toEqual({ egressNode: egressNode().node, geelarkPhoneId: 'phone-2', mode: 'network_check' });
+  });
+});

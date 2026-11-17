@@ -58,6 +58,7 @@ Base: `GEELARK_WORKER_URL` (ex.: `http://geelark-worker:8080`). Toda rota exige 
 |---|---|---|
 | `GET /health` | — | `{ "ok": true }` |
 | `GET /phones` | — | `{ "items": [Phone] }` |
+| `POST /phones` | `CreateWorkerPhone` | `201 Phone` · `409 egress_offline` (o GeeLark testou o proxy e ele não respondeu) · `502 geelark_error` |
 | `POST /phones/{phoneId}/stop` | — | `{ "ok": true }` |
 | `POST /jobs` | `CreateWorkerJob` | `201 WorkerJob` · `409 phone_busy` · `429 worker_full` |
 | `GET /jobs/{jobId}` | — | `WorkerJob` · `404 not_found` (ex.: worker reiniciou) |
@@ -74,12 +75,23 @@ type Phone = {
   busyJobId: string | null;
 };
 
+// phone/addNew do GeeLark: nasce desligado (cobrança por minuto) e já com o proxy, em
+// proxyInformation = "socks5://usuario:senha@host:porta"; Android 12+ ganha netType 1 (dados móveis).
+type CreateWorkerPhone = {
+  name: string;               // 1–60
+  androidVersion: 'Android 11' | 'Android 12' | 'Android 13' | 'Android 14' | 'Android 15' | 'Android 16';
+  proxy: { typeId: 1 | 2 | 3; server: string; port: number; username: string; password: string };
+};
+
 type CreateWorkerJob = {
   jobId: string;              // UUID gerado pela API (mesmo id nos dois lados)
   phoneId: string;
-  app: 'whatsapp' | 'business';
-  countryCode: string;        // só dígitos, ex.: "55"
-  number: string;             // só dígitos, sem o país
+  // network_check: setting_network → starting_phone → connecting_adb → checking_network e termina
+  // `done` / step `network_ok` (ou `egress_mismatch`), sempre desligando o phone. Sem app nem número.
+  mode?: 'register' | 'network_check'; // padrão register
+  app?: 'whatsapp' | 'business';       // obrigatório no register
+  countryCode?: string;       // só dígitos, ex.: "55" (register)
+  number?: string;            // só dígitos, sem o país (register)
   proxy: { typeId: 1 | 2 | 3; server: string; port: number; username: string; password: string };
   // Endereço interno do mesmo proxy, para o worker descobrir o IP de saída (seção 4). Opcional.
   probeProxy?: { server: string; port: number; username: string; password: string };
@@ -95,7 +107,8 @@ type JobInput =
   | { type: 'pair_code'; code: string };                             // "ABCD-EFGH" ou "ABCDEFGH"
 
 type WorkerJob = {
-  jobId: string; phoneId: string; app: 'whatsapp' | 'business'; number: string; // número completo, só dígitos
+  jobId: string; phoneId: string; mode: 'register' | 'network_check';
+  app: 'whatsapp' | 'business' | null; number: string | null; // número completo, só dígitos; null no network_check
   status: 'running' | 'waiting_input' | 'done' | 'failed' | 'cancelled';
   step: string; awaiting: null | 'sms' | 'profile' | 'link_decision' | 'pair_code';
   message: string | null; errorCode: string | null; hasScreenshot: boolean;
@@ -116,6 +129,7 @@ passa por `entitlement.assertAction(tenantId, 'write', userId)`.
 | `GET egress` | — | `{ items: EgressNode[], configured: boolean }` |
 | `PUT egress/{node}` | `{ userId: string \| null }` | `EgressNode` (liga o nó a uma pessoa) |
 | `GET phones` | — | `{ items: Phone[] }` (repasse do worker) |
+| `POST phones` | `{ name, androidVersion, egressNode }` | `201 Phone` (criado já saindo pelo PC `egressNode`) · `409 egress_offline` |
 | `POST jobs` | `CreateJob` | `201 Job` |
 | `GET jobs` | `?limit=20` | `{ items: Job[] }` (mais recentes primeiro) |
 | `GET jobs/{id}` | — | `Job` |
@@ -137,8 +151,10 @@ type EgressNode = {
 };
 
 type CreateJob = {
-  egressNode: string; geelarkPhoneId: string; app: 'whatsapp' | 'business';
-  countryCode: string; number: string; powerOffWhenDone?: boolean; // padrão true
+  egressNode: string; geelarkPhoneId: string;
+  mode?: 'register' | 'network_check';  // network_check = "Testar internet" (sempre desliga no fim)
+  app?: 'whatsapp' | 'business'; countryCode?: string; number?: string; // obrigatórios no register
+  powerOffWhenDone?: boolean; // padrão true
 };
 
 type Job = WorkerJob-like & {
@@ -150,7 +166,9 @@ type Job = WorkerJob-like & {
 Regras da API:
 
 - `POST jobs` recusa (`409 egress_offline`) se o nó não estiver online agora, e
-  (`400`) se `number`/`countryCode` não forem dígitos válidos.
+  (`400`) se `number`/`countryCode` não forem dígitos válidos (só no `register`).
+- `POST phones` também exige o PC online e grava `provisioning.phone_created` na auditoria. A
+  cobrança do GeeLark começa só quando o phone liga (no teste de internet ou no cadastro).
 - `GET jobs/{id}` consulta o worker, atualiza a cópia no banco e devolve. Se o worker
   responder `404` para um job que não terminou, marca `failed` / `worker_lost` e pede ao
   worker `POST /phones/{id}/stop`.
@@ -221,3 +239,5 @@ Configuração da API:
   app, phone, status, step, awaiting, message, error_code, egress_ip, linked, number_id,
   link_started_at, created_at, updated_at, finished_at)
 - `provisioning_egress_nodes` (tenant_id, node_name, user_id, updated_at; PK tenant_id + node_name)
+- `068_provisioning_network_check.sql`: `provisioning_jobs.mode` (`register` | `network_check`,
+  padrão `register`); `app` e `phone` passam a aceitar NULL, mas continuam obrigatórios no `register`.

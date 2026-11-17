@@ -2,7 +2,8 @@ import { FormEvent, useCallback, useEffect, useState } from 'react';
 import { Badge, Button, Icon, Panel } from '../../components/ui';
 import { EgressPicker } from './EgressPicker';
 import { PhonePicker } from './PhonePicker';
-import { apiErrorCode, assignEgressNode, createJob, fetchEgressNodes, fetchPhones } from './provisioning.api';
+import type { NewPhoneInput } from './NewPhoneForm';
+import { apiErrorCode, assignEgressNode, createJob, createPhone, fetchEgressNodes, fetchPhones } from './provisioning.api';
 import { appLabels, createErrorMessages, digitsOnly, formatPhoneParts, validatePhoneNumber } from './provisioning.labels';
 import type { EgressList, Job, Phone, ProvisioningApp, WizardPrefill } from './provisioning.types';
 
@@ -32,6 +33,8 @@ export function ProvisioningWizard({ tenantId, currentUserId, prefill, onJobCrea
   const [numberTouched, setNumberTouched] = useState(false);
   const [claiming, setClaiming] = useState(false);
   const [claimError, setClaimError] = useState('');
+  const [phoneActionError, setPhoneActionError] = useState('');
+  const [testing, setTesting] = useState(false);
 
   const loadEgress = useCallback(async () => {
     setEgressLoading(true); setEgressError('');
@@ -79,6 +82,33 @@ export function ProvisioningWizard({ tenantId, currentUserId, prefill, onJobCrea
       : step === 2 ? Boolean(app)
         : !numberError;
 
+  /** A API já responde em português (PC offline, GeeLark sem internet pelo PC, saldo...); só a falta de configuração volta à Rede. */
+  const handleEgressError = (error: unknown) => {
+    if (apiErrorCode(error) === 'egress_not_configured') { setStep(0); void loadEgress(); }
+    return errorText(error);
+  };
+
+  /** Teste de internet: liga o phone pela rede do PC, confere o IP lá dentro e desliga. Abre a tela do job. */
+  const testNetwork = async (geelarkPhoneId: string) => {
+    if (!selectedNode) return;
+    setTesting(true); setPhoneActionError('');
+    try { onJobCreated(await createJob(tenantId, { egressNode: selectedNode.node, geelarkPhoneId, mode: 'network_check' })); }
+    catch (error) { setPhoneActionError(handleEgressError(error)); if (apiErrorCode(error) === 'phone_busy') void loadPhones(); }
+    finally { setTesting(false); }
+  };
+
+  const createNewPhone = async (input: NewPhoneInput) => {
+    if (!selectedNode) return false;
+    setPhoneActionError('');
+    let phone;
+    try { phone = await createPhone(tenantId, { name: input.name, androidVersion: input.androidVersion, egressNode: selectedNode.node }); }
+    catch (error) { setPhoneActionError(handleEgressError(error)); return false; }
+    setPhones((current) => [phone, ...(current ?? []).filter((item) => item.id !== phone.id)]);
+    setPhoneId(phone.id);
+    if (input.testNetwork) await testNetwork(phone.id);
+    return true;
+  };
+
   const submit = async (event: FormEvent) => {
     event.preventDefault();
     setNumberTouched(true);
@@ -102,7 +132,7 @@ export function ProvisioningWizard({ tenantId, currentUserId, prefill, onJobCrea
     <div className="wizard-heading">
       <div><span className="eyebrow">NOVO CADASTRO</span><h2>{steps[step]}</h2><p>{[
         'Escolha o PC do atendente pelo qual o phone vai sair para a internet. O cadastro só começa com o PC online.',
-        'Escolha o cloud phone do GeeLark onde o WhatsApp será cadastrado.',
+        'Escolha o cloud phone do GeeLark onde o WhatsApp será cadastrado, ou crie um novo já saindo pela internet do PC.',
         'Escolha qual app cadastrar neste phone.',
         'Informe o número que vai receber o SMS de confirmação.',
       ][step]}</p></div>
@@ -118,7 +148,8 @@ export function ProvisioningWizard({ tenantId, currentUserId, prefill, onJobCrea
 
     <form onSubmit={(event) => { if (step === 3) void submit(event); else { event.preventDefault(); next(); } }}>
       {step === 0 && <EgressPicker egress={egress} loading={egressLoading} error={egressError} selected={egressNode} onSelect={setEgressNode} onRefresh={() => void loadEgress()} onClaim={currentUserId ? (node) => void claimEgress(node) : undefined} claiming={claiming} claimError={claimError} />}
-      {step === 1 && <PhonePicker phones={phones} loading={phonesLoading} error={phonesError} selected={phoneId} onSelect={setPhoneId} onRefresh={() => void loadPhones()} />}
+      {step === 1 && <PhonePicker phones={phones} loading={phonesLoading} error={phonesError} selected={phoneId} onSelect={setPhoneId} onRefresh={() => void loadPhones()}
+        pcLabel={selectedNode?.pcName || selectedNode?.label} onCreate={createNewPhone} onTestNetwork={(id) => void testNetwork(id)} testing={testing} actionError={phoneActionError} />}
       {step === 2 && <div className="choice-list" role="radiogroup" aria-label="App">
         {(['whatsapp', 'business'] as const).map((option) => {
           const installed = selectedPhone?.apps?.[option];

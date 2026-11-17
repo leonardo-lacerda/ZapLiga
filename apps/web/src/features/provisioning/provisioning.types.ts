@@ -2,6 +2,9 @@
 
 export type ProvisioningApp = 'whatsapp' | 'business';
 
+/** register = cadastro completo; network_check = só liga o phone e confere a internet (IP do PC). */
+export type JobMode = 'register' | 'network_check';
+
 export type JobStatus = 'running' | 'waiting_input' | 'done' | 'failed' | 'cancelled';
 
 export type JobAwaiting = null | 'sms' | 'profile' | 'link_decision' | 'pair_code';
@@ -10,7 +13,7 @@ export type JobStep =
   | 'queued' | 'checking_tunnel' | 'setting_network' | 'starting_phone' | 'connecting_adb' | 'checking_network'
   | 'installing_app' | 'opening_app' | 'entering_number' | 'waiting_sms' | 'verifying'
   | 'waiting_profile' | 'saving_profile' | 'registered' | 'creating_line' | 'opening_link_screen'
-  | 'waiting_pair_code' | 'entering_pair_code' | 'linking' | 'done' | 'failed' | 'cancelled';
+  | 'waiting_pair_code' | 'entering_pair_code' | 'linking' | 'network_ok' | 'done' | 'failed' | 'cancelled';
 
 export type JobErrorCode =
   | 'egress_offline' | 'egress_mismatch' | 'no_internet' | 'phone_start_failed' | 'adb_failed'
@@ -54,9 +57,12 @@ export type Job = {
   egressNode: string;
   geelarkPhoneId: string;
   phoneName: string | null;
-  app: ProvisioningApp;
-  /** Número completo (país + número), só dígitos. */
-  number: string;
+  /** Ausente nas respostas antigas = register. */
+  mode?: JobMode;
+  /** null no teste de internet. */
+  app: ProvisioningApp | null;
+  /** Número completo (país + número), só dígitos; null no teste de internet. */
+  number: string | null;
   status: JobStatus;
   step: JobStep | string;
   awaiting: JobAwaiting;
@@ -75,11 +81,19 @@ export type Job = {
 export type CreateJob = {
   egressNode: string;
   geelarkPhoneId: string;
-  app: ProvisioningApp;
-  countryCode: string;
-  number: string;
+  mode?: JobMode;
+  app?: ProvisioningApp;
+  countryCode?: string;
+  number?: string;
   powerOffWhenDone?: boolean;
 };
+
+/** Android 10 fica de fora: o GeeLark não libera ADB nele. */
+export const ANDROID_VERSIONS = ['Android 12', 'Android 13', 'Android 14', 'Android 15', 'Android 16', 'Android 11'] as const;
+export type AndroidVersion = typeof ANDROID_VERSIONS[number];
+
+/** O phone nasce saindo pela internet do PC escolhido no passo de Rede. */
+export type CreatePhone = { name: string; androidVersion: AndroidVersion; egressNode: string };
 
 /** Valores para reabrir o assistente já preenchido ("Tentar de novo"). */
 export type WizardPrefill = Partial<{ egressNode: string; phoneId: string; app: ProvisioningApp; countryCode: string; number: string }>;

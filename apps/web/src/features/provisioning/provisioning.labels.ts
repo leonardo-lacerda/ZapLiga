@@ -20,12 +20,18 @@ export const stepLabels: Record<string, string> = {
   waiting_pair_code: 'Gerando o código de conexão',
   entering_pair_code: 'Digitando o código de conexão',
   linking: 'Conectando ao ZapLiga',
+  network_ok: 'Internet conferida',
   done: 'Concluído',
   failed: 'Falhou',
   cancelled: 'Cancelado',
 };
 
 export const stepLabel = (step: string | null | undefined) => (step ? stepLabels[step] ?? step : '—');
+
+export const isNetworkCheck = (job: Pick<Job, 'mode'>) => job.mode === 'network_check';
+
+/** Título do job nas listas: o número do cadastro, ou "Teste de internet". */
+export const jobTitle = (job: Pick<Job, 'mode' | 'number'>) => (isNetworkCheck(job) ? 'Teste de internet' : formatPhone(job.number));
 
 export const statusLabels: Record<JobStatus, string> = {
   running: 'Em andamento',

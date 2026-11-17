@@ -165,6 +165,27 @@ class GeeLarkAPI:
         path = "/open/v1/phone/stop"
         self._single_result(self.call(path, {"ids": [phone_id]}), phone_id, path)
 
+    def create_phone(self, name: str, mobile_type: str, proxy_url: str, *,
+                     language: str = "baseOnIP", net_type: int | None = 1) -> dict:
+        """Cria um cloud phone (desligado, cobrança por minuto) já com o proxy.
+
+        `proxy_url` = socks5://usuario:senha@host:porta. O GeeLark testa o proxy antes de
+        criar: se ele não responder, a falha vem como 45004. A chamada em si devolve
+        code 0 mesmo quando a criação falha; o erro de cada phone vem em details[i].code.
+        """
+        path = "/open/v1/phone/addNew"
+        item: dict[str, Any] = {"profileName": name, "proxyInformation": proxy_url, "mobileLanguage": language}
+        if net_type is not None:
+            item["netType"] = net_type
+        data = self.call(path, {"mobileType": mobile_type, "chargeMode": 0, "data": [item]}) or {}
+        details = data.get("details") or []
+        detail = details[0] if details else {}
+        if not detail:
+            raise GeeLarkError(-1, "a API não devolveu o phone criado", "", path)
+        if detail.get("code", -1) != 0 or not detail.get("id"):
+            raise GeeLarkError(int(detail.get("code", -1)), str(detail.get("msg", "")), "", path)
+        return detail
+
     def update_proxy(self, phone_id: str, type_id: int, server: str, port: int, username: str, password: str) -> None:
         """Troca o proxy do phone. O phone precisa estar DESLIGADO.
 

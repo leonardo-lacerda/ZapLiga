@@ -174,6 +174,24 @@ it('reabre um cadastro em andamento pela lista de cadastros recentes', async () 
   expect(await screen.findByLabelText('Código SMS')).toBeInTheDocument();
 });
 
+it('teste de internet: mostra o telefone, o IP conferido e leva ao cadastro nesse telefone', async () => {
+  server.use(http.get(`${API}/jobs/job-1`, () => HttpResponse.json(job({
+    mode: 'network_check', app: null, number: null, status: 'done', step: 'network_ok', egressIp: '131.255.254.90',
+    message: 'Internet ok: o phone sai pelo IP 131.255.254.90, o mesmo do PC escolhido.',
+    history: historyOf('queued', 'setting_network', 'starting_phone', 'connecting_adb', 'checking_network', 'network_ok'),
+  }))));
+  const onNewJob = vi.fn();
+  render(<JobProgress tenantId="tenant-1" jobId="job-1" pollIntervalMs={POLL_MS} onBack={vi.fn()} onNewJob={onNewJob} onOpenNumbers={vi.fn()} />);
+
+  expect(await screen.findByText('Internet do telefone ok')).toBeInTheDocument();
+  expect(screen.getByText('TESTE DE INTERNET')).toBeInTheDocument();
+  expect(screen.getByRole('heading', { name: 'Phone 2' })).toBeInTheDocument();
+  expect(screen.getByText(/sai pelo IP 131\.255\.254\.90, o mesmo do PC escolhido\. Ele já foi desligado\./)).toBeInTheDocument();
+  expect(screen.getByText('Internet conferida')).toBeInTheDocument();
+  await userEvent.click(screen.getByRole('button', { name: 'Cadastrar número neste telefone' }));
+  expect(onNewJob).toHaveBeenCalledWith({ egressNode: 'a55241de-0000-4000-8000-000000000001', phoneId: 'phone-2' });
+});
+
 it('não mostra o assistente sem permissão', () => {
   render(<ProvisioningPage tenantId="tenant-1" allowed={false} onOpenNumbers={vi.fn()} />);
   expect(screen.getByText('Cadastro de WhatsApp não disponível')).toBeInTheDocument();

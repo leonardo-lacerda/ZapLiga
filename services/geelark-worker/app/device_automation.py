@@ -52,7 +52,8 @@ class GeeLarkAutomation:
         self.spec = spec
         self.ctx = ctx
         self.phone_id = spec.phone_id
-        self.app = wa.APPS[spec.app]
+        # No network_check não há app: o padrão só existe para o objeto ficar completo (nunca é aberto).
+        self.app = wa.APPS.get(spec.app) or wa.APPS["whatsapp"]
         self.serial: str | None = None
         self.adb: Any = None   # adbutils.AdbDevice
         self.d: Any = None     # uiautomator2.Device

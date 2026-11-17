@@ -36,8 +36,8 @@ const makeDb = () => {
   const query = jest.fn(async (sql: string, params: any[] = []) => {
     const text = sql.replace(/\s+/g, ' ').trim();
     if (text.startsWith('INSERT INTO provisioning_jobs')) {
-      const [id, tenant_id, created_by, egress_node, geelark_phone_id, phone_name, app, phone, power_off_when_done] = params;
-      const row = { id, tenant_id, created_by, egress_node, geelark_phone_id, phone_name, app, phone, status: 'running', step: 'queued', awaiting: null, message: null, error_code: null, egress_ip: null, has_screenshot: false, history: [], linked: false, number_id: null, link_started_at: null, power_off_when_done, created_at: new Date(), updated_at: new Date(), finished_at: null };
+      const [id, tenant_id, created_by, egress_node, geelark_phone_id, phone_name, mode, app, phone, power_off_when_done] = params;
+      const row = { id, tenant_id, created_by, egress_node, geelark_phone_id, phone_name, mode, app, phone, status: 'running', step: 'queued', awaiting: null, message: null, error_code: null, egress_ip: null, has_screenshot: false, history: [], linked: false, number_id: null, link_started_at: null, power_off_when_done, created_at: new Date(), updated_at: new Date(), finished_at: null };
       jobs.set(id, row);
       return { rows: [{ ...row }] };
     }
@@ -192,6 +192,58 @@ describe('WhatsappProvisioningService — egress (attendant PCs)', () => {
   });
 });
 
+describe('WhatsappProvisioningService — phones created from ZapLiga', () => {
+  const newPhone = { id: 'phone-9', name: 'WhatsApp 3', status: 'off', android: 'Android 12', proxy: 'socks5 209.50.229.249:1080', apps: { whatsapp: null, business: null }, busyJobId: null };
+
+  it('creates the phone already behind the chosen PC, through the public SOCKS gateway', async () => {
+    const ctx = makeService();
+    (ctx.worker as any).createPhone = jest.fn().mockResolvedValue(newPhone);
+
+    const phone = await ctx.service.createPhone(TENANT, USER, { name: '  WhatsApp 3 ', androidVersion: 'Android 12', egressNode: PC_ID });
+
+    expect(phone).toEqual(newPhone);
+    expect(ctx.entitlement.assertAction).toHaveBeenCalledWith(TENANT, 'write', USER);
+    expect((ctx.worker as any).createPhone).toHaveBeenCalledWith({
+      name: 'WhatsApp 3', androidVersion: 'Android 12',
+      proxy: { typeId: 1, server: '209.50.229.249', port: 1080, username: 'edge-1', password: 'gateway-secret' },
+    });
+    expect(ctx.audit.record).toHaveBeenCalledWith(expect.objectContaining({ action: 'provisioning.phone_created', entityId: 'phone-9', metadata: { androidVersion: 'Android 12', egressNode: PC_ID, slot: 'edge-1' } }));
+    expect(JSON.stringify(ctx.audit.record.mock.calls)).not.toContain('gateway-secret');
+  });
+
+  it('refuses an offline PC, an empty name or Android 10 before calling GeeLark', async () => {
+    const ctx = makeService();
+    (ctx.worker as any).createPhone = jest.fn();
+
+    await expect(ctx.service.createPhone(TENANT, USER, { name: 'X', androidVersion: 'Android 12', egressNode: OTHER_PC_ID })).rejects.toMatchObject({ status: 409, response: expect.objectContaining({ code: 'egress_offline' }) });
+    await expect(ctx.service.createPhone(TENANT, USER, { name: '  ', androidVersion: 'Android 12', egressNode: PC_ID })).rejects.toMatchObject({ status: 400 });
+    await expect(ctx.service.createPhone(TENANT, USER, { name: 'X', androidVersion: 'Android 10' as any, egressNode: PC_ID })).rejects.toMatchObject({ status: 400 });
+    expect((ctx.worker as any).createPhone).not.toHaveBeenCalled();
+  });
+
+  it('tests the internet of a phone: no app nor number, always powers off, ends in network_ok', async () => {
+    const ctx = makeService();
+
+    const job = await ctx.service.createJob(TENANT, USER, { egressNode: PC_ID, geelarkPhoneId: 'phone-1', mode: 'network_check', powerOffWhenDone: false });
+
+    expect(ctx.worker.createJob).toHaveBeenCalledWith({
+      jobId: job.id, phoneId: 'phone-1', mode: 'network_check',
+      proxy: { typeId: 1, server: '209.50.229.249', port: 1080, username: 'edge-1', password: 'gateway-secret' },
+      probeProxy: { server: 'socks-gateway', port: 1080, username: 'edge-1', password: 'gateway-secret' },
+      expectedEgressIps: [], powerOffWhenDone: true,
+    });
+    expect(job).toMatchObject({ mode: 'network_check', app: null, number: null });
+    expect(ctx.audit.record).toHaveBeenCalledWith(expect.objectContaining({ action: 'provisioning.started', metadata: expect.objectContaining({ mode: 'network_check', app: null }) }));
+
+    ctx.worker.getJob.mockResolvedValue(workerJob({ jobId: job.id, app: null, number: null, status: 'done', step: 'network_ok', egressIp: '131.255.254.90', message: 'Internet ok: o phone sai pelo IP 131.255.254.90, o mesmo do PC escolhido.' }));
+    const done = await ctx.service.getJob(TENANT, USER, job.id);
+    expect(done).toMatchObject({ status: 'done', step: 'network_ok', egressIp: '131.255.254.90', finishedAt: expect.any(String) });
+    // Nothing to link: the link decision is refused instead of creating a line without a number.
+    await expect(ctx.service.decideLink(TENANT, USER, job.id, true)).rejects.toMatchObject({ status: 409 });
+    expect(ctx.numbers.create).not.toHaveBeenCalled();
+  });
+});
+
 describe('WhatsappProvisioningService — job creation', () => {
   it('starts a job through the PC slot resolved now, with the public proxy and the internal probe proxy', async () => {
     const ctx = makeService();
@@ -200,14 +252,14 @@ describe('WhatsappProvisioningService — job creation', () => {
     expect(ctx.entitlement.assertAction).toHaveBeenCalledWith(TENANT, 'write', USER);
     expect(ctx.egress.pcExits).toHaveBeenCalledWith(PC_ID);
     expect(ctx.worker.createJob).toHaveBeenCalledWith({
-      jobId: job.id, phoneId: 'phone-1', app: 'whatsapp', countryCode: '55', number: '11987654321',
+      jobId: job.id, phoneId: 'phone-1', mode: 'register', app: 'whatsapp', countryCode: '55', number: '11987654321',
       proxy: { typeId: 1, server: '209.50.229.249', port: 1080, username: 'edge-1', password: 'gateway-secret' },
       probeProxy: { server: 'socks-gateway', port: 1080, username: 'edge-1', password: 'gateway-secret' },
       expectedEgressIps: [], powerOffWhenDone: true,
     });
-    expect(job).toMatchObject({ status: 'running', step: 'queued', number: '5511987654321', phoneName: 'Phone 2', egressNode: PC_ID, linked: false, numberId: null, createdBy: USER });
+    expect(job).toMatchObject({ mode: 'register', status: 'running', step: 'queued', number: '5511987654321', phoneName: 'Phone 2', egressNode: PC_ID, linked: false, numberId: null, createdBy: USER });
     expect(ctx.db.jobs.get(job.id).egress_node).toBe(PC_ID);
-    expect(ctx.audit.record).toHaveBeenCalledWith(expect.objectContaining({ action: 'provisioning.started', metadata: { app: 'whatsapp', egressNode: PC_ID, slot: 'edge-1', geelarkPhoneId: 'phone-1' } }));
+    expect(ctx.audit.record).toHaveBeenCalledWith(expect.objectContaining({ action: 'provisioning.started', metadata: { mode: 'register', app: 'whatsapp', egressNode: PC_ID, slot: 'edge-1', geelarkPhoneId: 'phone-1' } }));
     expect(actions(ctx.audit)).toEqual(['provisioning.started']);
     // The gateway password goes to the worker only, never to the job copy or the audit trail.
     expect(JSON.stringify([...ctx.db.jobs.values()])).not.toContain('gateway-secret');

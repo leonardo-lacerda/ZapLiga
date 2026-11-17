@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Badge, Button, Panel, SectionHeader } from '../../components/ui';
 import { fetchRecentJobs } from './provisioning.api';
-import { appLabels, formatDateTime, formatPhone, isJobActive, statusLabels, statusTone, stepLabel } from './provisioning.labels';
+import { appLabels, formatDateTime, isJobActive, jobTitle, statusLabels, statusTone, stepLabel } from './provisioning.labels';
 import type { Job } from './provisioning.types';
 
 /** Últimos cadastros da empresa, para reabrir um que está em andamento depois de recarregar a página. */
@@ -24,12 +24,12 @@ export function RecentJobs({ tenantId, onOpen }: { tenantId: string; onOpen: (jo
     {jobs && jobs.length > 0 && <ul className="provisioning-recent-list">
       {jobs.map((job) => <li key={job.id}>
         <div>
-          <strong>{formatPhone(job.number)}</strong>
-          <small>{job.phoneName ?? job.geelarkPhoneId} · {appLabels[job.app] ?? job.app} · {formatDateTime(job.createdAt)}</small>
+          <strong>{jobTitle(job)}</strong>
+          <small>{job.phoneName ?? job.geelarkPhoneId}{job.app ? ` · ${appLabels[job.app] ?? job.app}` : ''} · {formatDateTime(job.createdAt)}</small>
           <small>{stepLabel(job.step)}</small>
         </div>
         <Badge tone={statusTone[job.status] ?? 'neutral'}>{statusLabels[job.status] ?? job.status}</Badge>
-        <Button variant={isJobActive(job) ? 'secondary' : 'ghost'} onClick={() => onOpen(job.id)} aria-label={`${isJobActive(job) ? 'Acompanhar' : 'Abrir'} cadastro de ${formatPhone(job.number)}`}>{isJobActive(job) ? 'Acompanhar' : 'Abrir'}</Button>
+        <Button variant={isJobActive(job) ? 'secondary' : 'ghost'} onClick={() => onOpen(job.id)} aria-label={`${isJobActive(job) ? 'Acompanhar' : 'Abrir'} ${job.mode === 'network_check' ? `teste de internet de ${job.phoneName ?? job.geelarkPhoneId}` : `cadastro de ${jobTitle(job)}`}`}>{isJobActive(job) ? 'Acompanhar' : 'Abrir'}</Button>
       </li>)}
     </ul>}
   </Panel>;

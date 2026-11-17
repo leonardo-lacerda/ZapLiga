@@ -16,10 +16,10 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from .config import Settings
 from .device_automation import make_factory
 from .errors import ApiError
-from .geelark_api import PHONE_OFF, GeeLarkAPI, GeeLarkError
+from .geelark_api import PHONE_OFF, PROXY_CHECK_FAILED, GeeLarkAPI, GeeLarkError
 from .jobs import JobManager
 from .phones import to_phone
-from .schemas import CreateWorkerJob, JobInput, ProfileInput
+from .schemas import CreatePhone, CreateWorkerJob, JobInput, ProfileInput
 
 log = logging.getLogger("geelark_worker")
 
@@ -114,6 +114,31 @@ def create_app(
             pid = str(item.get("id"))
             phones.append(to_phone(item, manager.busy_job_for(pid), manager.known_apps(pid)))
         return {"items": phones}
+
+    @app.post("/phones", dependencies=auth, status_code=201)
+    def create_phone(body: CreatePhone) -> dict:
+        net_type = 1 if int(body.androidVersion.split()[1]) >= 12 else None  # dados móveis (só Android 12+)
+        try:
+            detail = geelark.create_phone(body.name, body.androidVersion, body.proxy_url(), net_type=net_type)
+        except GeeLarkError as exc:
+            if exc.code == PROXY_CHECK_FAILED:
+                raise ApiError(409, "egress_offline",
+                               "O GeeLark testou a internet pelo PC escolhido e ela não respondeu. "
+                               "Confira se o PC está online e tente de novo.") from None
+            log.warning("GeeLark /phone/addNew falhou: %s", exc)
+            detail_msg = f": {exc.msg}" if exc.msg and exc.code != -1 else ""
+            raise ApiError(502, "geelark_error", f"O GeeLark não criou o phone ({exc.code}{detail_msg}).") from None
+        pid = str(detail["id"])
+        log.info("phone criado: %s (%s)", pid, body.androidVersion)
+        try:
+            item = geelark.get_phone(pid)
+        except GeeLarkError:
+            item = None
+        # A lista do GeeLark pode demorar a mostrar o phone novo: monta com o que a criação devolveu.
+        item = item or {"id": pid, "serialName": detail.get("profileName") or body.name, "status": PHONE_OFF,
+                        "systemVer": (detail.get("equipmentInfo") or {}).get("osVersion") or body.androidVersion,
+                        "proxy": {"type": body.proxy.typeId, "server": body.proxy.server, "port": body.proxy.port}}
+        return to_phone(item, None, None)
 
     @app.post("/phones/{phone_id}/stop", dependencies=auth)
     def stop_phone(phone_id: str) -> dict:

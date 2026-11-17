@@ -134,6 +134,31 @@ def test_update_proxy_body_and_45004(api):
                                                  "username": "node", "password": "pw"}}
 
 
+def test_create_phone_body_and_detail(api):
+    detail = {"code": 0, "id": "new-1", "profileName": "WhatsApp 3", "equipmentInfo": {"osVersion": "Android 12"}}
+    api._session.post.return_value = fake_response({"code": 0, "data": {"totalAmount": 1, "successAmount": 1,
+                                                                        "details": [detail]}})
+    assert api.create_phone("WhatsApp 3", "Android 12", "socks5://edge-1:pw@1.2.3.4:1080") == detail
+    assert api._session.post.call_args.args[0].endswith("/open/v1/phone/addNew")
+    assert api._session.post.call_args.kwargs["json"] == {
+        "mobileType": "Android 12", "chargeMode": 0,
+        "data": [{"profileName": "WhatsApp 3", "proxyInformation": "socks5://edge-1:pw@1.2.3.4:1080",
+                  "mobileLanguage": "baseOnIP", "netType": 1}],
+    }
+
+
+def test_create_phone_failure_comes_in_details(api):
+    # code 0 na chamada, mas o phone não foi criado: o erro vem em details[0].
+    api._session.post.return_value = fake_response({"code": 0, "data": {"details": [{"code": 45004, "msg": "check proxy failed"}]}})
+    with pytest.raises(GeeLarkError) as exc:
+        api.create_phone("X", "Android 11", "socks5://u:pw@h:1", net_type=None)
+    assert exc.value.code == geelark_api.PROXY_CHECK_FAILED and "pw" not in str(exc.value)
+    assert "netType" not in api._session.post.call_args.kwargs["json"]["data"][0]
+    api._session.post.return_value = fake_response({"code": 0, "data": {"details": []}})
+    with pytest.raises(GeeLarkError):
+        api.create_phone("X", "Android 12", "socks5://h:1")
+
+
 def test_adb_info_none_until_ready_and_numeric_port(api):
     api._session.post.return_value = fake_response({"code": 0, "data": {"items": [{"id": "p1", "code": 0, "port": ""}]}})
     assert api.adb_info("p1") is None

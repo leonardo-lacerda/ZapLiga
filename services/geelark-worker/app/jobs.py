@@ -105,8 +105,9 @@ class Job:
         return {
             "jobId": self.spec.job_id,
             "phoneId": self.spec.phone_id,
-            "app": self.spec.app,
-            "number": self.spec.full_number,
+            "mode": self.spec.mode,
+            "app": self.spec.app or None,
+            "number": self.spec.full_number or None,
             "status": self.status,
             "step": self.step,
             "awaiting": self.awaiting,
@@ -232,7 +233,8 @@ class JobManager:
             if job.terminal:
                 return
             if message is None:
-                message = _step_message(step, APPS[job.spec.app].label)
+                app = APPS.get(job.spec.app)
+                message = _step_message(step, app.label if app else "app")
             job.status = status
             job.step = step
             job.awaiting = awaiting
@@ -413,6 +415,12 @@ class JobManager:
                 f"({', '.join(expected_ips)}). O WhatsApp não foi aberto.",
             )
         ctx.check()
+
+        if spec.mode == "network_check":
+            # Só a rede: com o IP conferido, termina aqui e o _cleanup desliga o phone.
+            same = ", o mesmo do PC escolhido" if expected_ips else ""
+            self._finish(job, "done", None, f"Internet ok: o phone sai pelo IP {ip}{same}.", step="network_ok")
+            return
 
         if not apps.get(spec.app):
             self._set_step(job, "installing_app")

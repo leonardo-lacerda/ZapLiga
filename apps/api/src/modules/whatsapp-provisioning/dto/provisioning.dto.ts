@@ -1,14 +1,29 @@
 import { IsBoolean, IsIn, IsOptional, IsString, Matches, MaxLength, MinLength, ValidateIf } from 'class-validator';
 
+const isRegister = (object: { mode?: string }) => object.mode !== 'network_check';
+
 export class CreateProvisioningJobDto {
   // Id of the attendant PC (egress_pcs.id) the phone goes out through.
   @IsString() @MinLength(1) @MaxLength(64) egressNode!: string;
   @IsString() @MinLength(1) @MaxLength(120) geelarkPhoneId!: string;
-  @IsIn(['whatsapp', 'business']) app!: 'whatsapp' | 'business';
+  // network_check: only applies the PC's proxy, starts the phone, checks its IP and powers it off.
+  @IsOptional() @IsIn(['register', 'network_check']) mode?: 'register' | 'network_check';
+  @ValidateIf(isRegister) @IsIn(['whatsapp', 'business']) app?: 'whatsapp' | 'business';
   // Digits are validated (and separators stripped) by the service, which answers 400 in Portuguese.
-  @IsString() @MaxLength(8) countryCode!: string;
-  @IsString() @MaxLength(32) number!: string;
+  @ValidateIf(isRegister) @IsString() @MaxLength(8) countryCode?: string;
+  @ValidateIf(isRegister) @IsString() @MaxLength(32) number?: string;
   @IsOptional() @IsBoolean() powerOffWhenDone?: boolean;
+}
+
+export const ANDROID_VERSIONS = ['Android 12', 'Android 13', 'Android 14', 'Android 15', 'Android 16', 'Android 11'] as const;
+export type AndroidVersion = typeof ANDROID_VERSIONS[number];
+
+export class CreatePhoneDto {
+  @IsString() @MinLength(1) @MaxLength(60) name!: string;
+  // Android 10 is left out: GeeLark gives no ADB on it, and without ADB there is no registration.
+  @IsIn(ANDROID_VERSIONS) androidVersion!: AndroidVersion;
+  // The PC (egress_pcs.id) the new phone goes out through from its first boot.
+  @IsString() @MinLength(1) @MaxLength(64) egressNode!: string;
 }
 
 export class SubmitSmsCodeDto {

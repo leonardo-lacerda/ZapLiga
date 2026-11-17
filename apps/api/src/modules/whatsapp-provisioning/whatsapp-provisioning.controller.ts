@@ -2,7 +2,7 @@ import { Body, Controller, Get, Header, HttpCode, Param, Post, Put, Query, Strea
 import { FileInterceptor } from '@nestjs/platform-express';
 import { AuthGuard, CurrentTenant, CurrentUser, Roles, RolesGuard, TenantMembershipGuard } from '../auth/auth.guards';
 import { FeatureFlagGuard, RequiresFeature } from '../feature-flags/feature-flags.guard';
-import { AssignEgressNodeDto, CreateProvisioningJobDto, LinkDecisionDto, SubmitProfileDto, SubmitSmsCodeDto } from './dto/provisioning.dto';
+import { AssignEgressNodeDto, CreatePhoneDto, CreateProvisioningJobDto, LinkDecisionDto, SubmitProfileDto, SubmitSmsCodeDto } from './dto/provisioning.dto';
 import { MAX_PROFILE_PHOTO_BYTES, WhatsappProvisioningService } from './whatsapp-provisioning.service';
 
 /** WhatsApp registration on GeeLark cloud phones (internal; docs/provisioning-contract.md section 3). */
@@ -23,6 +23,9 @@ export class WhatsappProvisioningController {
 
   @Get('/phones')
   phones() { return this.provisioning.listPhones(); }
+
+  @Post('/phones')
+  createPhone(@Body() body: CreatePhoneDto, @CurrentTenant() tenantId: string, @CurrentUser() user: any) { return this.provisioning.createPhone(tenantId, user.id, body); }
 
   @Post('/jobs')
   create(@Body() body: CreateProvisioningJobDto, @CurrentTenant() tenantId: string, @CurrentUser() user: any) { return this.provisioning.createJob(tenantId, user.id, body); }

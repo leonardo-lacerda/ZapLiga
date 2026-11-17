@@ -17,12 +17,16 @@ export type WorkerProxy = { typeId: 1 | 2 | 3; server: string; port: number; use
 /** Internal address of the same proxy: the worker asks it for the egress IP before starting the phone. */
 export type WorkerProbeProxy = { server: string; port: number; username: string; password: string };
 
+export type WorkerJobMode = 'register' | 'network_check';
+
 export type CreateWorkerJob = {
   jobId: string;
   phoneId: string;
-  app: WorkerApp;
-  countryCode: string;
-  number: string;
+  /** network_check: proxy → start → ADB → IP check → power off; no app nor number. */
+  mode?: WorkerJobMode;
+  app?: WorkerApp;
+  countryCode?: string;
+  number?: string;
   proxy: WorkerProxy;
   probeProxy?: WorkerProbeProxy;
   /** Empty with `probeProxy`: the worker then expects the IP the probe saw. */
@@ -37,8 +41,10 @@ export type WorkerJobInput =
   | { type: 'finish' }
   | { type: 'pair_code'; code: string };
 
+export type CreateWorkerPhone = { name: string; androidVersion: string; proxy: WorkerProxy };
+
 export type WorkerJob = {
-  jobId: string; phoneId: string; app: WorkerApp; number: string;
+  jobId: string; phoneId: string; mode?: WorkerJobMode; app: WorkerApp | null; number: string | null;
   status: WorkerJobStatus;
   step: string; awaiting: WorkerAwaiting;
   message: string | null; errorCode: string | null; hasScreenshot: boolean;
@@ -61,6 +67,8 @@ const messageFor = (status: number, code: string, workerMessage: string | null) 
   if (code === 'phone_busy') return 'Este telefone já está em outro cadastro. Aguarde ele terminar ou cancele-o.';
   if (code === 'worker_full') return 'O cadastrador já está com o máximo de cadastros simultâneos. Tente novamente em alguns minutos.';
   if (code === 'not_awaiting') return 'O cadastro não está aguardando essa informação agora. Atualize a página.';
+  // The worker's own Portuguese text says what GeeLark refused (proxy check, balance...).
+  if ((code === 'egress_offline' || code === 'geelark_error') && workerMessage) return workerMessage;
   if (status === 404) return 'Cadastro ou telefone não encontrado no cadastrador.';
   if (status === 401 || status === 403) return 'O cadastrador recusou a autenticação da API. Verifique GEELARK_WORKER_TOKEN.';
   if (status === 400 || status === 422) return workerMessage ? `Dados recusados pelo cadastrador: ${workerMessage}` : 'Dados recusados pelo cadastrador.';
@@ -124,6 +132,9 @@ export class GeelarkWorkerClient {
   async health() { return this.json<{ ok: boolean }>('/health', { auth: false, timeoutMs: 5_000 }); }
 
   async listPhones() { return (await this.json<{ items?: WorkerPhone[] }>('/phones', { timeoutMs: 30_000 })).items ?? []; }
+
+  /** Creates a cloud phone (off) already behind the proxy; GeeLark tests the proxy first (409 egress_offline). */
+  async createPhone(phone: CreateWorkerPhone) { return this.json<WorkerPhone>('/phones', { method: 'POST', body: phone, timeoutMs: 60_000 }); }
 
   async stopPhone(phoneId: string) { return this.json<{ ok: boolean }>(`/phones/${encodeURIComponent(phoneId)}/stop`, { method: 'POST', timeoutMs: 30_000 }); }
 

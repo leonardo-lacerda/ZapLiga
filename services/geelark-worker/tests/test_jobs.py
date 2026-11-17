@@ -181,6 +181,32 @@ def test_phone_busy_and_worker_full():
     manager.cancel("e")
 
 
+def network_check_spec(**overrides):
+    return make_spec(mode="network_check", app="", country_code="", number="", **overrides)
+
+
+def test_network_check_stops_after_ip_and_powers_off(manager, factory):
+    manager.create(network_check_spec())
+    job = finished(manager, "job-1")
+    assert job.status == "done" and job.step == "network_ok" and job.error_code is None
+    assert job.egress_ip == "203.0.113.7" and "203.0.113.7" in job.message and "mesmo do PC" in job.message
+    calls = factory.instances["job-1"].calls
+    assert calls[:4] == ["set_network", "start_phone", "connect_adb", "installed_apps"]
+    assert "egress_ip" in calls and "power_off" in calls
+    assert not {"install_app", "open_app", "enter_number"} & set(calls)
+    assert steps(job) == ["queued", "setting_network", "starting_phone", "connecting_adb", "checking_network", "network_ok"]
+    assert job.to_dict()["mode"] == "network_check" and job.to_dict()["number"] is None
+
+
+def test_network_check_mismatch_fails():
+    factory = FakeFactory(egress="198.51.100.1")
+    manager = JobManager(factory, input_timeout_s=5, job_timeout_s=10)
+    manager.create(network_check_spec())
+    job = finished(manager, "job-1")
+    assert job.status == "failed" and job.error_code == "egress_mismatch"
+    assert "power_off" in factory.instances["job-1"].calls
+
+
 def test_egress_mismatch():
     factory = FakeFactory(egress="198.51.100.1")
     manager = JobManager(factory, input_timeout_s=5, job_timeout_s=10)

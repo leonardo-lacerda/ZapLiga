@@ -1343,6 +1343,12 @@ input, select { min-height: 35px; min-width: 0; padding: 8px 10px; border: 1px s
 .provisioning-steps { grid-template-columns: repeat(4, 1fr); }
 .provisioning-step-body { display: grid; gap: 12px; }
 .provisioning-inline-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 4px; }
+.provisioning-new-phone { display: grid; gap: 10px; padding: 14px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface-subtle); }
+.provisioning-new-phone h3 { margin: 0; font-size: 13px; }
+.provisioning-new-phone-fields { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 1fr); gap: 10px; }
+.provisioning-new-phone .field input, .provisioning-new-phone .field select { min-height: 34px; padding: 0 10px; border: 1px solid var(--border); border-radius: 7px; background: var(--surface); color: var(--text); font: inherit; font-size: 12px; }
+.provisioning-new-phone .form-hint { margin: 0; }
+@media (max-width: 640px) { .provisioning-new-phone-fields { grid-template-columns: 1fr; } }
 .provisioning-claim { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
 .provisioning-claim .form-hint { flex: 1 1 260px; margin: 0; }
 .provisioning-claim .alert { flex-basis: 100%; }

@@ -1,5 +1,5 @@
 import { ApiError, apiFetch, json, refreshAccessToken } from '../../services/api';
-import type { CreateJob, EgressList, EgressNode, Job, Phone } from './provisioning.types';
+import type { CreateJob, CreatePhone, EgressList, EgressNode, Job, Phone } from './provisioning.types';
 
 const base = (tenantId: string) => `/api/tenants/${encodeURIComponent(tenantId)}/provisioning`;
 const jobPath = (tenantId: string, jobId: string) => `${base(tenantId)}/jobs/${encodeURIComponent(jobId)}`;
@@ -17,6 +17,10 @@ export const fetchPhones = async (tenantId: string): Promise<Phone[]> => {
   const body = await json(`${base(tenantId)}/phones`);
   return Array.isArray(body?.items) ? body.items : [];
 };
+
+/** Cria o cloud phone no GeeLark (desligado) já saindo pelo PC; o GeeLark testa essa internet antes de criar. */
+export const createPhone = (tenantId: string, input: CreatePhone): Promise<Phone> =>
+  json(`${base(tenantId)}/phones`, { method: 'POST', body: JSON.stringify(input) });
 
 export const createJob = (tenantId: string, input: CreateJob): Promise<Job> =>
   json(`${base(tenantId)}/jobs`, { method: 'POST', body: JSON.stringify(input) });
