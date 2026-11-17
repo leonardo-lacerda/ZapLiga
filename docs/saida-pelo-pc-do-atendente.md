@@ -146,3 +146,36 @@ docker compose logs tailscale-edge-1 | grep egress          # trocas de rota
 docker compose exec tailscale-edge-1 wget -qO- https://api.ipify.org   # IP de saída
 docker compose ps | grep edge
 ```
+
+## Confidencialidade e plano Headscale (futuro)
+
+A saída pelo PC via malha VPN é um diferencial forte, mas o fosso real está no
+servidor, que o cliente nunca vê: o pool (`EgressPoolService`), a adoção de
+sessão sem reler o QR (`reuse` no `moveToWaxumNode`) e o waxum com multirelay.
+Reproduzir "sai pelo PC via VPN" é fácil; reproduzir o sistema inteiro
+integrado é o trabalho de verdade.
+
+O que **vaza** hoje é só o agente no PC e o setup: o painel manda criar conta na
+Tailscale, colar política e gerar credencial OAuth, e o comando de instalação diz
+`tailscale` em texto. Isso entrega a abordagem de bandeja.
+
+Plano para esconder (ordem do que mais vale):
+
+1. **Headscale self-hosted** no lugar do Tailscale SaaS — maior ganho. É o
+   servidor de controle do Tailscale, de código aberto, hospedado na própria
+   VPS. Some a conta Tailscale, o painel deles e o passo de OAuth; o PC só
+   recebe uma chave e conecta no nosso controle. Bônus: tira a dependência de
+   preço/limite da Tailscale ao escalar. Muda o painel (os 4 passos viram só a
+   geração da chave), o `edge-entrypoint.sh` (apontar `--login-server`) e o
+   fluxo de instalação.
+2. **Empacotar o agente num `.exe` "ZapLiga Agent"** — o `tailscaled` é Go,
+   licença BSD; dá para recompilar com outro nome de binário e instalar como
+   serviço do Windows com nome neutro, silencioso. Some o PowerShell com
+   "tailscale" escrito.
+3. **Assinar o executável** (code signing) — obrigatório no item 2: binário de
+   VPN renomeado rodando escondido como serviço é exatamente o que o antivírus
+   marca como malware.
+
+Limite honesto: não dá para esconder de quem controla a própria máquina e sabe
+farejar rede — o tráfego continua sendo WireGuard. O objetivo é **elevar o custo
+de clonar**, não ficar invisível.
