@@ -54,7 +54,8 @@ async function bootstrap() {
     if (!process.env.JWT_ACCESS_SECRET || !process.env.WAXUM_API_KEY || !process.env.WAXUM_JWT_SECRET || !process.env.WEB_ORIGIN || !configuredOrigins.every(isHttpsOrigin) || !publicApiOrigin || !isHttpsOrigin(publicApiOrigin) || !process.env.DATA_PROTECTION_SECRET || !process.env.METRICS_TOKEN || process.env.AUTH_COOKIE_SECURE !== 'true' || unsafeDefaults.has(process.env.JWT_ACCESS_SECRET) || unsafeDefaults.has(process.env.WAXUM_API_KEY) || unsafeDefaults.has(process.env.WAXUM_JWT_SECRET) || unsafeDefaults.has(process.env.DATA_PROTECTION_SECRET) || unsafeDefaults.has(process.env.METRICS_TOKEN)) throw new Error('Defina segredos reais, WEB_ORIGIN/PUBLIC_API_ORIGIN HTTPS, METRICS_TOKEN e AUTH_COOKIE_SECURE=true em producao');
     app.getHttpAdapter().getInstance().set('trust proxy', 1);
     app.use((request: any, response: any, next: () => void) => {
-      if (request.path === '/health' || request.secure || request.headers['x-forwarded-proto'] === 'https') return next();
+      // The PC slots call the API inside the Docker network (infra/egress/edge-entrypoint.sh), with the Waxum key.
+      if (request.path === '/health' || request.path.startsWith('/api/internal/egress/') || request.secure || request.headers['x-forwarded-proto'] === 'https') return next();
       response.status(426).json({ message: 'HTTPS obrigatório' });
     });
   }
