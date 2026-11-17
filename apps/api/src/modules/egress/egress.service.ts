@@ -88,9 +88,12 @@ export class EgressService {
     const slot = this.slots().find((candidate) => !used.has(candidate));
     if (!slot) throw new BadRequestException(`As ${this.slots().length} vagas de PC estão em uso. Remova um PC para adicionar outro.`);
     const id = randomUUID();
-    const result = await this.db.query('INSERT INTO egress_pcs (id, name, slot, tailscale_hostname) VALUES ($1, $2, $3, $4) RETURNING *', [id, name, slot, `zapliga-pc-${id.slice(0, 8)}`]);
+    const hostname = `zapliga-pc-${id.slice(0, 8)}`;
+    // The key first: if Tailscale refuses it, no PC is left behind.
+    const commands = await this.installCommands({ name, tailscale_hostname: hostname });
+    const result = await this.db.query('INSERT INTO egress_pcs (id, name, slot, tailscale_hostname) VALUES ($1, $2, $3, $4) RETURNING *', [id, name, slot, hostname]);
     await this.audit.record({ actorUserId, action: 'egress.pc_added', entityType: 'egress_pc', entityId: id, metadata: { name, slot } });
-    return { pc: result.rows[0], ...(await this.installCommands(result.rows[0])) };
+    return { pc: result.rows[0], ...commands };
   }
 
   async installCommand(id: string) {
