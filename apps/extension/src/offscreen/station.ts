@@ -11,6 +11,8 @@ import { BUBBLE_PORT, PANEL_PORT } from '../shared/types';
  */
 
 const TENANT_KEY = 'zapliga_ext_tenant';
+const LINE_KEY = 'zapliga_ext_line:';
+const CONNECTED_LINE = new Set(['connected', 'online', 'ready', 'authenticated']);
 const message = (error: unknown) => {
   // Validation errors come back as a list of messages; show them instead of a bare "Bad Request".
   const list = error instanceof ApiError ? (error.details as any)?.message : undefined;
@@ -41,7 +43,7 @@ export class Station {
   constructor() {
     this.state = {
       auth: 'loading', tenants: [], tenantId: '', busy: false, station: 'off', micPermission: 'unknown',
-      call: null, muted: false, postCall: null, savingPostCall: false, devices: this.audio.getDeviceState(), notice: '', error: '',
+      call: null, muted: false, lines: [], lineId: '', postCall: null, savingPostCall: false, devices: this.audio.getDeviceState(), notice: '', error: '',
     };
     this.audio.onDeviceState((devices) => this.patch({ devices }));
     this.audio.onInboundLevel((level) => {
@@ -63,6 +65,7 @@ export class Station {
         port.onMessage.addListener((command: PanelCommand) => void this.handle(command));
         port.postMessage(this.state);
         void this.checkMicPermission();
+        if (this.state.auth === 'signed_in') void this.loadLines();
       } else if (port.name === BUBBLE_PORT) {
         this.bubbles.add(port);
         port.onDisconnect.addListener(() => this.bubbles.delete(port));
@@ -100,6 +103,11 @@ export class Station {
         case 'dial': return await this.dial(command.phone, command.name);
         case 'hangup': return this.hangup();
         case 'toggleMute': { const muted = !this.state.muted; this.audio.setMuted(muted); return this.patch({ muted }); }
+        case 'selectLine': {
+          try { localStorage.setItem(LINE_KEY + this.state.tenantId, command.lineId); } catch { /* só nesta sessão */ }
+          return this.patch({ lineId: command.lineId });
+        }
+        case 'refreshLines': return await this.loadLines();
         case 'finishPostCall': {
           const { callResult, pipelineStage, notes, callbackAt } = command;
           return await this.finishPostCall({ callResult, pipelineStage, notes, callbackAt });
@@ -158,7 +166,25 @@ export class Station {
       : tenants.find((t: any) => t.id === remembered)?.id ?? tenants[0]?.id ?? '';
     if (tenantId) setActiveTenantId(tenantId);
     this.patch({ auth: blockedReason ? 'blocked' : 'signed_in', blockedReason, user, tenants, tenantId, busy: false });
-    if (!blockedReason) await this.loadPendingPostCall();
+    if (!blockedReason) await Promise.all([this.loadPendingPostCall(), this.loadLines()]);
+  }
+
+  /** Connected lines for the picker. Only leaders and admins may list them; SDRs keep the automatic choice. */
+  private async loadLines() {
+    const tenantId = this.state.tenantId;
+    const tenant = this.state.tenants.find((t) => t.id === tenantId);
+    if (!tenant || tenant.role === 'sdr') { this.patch({ lines: [], lineId: '' }); return; }
+    try {
+      const page = await json('/api/numbers?limit=200');
+      if (this.state.tenantId !== tenantId) return;
+      const lines = (page.items ?? [])
+        .filter((n: any) => CONNECTED_LINE.has(String(n.status).toLowerCase()))
+        .map((n: any) => ({ id: String(n.id), label: String(n.label ?? ''), phone: String(n.phone ?? '') }));
+      let remembered = '';
+      try { remembered = localStorage.getItem(LINE_KEY + tenantId) ?? ''; } catch { /* sem preferência */ }
+      const wanted = this.state.lineId || remembered;
+      this.patch({ lines, lineId: lines.some((l: any) => l.id === wanted) ? wanted : '' });
+    } catch { /* the picker is optional: calls still go out on the automatic line */ }
   }
 
   /** A call ended earlier (here or on the site) may still need its result: show the form right away. */
@@ -180,7 +206,7 @@ export class Station {
     clearAccessToken(); clearActiveTenantId();
     this.sdrId = '';
     void this.audio.stop();
-    this.patch({ auth: 'signed_out', user: undefined, tenants: [], tenantId: '', station: 'off', call: null, postCall: null, muted: false, busy: false });
+    this.patch({ auth: 'signed_out', user: undefined, tenants: [], tenantId: '', station: 'off', call: null, postCall: null, muted: false, lines: [], lineId: '', busy: false });
   }
 
   private async login(email: string, password: string) {
@@ -205,8 +231,8 @@ export class Station {
     this.sdrId = '';
     setActiveTenantId(tenantId);
     try { localStorage.setItem(TENANT_KEY, tenantId); } catch { /* só nesta sessão */ }
-    this.patch({ tenantId, station: 'off', postCall: null, notice: '', error: '' });
-    await this.loadPendingPostCall();
+    this.patch({ tenantId, station: 'off', postCall: null, lines: [], lineId: '', notice: '', error: '' });
+    await Promise.all([this.loadPendingPostCall(), this.loadLines()]);
   }
 
   // ------------------------------------------------------------------ control channel
@@ -318,7 +344,7 @@ export class Station {
         break;
       }
       case 'call_reserved':
-        if (this.state.call) { this.patch({ call: { ...this.state.call, phase: 'ringing', name: data.lead?.name ?? this.state.call.name } }); if (data.callId) this.setCallId(String(data.callId)); }
+        if (this.state.call) { this.patch({ call: { ...this.state.call, phase: 'ringing', name: data.lead?.name ?? this.state.call.name, line: data.number ? String(data.number.label || data.number.phone || '') : this.state.call.line } }); if (data.callId) this.setCallId(String(data.callId)); }
         break;
       case 'call_started':
         if (this.state.call && data.callId) this.setCallId(String(data.callId));
@@ -339,6 +365,7 @@ export class Station {
         const pause = data.pause ? { id: String(data.pause.id), leadName: data.pause.lead_name, leadPhone: data.pause.lead_phone, durationSeconds: Number(data.pause.call_duration_seconds) || 0 } : null;
         const error = data.outcome === 'waxum_rate_limited' ? 'A linha WhatsApp atingiu um limite temporário de chamadas. Aguarde alguns minutos.' : this.state.error;
         this.patch({ call: null, muted: false, postCall: pause, error, notice: '' });
+        void this.loadLines();
         if (data.available) socket.send(JSON.stringify({ type: 'availability', available: false }));
         break;
       }
@@ -370,11 +397,15 @@ export class Station {
       this.patch({ call: { phase: 'dialing', phone, name: name?.trim() || undefined, hearing: false }, muted: false });
       this.audio.setMuted(false);
       void this.audio.startRingback().catch(() => undefined);
-      const result = await json('/api/calls/manual', { method: 'POST', body: JSON.stringify({ phone, name: name?.trim() || undefined }) });
+      const result = await json('/api/calls/manual', { method: 'POST', body: JSON.stringify({ phone, name: name?.trim() || undefined, numberId: this.state.lineId || undefined }) });
       if (result?.callId) this.setCallId(String(result.callId));
       this.patch({ busy: false });
     } catch (error) {
       this.audio.stopRingback();
+      // A server without the line choice yet rejects the field: say what to do instead of "Bad Request".
+      if (this.state.lineId && /numberId should not exist/.test(message(error))) {
+        error = new Error('O servidor do ZapLiga ainda não aceita escolher o número. Use "Automático" por enquanto.');
+      }
       const current = this.state.call as StationSnapshot['call'];
       if (!current?.callId) { this.patch({ call: null }); void this.audio.stop(); }
       throw error;

@@ -15,6 +15,7 @@ const paths: Record<string, string> = {
   alert: 'M12 9v4M12 17h.01M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z',
   close: 'M18 6 6 18M6 6l12 12',
   check: 'M20 6 9 17l-5-5',
+  whatsapp: 'M3 21l1.6-4.8A8.5 8.5 0 1 1 7.9 19.6L3 21ZM9 9.5c0 3 2.5 5.5 5.5 5.5l1-1.5-2-1-1 .8a4 4 0 0 1-1.8-1.8l.8-1-1-2L9 9.5Z',
   building: 'M3 21h18M5 21V7l7-4 7 4v14M9 9h1M14 9h1M9 13h1M14 13h1M9 17h1M14 17h1',
 };
 export type IconName = keyof typeof paths;

@@ -17,6 +17,8 @@ Para atualizar: troque os arquivos da pasta pela versão nova e clique no botão
 
 - **Login**: se você já está logado em zapliga.com, a extensão já entra sozinha. Senão, entre com o mesmo e-mail e senha do site. Sair na extensão também sai do site (é a mesma sessão).
 - **Janela**: arraste pela barra azul para mudar de lugar; puxe os cantos de baixo para mudar o tamanho; **–** recolhe numa bolinha (verde e com o tempo da ligação enquanto você está falando); **×** esconde. O ícone da extensão mostra/esconde a janela. Lugar e tamanho ficam salvos.
+- **Fixar na tela** (alfinete na barra azul): o ZapLiga vira uma janelinha que fica por cima de tudo, até de outros programas, e não some quando você clica fora. Você arrasta e muda o tamanho dela como qualquer janela. Ela fica aberta enquanto a aba de onde você fixou estiver aberta; ao fechar a janelinha, o ZapLiga volta para o canto da página.
+- **Escolher o número**: líderes e admins escolhem em "Ligar pelo número" qual linha de WhatsApp conectada vai fazer a ligação (ou deixam no automático). A escolha fica salva. Para SDRs a linha é sempre automática.
 - **Ligar**: digite DDD + número (o +55 é colocado sozinho) e clique em **Ligar**. Durante a ligação: **Mudo** e **Desligar**. "Ouvindo o cliente" acende quando chega áudio do outro lado.
 - **Depois da ligação**: escolha como terminou e salve (as mesmas regras do site). A próxima ligação só sai depois disso.
 - **Microfone e fone**: engrenagem ⚙ no topo.
@@ -33,4 +35,4 @@ npm --prefix apps/extension run zip              # gera apps/extension/zapliga-e
 ZAPLIGA_API_URL=http://127.0.0.1:3000 npm --prefix apps/extension run build   # contra uma API local
 ```
 
-A extensão não precisa de nenhuma mudança na API: ela usa `host_permissions` para api.zapliga.com (por isso o CORS do `WEB_ORIGIN` não se aplica) e o mesmo cookie de sessão do site.
+A escolha da linha usa o campo `numberId` em `POST /api/calls/manual` (precisa da API com essa mudança). Fora isso, a extensão usa `host_permissions` para api.zapliga.com (por isso o CORS do `WEB_ORIGIN` não se aplica) e o mesmo cookie de sessão do site.

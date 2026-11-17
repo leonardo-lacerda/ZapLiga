@@ -112,7 +112,7 @@ function Dialer({ state, send }: ViewProps) {
   const submit = (event: FormEvent) => { event.preventDefault(); if (digits.length >= 10) send({ cmd: 'dial', phone, name }); };
   return <form className="dialer" onSubmit={submit}>
     <div className="display">
-      <input className="number" inputMode="tel" placeholder="(00) 00000-0000" aria-label="Número" value={phone} onChange={(e) => setPhone(typingPhone(e.target.value))} autoFocus />
+      <input className="number" inputMode="tel" placeholder="(00) 00000-0000" aria-label="Telefone para ligar" value={phone} onChange={(e) => setPhone(typingPhone(e.target.value))} autoFocus />
       <input className="name" placeholder="Nome do contato (opcional)" aria-label="Nome" value={name} onChange={(e) => setName(e.target.value)} />
     </div>
     <div className="keypad">{KEYS.map(([key, letters], index) => key === 'back'
@@ -120,6 +120,11 @@ function Dialer({ state, send }: ViewProps) {
       : key
         ? <button type="button" key={key} className="key" onClick={() => setPhone((p) => typingPhone(p.replace(/\D/g, '') + key))}><span>{key}</span><small>{letters}</small></button>
         : <span key={`blank-${index}`} />)}</div>
+    {state.lines.length > 0 && <label className="line-pick"><span><Icon name="whatsapp" size={14} />Ligar pelo número</span>
+      <select aria-label="Número de saída" value={state.lineId} onChange={(e) => send({ cmd: 'selectLine', lineId: e.target.value })}>
+        <option value="">Automático (o que está livre há mais tempo)</option>
+        {state.lines.map((line) => <option key={line.id} value={line.id}>{[line.label, formatPhone(line.phone)].filter(Boolean).join(' · ')}</option>)}
+      </select></label>}
     <button className="call" disabled={state.busy || digits.length < 10} aria-label="Ligar"><Icon name="phone" size={20} /><span>{state.busy ? 'Ligando…' : 'Ligar'}</span></button>
   </form>;
 }
@@ -134,6 +139,7 @@ function ActiveCall({ state, send }: ViewProps) {
       <div className="ring"><div className="avatar-lg">{initials(call.name) || <Icon name="user" size={30} />}</div></div>
       <strong className="callee">{call.name || formatPhone(call.phone)}</strong>
       {call.name && <span className="sub">{formatPhone(call.phone)}</span>}
+      {call.line && <span className="via"><Icon name="whatsapp" size={12} />pelo número {call.line}</span>}
       <span className="phase">{answered ? elapsed(call.answeredAt) : call.phase === 'ringing' ? 'Tocando…' : 'Chamando…'}</span>
       {answered && <span className={`hearing ${call.hearing ? 'on' : ''}`}><span className="bars"><i /><i /><i /><i /></span>{call.hearing ? 'Ouvindo o cliente' : 'Sem áudio do cliente'}</span>}
     </div>

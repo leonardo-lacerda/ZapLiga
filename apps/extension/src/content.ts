@@ -20,7 +20,7 @@ import type { BubbleStatus, UiState } from './shared/types';
   const PHONE = '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 16.9v3a2 2 0 0 1-2.2 2 19.8 19.8 0 0 1-8.6-3.1 19.5 19.5 0 0 1-6-6A19.8 19.8 0 0 1 2.1 4.2 2 2 0 0 1 4.1 2h3a2 2 0 0 1 2 1.7c.1.9.4 1.8.7 2.7a2 2 0 0 1-.5 2.1L8 9.8a16 16 0 0 0 6 6l1.3-1.3a2 2 0 0 1 2.1-.4c.9.3 1.8.6 2.7.7a2 2 0 0 1 1.7 2Z"/></svg>';
   root.innerHTML = `<style>
     * { box-sizing: border-box; }
-    .win { position: fixed; display: flex; flex-direction: column; background: #fff; border-radius: 16px; overflow: hidden;
+    .win { position: fixed; display: flex; flex-direction: column; background: #fff; border-radius: 16px 16px 10px 10px; overflow: hidden;
       box-shadow: 0 0 0 1px rgba(16,24,40,.08), 0 24px 48px -12px rgba(16,24,40,.28), 0 6px 14px rgba(16,24,40,.08);
       font: 600 13px/1 Inter, 'Segoe UI', system-ui, -apple-system, sans-serif; animation: pop .16s ease-out; }
     @keyframes pop { from { opacity: 0; transform: translateY(6px) scale(.985); } }
@@ -35,10 +35,10 @@ import type { BubbleStatus, UiState } from './shared/types';
     .bar button:hover { background: rgba(255,255,255,.14); color: #fff; }
     .bar button svg { width: 15px; height: 15px; }
     iframe { flex: 1; width: 100%; border: 0; background: #fff; color-scheme: light; }
-    .grip { position: absolute; left: 0; bottom: 0; width: 16px; height: 16px; cursor: nesw-resize; touch-action: none; }
+    .grip { position: absolute; left: 0; bottom: 0; width: 24px; height: 24px; z-index: 2; cursor: nesw-resize; touch-action: none; }
     .grip.right { left: auto; right: 0; cursor: nwse-resize; }
-    .grip::after { content: ''; position: absolute; bottom: 4px; left: 4px; width: 6px; height: 6px; border-left: 2px solid #c4cad4; border-bottom: 2px solid #c4cad4; border-bottom-left-radius: 2px; opacity: 0; transition: opacity .15s; }
-    .grip.right::after { left: auto; right: 4px; border-left: 0; border-right: 2px solid #c4cad4; border-bottom-left-radius: 0; border-bottom-right-radius: 2px; }
+    .grip::after { content: ''; position: absolute; bottom: 5px; left: 5px; width: 7px; height: 7px; border-left: 2px solid #c4cad4; border-bottom: 2px solid #c4cad4; border-bottom-left-radius: 2px; opacity: 0; transition: opacity .15s; }
+    .grip.right::after { left: auto; right: 5px; border-left: 0; border-right: 2px solid #c4cad4; border-bottom-left-radius: 0; border-bottom-right-radius: 2px; }
     .win:hover .grip::after { opacity: 1; }
     .shield { position: absolute; inset: 36px 0 0; display: none; } .dragging .shield { display: block; }
     .bubble { all: unset; position: fixed; width: ${BUBBLE}px; height: ${BUBBLE}px; border-radius: 50%; color: #fff; display: grid; place-items: center; cursor: pointer; touch-action: none; user-select: none;
@@ -53,6 +53,7 @@ import type { BubbleStatus, UiState } from './shared/types';
     [hidden] { display: none !important; }
   </style>
   <div class="win"><div class="bar"><span class="mark">${PHONE}</span><span class="title">Zap<b>Liga</b></span><span class="dots" aria-hidden="true">⋮⋮</span>
+    <button class="pin" title="Fixar na tela: fica por cima de tudo, até de outros programas"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 17v5M9 10.8V4h6v6.8l2.5 3.2h-11L9 10.8ZM8 4h8"/></svg></button>
     <button class="min" title="Recolher"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M5 12h14"/></svg></button>
     <button class="close" title="Esconder (o ícone da extensão mostra de novo)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg></button></div>
   <div class="shield"></div><div class="grip" title="Arraste para mudar o tamanho"></div><div class="grip right" title="Arraste para mudar o tamanho"></div></div>
@@ -77,8 +78,8 @@ import type { BubbleStatus, UiState } from './shared/types';
     Object.assign(win.style, { left: `${left}px`, top: `${top}px`, width: `${width}px`, height: `${height}px` });
     // The bubble sits where the window's top-right corner is, so it opens back in place.
     Object.assign(bubble.style, { left: `${clamp(left + width - BUBBLE, MARGIN, vw() - BUBBLE - MARGIN)}px`, top: `${clamp(top, MARGIN, vh() - BUBBLE - 28)}px` });
-    win.hidden = !ui.visible || ui.collapsed;
-    bubble.hidden = !ui.visible || !ui.collapsed;
+    win.hidden = !ui.visible || ui.collapsed || Boolean(ui.pinned);
+    bubble.hidden = !ui.visible || !ui.collapsed || Boolean(ui.pinned);
     if (ui.visible && !frame) {
       frame = document.createElement('iframe');
       frame.src = chrome.runtime.getURL('panel.html');
@@ -119,6 +120,28 @@ import type { BubbleStatus, UiState } from './shared/types';
   (root.querySelector('.min') as HTMLButtonElement).addEventListener('click', () => save({ collapsed: true }));
   (root.querySelector('.close') as HTMLButtonElement).addEventListener('click', () => save({ visible: false }));
   window.addEventListener('resize', () => layout());
+
+  // "Fixar na tela": Chrome's Document Picture-in-Picture window stays above every window and app,
+  // and does not go away when the user clicks elsewhere. It lives as long as this tab is open.
+  const pinButton = root.querySelector('.pin') as HTMLButtonElement;
+  const pip = (window as any).documentPictureInPicture;
+  if (!pip) pinButton.hidden = true;
+  pinButton.addEventListener('click', async () => {
+    try {
+      const rect = win.getBoundingClientRect();
+      const pipWindow: Window = await pip.requestWindow({ width: Math.round(rect.width), height: Math.round(rect.height - 36) });
+      pipWindow.document.title = 'ZapLiga';
+      const style = pipWindow.document.createElement('style');
+      style.textContent = 'html,body{margin:0;height:100%;background:#fff;overflow:hidden}iframe{border:0;width:100%;height:100%;display:block}';
+      pipWindow.document.head.append(style);
+      const pinnedFrame = pipWindow.document.createElement('iframe');
+      pinnedFrame.src = chrome.runtime.getURL('panel.html?pip=1');
+      pinnedFrame.allow = 'autoplay';
+      pipWindow.document.body.append(pinnedFrame);
+      pipWindow.addEventListener('pagehide', () => { void chrome.runtime.sendMessage({ type: 'pinned', on: false }).catch(() => undefined); });
+      await chrome.runtime.sendMessage({ type: 'pinned', on: true });
+    } catch { /* the browser refused (no click, or not supported): keep the window in the page */ }
+  });
 
   // Call status on the collapsed bubble, straight from the station.
   let port: any = null;

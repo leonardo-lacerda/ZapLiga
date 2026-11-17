@@ -18,9 +18,15 @@ export type StationSnapshot = {
     name?: string;
     phone: string;
     answeredAt?: number;
+    /** The WhatsApp line the call goes out on. */
+    line?: string;
     hearing: boolean;
   };
   muted: boolean;
+  /** Connected WhatsApp lines the user may pick (leaders and admins; SDRs always get the automatic one). */
+  lines: { id: string; label: string; phone: string }[];
+  /** '' = automatic: the server picks the least recently used line. */
+  lineId: string;
   postCall: null | { id: string; leadName?: string; leadPhone?: string; durationSeconds: number };
   savingPostCall: boolean;
   devices: AudioDeviceState;
@@ -35,6 +41,8 @@ export type PanelCommand =
   | { cmd: 'dial'; phone: string; name?: string }
   | { cmd: 'hangup' }
   | { cmd: 'toggleMute' }
+  | { cmd: 'selectLine'; lineId: string }
+  | { cmd: 'refreshLines' }
   | { cmd: 'finishPostCall'; callResult: string; pipelineStage: string; notes: string; callbackAt?: string }
   | { cmd: 'takeOver' }
   | { cmd: 'setInput'; deviceId: string }
@@ -49,4 +57,5 @@ export type BubbleStatus = { inCall: boolean; label: string; answeredAt?: number
 export const PANEL_PORT = 'zapliga-panel';
 export const BUBBLE_PORT = 'zapliga-bubble';
 export const UI_STORAGE_KEY = 'zapliga_ui';
-export type UiState = { visible: boolean; collapsed: boolean; left: number; top: number; width: number; height: number };
+/** pinned = the window is out of the page, in an always-on-top picture-in-picture window. */
+export type UiState = { visible: boolean; collapsed: boolean; left: number; top: number; width: number; height: number; pinned?: boolean };

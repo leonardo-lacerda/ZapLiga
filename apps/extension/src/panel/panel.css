@@ -9,7 +9,7 @@
 }
 * { box-sizing: border-box; }
 html, body, #root { margin: 0; height: 100%; background: var(--surface); }
-body.standalone { background: var(--soft); }
+body.standalone { background: #fff; display: flex; flex-direction: column; }
 button, input, select, textarea { font: inherit; color: inherit; }
 button { cursor: pointer; transition: background .15s, color .15s, border-color .15s, transform .08s, box-shadow .15s; }
 button:active:not(:disabled) { transform: scale(.97); }
@@ -84,6 +84,10 @@ textarea { resize: vertical; min-height: 64px; }
 .key span { font-size: 21px; font-weight: 600; } .key small { font-size: 8.5px; font-weight: 700; letter-spacing: 1.2px; color: var(--subtle); min-height: 9px; }
 .key:hover:not(:disabled) { background: #eaedf2; } .key:active:not(:disabled) { background: #dfe4ea; }
 .key.ghost { background: none; color: var(--muted); } .key.ghost:hover:not(:disabled) { background: var(--soft); }
+.line-pick { gap: 4px; }
+.line-pick span { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); }
+.line-pick select { padding: 8px 10px; font-size: 13px; font-weight: 600; color: var(--ink); background: var(--soft); border-color: transparent; }
+.line-pick select:hover { border-color: var(--border); }
 .call { align-self: center; display: inline-flex; align-items: center; justify-content: center; gap: 10px; width: 100%; max-width: 260px; height: 50px; border: 0; border-radius: 25px; color: #fff; font-size: 16px; font-weight: 800; letter-spacing: .2px;
   background: linear-gradient(180deg, #20c77a, var(--success)); box-shadow: 0 8px 20px rgba(18,183,106,.32); }
 .call:hover:not(:disabled) { background: linear-gradient(180deg, #17b56e, var(--success-dark)); }
@@ -100,6 +104,7 @@ textarea { resize: vertical; min-height: 64px; }
 .avatar-lg { width: 78px; height: 78px; border-radius: 50%; display: grid; place-items: center; font-size: 28px; font-weight: 800; color: #fff; background: rgba(255,255,255,.14); border: 1.5px solid rgba(255,255,255,.3); }
 .callee { font-size: 20px; letter-spacing: -.2px; }
 .sub { font-size: 13px; color: rgba(255,255,255,.7); font-variant-numeric: tabular-nums; }
+.via { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; color: rgba(255,255,255,.65); }
 .phase { margin-top: 4px; font-size: 14px; font-weight: 600; color: rgba(255,255,255,.85); font-variant-numeric: tabular-nums; }
 .active.answered .phase { font-size: 26px; font-weight: 700; color: #fff; letter-spacing: 1px; }
 .hearing { display: inline-flex; align-items: center; gap: 8px; margin-top: 4px; padding: 5px 10px; border-radius: 999px; background: rgba(255,255,255,.1); font-size: 12px; color: rgba(255,255,255,.75); }
@@ -137,3 +142,9 @@ textarea { resize: vertical; min-height: 64px; }
 .pill.live i { background: var(--success); animation: blink 1.2s infinite; }
 .pill.connecting i { background: var(--warning); } .pill.taken i { background: var(--error); }
 @keyframes blink { 50% { opacity: .3; } }
+
+/* ---------- standalone window ---------- */
+.pin-bar { position: sticky; top: 0; z-index: 2; width: 100%; padding: 9px 12px; border: 0; background: var(--navy); color: #fff; font-size: 12.5px; font-weight: 700; }
+.pin-bar:hover:not(:disabled) { background: #0a4f7c; }
+.pin-bar:disabled { opacity: 1; font-weight: 600; background: var(--success-dark); }
+body.standalone #root { flex: 1; min-height: 0; height: auto; }

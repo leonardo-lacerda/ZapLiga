@@ -21,6 +21,20 @@ async function readUi(): Promise<UiState> {
   return { ...DEFAULT_UI, ...(stored ?? {}) };
 }
 
+// Which tab holds the always-on-top window: it closes with that tab, so the in-page window must come back.
+async function setPinned(on: boolean, tabId?: number) {
+  const ui = await readUi();
+  await chrome.storage.local.set({ [UI_KEY]: { ...ui, pinned: on } });
+  await chrome.storage.session.set({ pinnedTabId: on ? tabId ?? null : null });
+}
+const clearPinIfTab = async (tabId: number) => {
+  const { pinnedTabId } = await chrome.storage.session.get('pinnedTabId');
+  if (pinnedTabId === tabId) await setPinned(false);
+};
+chrome.tabs.onRemoved.addListener((tabId: number) => void clearPinIfTab(tabId));
+chrome.tabs.onUpdated.addListener((tabId: number, change: any) => { if (change.status === 'loading') void clearPinIfTab(tabId); });
+chrome.runtime.onStartup.addListener(() => void setPinned(false));
+
 const openPermissionTab = () => chrome.tabs.create({ url: chrome.runtime.getURL('permission.html') });
 
 // Pages where content scripts cannot run (new tab, chrome://, the Web Store): use a small window.
@@ -40,7 +54,8 @@ chrome.action.onClicked.addListener(async (tab: any) => {
 
 chrome.runtime.onMessage.addListener((request: any, _sender: any, sendResponse: (value: unknown) => void) => {
   if (request?.type === 'ensure-offscreen') { ensureOffscreen().then(() => sendResponse({ ok: true }), (error) => sendResponse({ ok: false, error: String(error) })); return true; }
-  if (request?.type === 'open-permission') { void openPermissionTab(); return false; }
+  if (request?.type === 'pinned') { void setPinned(Boolean(request.on), _sender?.tab?.id); return false; }
+    if (request?.type === 'open-permission') { void openPermissionTab(); return false; }
   if (request?.type === 'open-url' && typeof request.url === 'string' && /^https:\/\//.test(request.url)) { void chrome.tabs.create({ url: request.url }); return false; }
   return false;
 });
