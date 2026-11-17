@@ -9,6 +9,10 @@ type Props = {
   selected: string;
   onSelect: (node: string) => void;
   onRefresh: () => void;
+  /** Liga o PC selecionado ao usuário logado; ausente = sem o botão. */
+  onClaim?: (node: string) => void;
+  claiming?: boolean;
+  claimError?: string;
 };
 
 /** Segunda linha do cartão: o PC quando o rótulo é a pessoa, e os IPs só quando a API os informa. */
@@ -20,7 +24,7 @@ const detailOf = (node: EgressNode) => {
 };
 
 /** Passo 0: PC do atendente pelo qual o phone sai para a internet (o IP do cadastro é o desse PC). */
-export function EgressPicker({ egress, loading, error, selected, onSelect, onRefresh }: Props) {
+export function EgressPicker({ egress, loading, error, selected, onSelect, onRefresh, onClaim, claiming = false, claimError = '' }: Props) {
   if (loading && !egress) return <p className="subtle">Carregando os PCs dos atendentes…</p>;
   if (error && !egress) return <div className="alert" role="alert"><Icon name="alert" size={17} /><span>{error}</span><Button variant="ghost" icon="refresh" onClick={onRefresh}>Tentar de novo</Button></div>;
   if (!egress) return null;
@@ -31,6 +35,8 @@ export function EgressPicker({ egress, loading, error, selected, onSelect, onRef
   const mine = egress.items.filter((node) => node.isMine);
   const mineOnline = mine.some((node) => node.online);
   const anyOnline = egress.items.some((node) => node.online);
+  // O botão fica fora dos cartões: cada cartão já é um <button> (radio) e não pode ter outro dentro.
+  const claimable = onClaim ? egress.items.find((node) => node.node === selected && !node.isMine) : undefined;
 
   return <div className="provisioning-step-body">
     {mine.length > 0 && !mineOnline && <div className="alert alert-warning" role="status"><Icon name="alert" size={17} /><span><strong>Seu PC não está online.</strong> Ligue-o (com a Tailscale conectada) e clique em Atualizar, ou escolha o PC de outra pessoa que esteja online.</span></div>}
@@ -59,6 +65,13 @@ export function EgressPicker({ egress, loading, error, selected, onSelect, onRef
       })}
       {!egress.items.length && <EmptyState title="Nenhum PC de atendente com vaga de saída" description="Instale a saída num PC em Admin → Saídas de internet e clique em Atualizar." />}
     </div>
+    {claimable && onClaim && <div className="provisioning-claim">
+      <p className="form-hint">{claimable.userName
+        ? <>Este PC está ligado a <strong>{claimable.userName}</strong>. Se ele é seu, marque para que venha selecionado nos próximos cadastros.</>
+        : <>Se este PC é seu, marque para que venha selecionado nos próximos cadastros.</>}</p>
+      <Button type="button" variant="secondary" icon="check" onClick={() => onClaim(claimable.node)} disabled={claiming}>{claiming ? 'Salvando…' : 'Este PC é meu'}</Button>
+      {claimError && <div className="alert" role="alert"><Icon name="alert" size={17} /><span>{claimError}</span></div>}
+    </div>}
     <div className="provisioning-inline-actions"><Button type="button" variant="ghost" icon="refresh" onClick={onRefresh} disabled={loading}>{loading ? 'Atualizando…' : 'Atualizar'}</Button></div>
   </div>;
 }

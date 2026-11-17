@@ -2,7 +2,7 @@ import { FormEvent, useCallback, useEffect, useState } from 'react';
 import { Badge, Button, Icon, Panel } from '../../components/ui';
 import { EgressPicker } from './EgressPicker';
 import { PhonePicker } from './PhonePicker';
-import { apiErrorCode, createJob, fetchEgressNodes, fetchPhones } from './provisioning.api';
+import { apiErrorCode, assignEgressNode, createJob, fetchEgressNodes, fetchPhones } from './provisioning.api';
 import { appLabels, createErrorMessages, digitsOnly, formatPhoneParts, validatePhoneNumber } from './provisioning.labels';
 import type { EgressList, Job, Phone, ProvisioningApp, WizardPrefill } from './provisioning.types';
 
@@ -11,9 +11,9 @@ const steps = ['Rede (IP)', 'Telefone', 'App', 'Número'] as const;
 
 const errorText = (error: unknown) => error instanceof Error ? error.message : String(error);
 
-type Props = { tenantId: string; prefill?: WizardPrefill; onJobCreated: (job: Job) => void };
+type Props = { tenantId: string; currentUserId?: string; prefill?: WizardPrefill; onJobCreated: (job: Job) => void };
 
-export function ProvisioningWizard({ tenantId, prefill, onJobCreated }: Props) {
+export function ProvisioningWizard({ tenantId, currentUserId, prefill, onJobCreated }: Props) {
   const [step, setStep] = useState<Step>(0);
   const [egress, setEgress] = useState<EgressList | null>(null);
   const [egressLoading, setEgressLoading] = useState(false);
@@ -30,6 +30,8 @@ export function ProvisioningWizard({ tenantId, prefill, onJobCreated }: Props) {
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState('');
   const [numberTouched, setNumberTouched] = useState(false);
+  const [claiming, setClaiming] = useState(false);
+  const [claimError, setClaimError] = useState('');
 
   const loadEgress = useCallback(async () => {
     setEgressLoading(true); setEgressError('');
@@ -44,6 +46,17 @@ export function ProvisioningWizard({ tenantId, prefill, onJobCreated }: Props) {
     } catch (error) { setEgressError(errorText(error)); }
     finally { setEgressLoading(false); }
   }, [tenantId]);
+
+  // Um PC tem no máximo uma pessoa (marcar como meu tira de quem tinha); uma pessoa pode ter mais de um PC.
+  const claimEgress = async (node: string) => {
+    if (!currentUserId) return;
+    setClaiming(true); setClaimError('');
+    try {
+      const updated = await assignEgressNode(tenantId, node, currentUserId);
+      setEgress((current) => current && { ...current, items: current.items.map((item) => item.node === node ? updated : item) });
+    } catch (error) { setClaimError(errorText(error)); }
+    finally { setClaiming(false); }
+  };
 
   const loadPhones = useCallback(async () => {
     setPhonesLoading(true); setPhonesError('');
@@ -104,7 +117,7 @@ export function ProvisioningWizard({ tenantId, prefill, onJobCreated }: Props) {
     {submitError && <div className="alert" role="alert"><Icon name="alert" size={17} /><span>{submitError}</span><button type="button" onClick={() => setSubmitError('')} aria-label="Fechar erro"><Icon name="close" size={16} /></button></div>}
 
     <form onSubmit={(event) => { if (step === 3) void submit(event); else { event.preventDefault(); next(); } }}>
-      {step === 0 && <EgressPicker egress={egress} loading={egressLoading} error={egressError} selected={egressNode} onSelect={setEgressNode} onRefresh={() => void loadEgress()} />}
+      {step === 0 && <EgressPicker egress={egress} loading={egressLoading} error={egressError} selected={egressNode} onSelect={setEgressNode} onRefresh={() => void loadEgress()} onClaim={currentUserId ? (node) => void claimEgress(node) : undefined} claiming={claiming} claimError={claimError} />}
       {step === 1 && <PhonePicker phones={phones} loading={phonesLoading} error={phonesError} selected={phoneId} onSelect={setPhoneId} onRefresh={() => void loadPhones()} />}
       {step === 2 && <div className="choice-list" role="radiogroup" aria-label="App">
         {(['whatsapp', 'business'] as const).map((option) => {

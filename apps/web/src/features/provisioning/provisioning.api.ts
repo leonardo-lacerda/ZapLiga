@@ -1,5 +1,5 @@
 import { ApiError, apiFetch, json, refreshAccessToken } from '../../services/api';
-import type { CreateJob, EgressList, Job, Phone } from './provisioning.types';
+import type { CreateJob, EgressList, EgressNode, Job, Phone } from './provisioning.types';
 
 const base = (tenantId: string) => `/api/tenants/${encodeURIComponent(tenantId)}/provisioning`;
 const jobPath = (tenantId: string, jobId: string) => `${base(tenantId)}/jobs/${encodeURIComponent(jobId)}`;
@@ -8,6 +8,10 @@ export const fetchEgressNodes = async (tenantId: string): Promise<EgressList> =>
   const body = await json(`${base(tenantId)}/egress`);
   return { items: Array.isArray(body?.items) ? body.items : [], configured: body?.configured !== false };
 };
+
+/** Liga o PC a uma pessoa (null desliga); devolve o PC já com `isMine` calculado para quem chamou. */
+export const assignEgressNode = (tenantId: string, node: string, userId: string | null): Promise<EgressNode> =>
+  json(`${base(tenantId)}/egress/${encodeURIComponent(node)}`, { method: 'PUT', body: JSON.stringify({ userId }) });
 
 export const fetchPhones = async (tenantId: string): Promise<Phone[]> => {
   const body = await json(`${base(tenantId)}/phones`);

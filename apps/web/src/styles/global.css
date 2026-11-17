@@ -1343,6 +1343,9 @@ input, select { min-height: 35px; min-width: 0; padding: 8px 10px; border: 1px s
 .provisioning-steps { grid-template-columns: repeat(4, 1fr); }
 .provisioning-step-body { display: grid; gap: 12px; }
 .provisioning-inline-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 4px; }
+.provisioning-claim { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
+.provisioning-claim .form-hint { flex: 1 1 260px; margin: 0; }
+.provisioning-claim .alert { flex-basis: 100%; }
 .provisioning-page .choice-card:disabled { cursor: not-allowed; opacity: .6; background: var(--surface-subtle); }
 .provisioning-page .choice-card:disabled:hover { border-color: var(--border-subtle); }
 .provisioning-page .pick-copy strong .badge { margin-left: 4px; vertical-align: middle; }

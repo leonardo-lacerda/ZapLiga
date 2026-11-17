@@ -57,6 +57,55 @@ describe('ProvisioningWizard — passo 0 (Rede)', () => {
     expect(screen.getByRole('button', { name: 'Continuar' })).toBeDisabled();
   });
 
+  it('"Este PC é meu" liga o PC selecionado ao usuário logado', async () => {
+    let body: Record<string, unknown> | null = null;
+    let path = '';
+    server.use(
+      http.get(`${API}/egress`, () => HttpResponse.json({ configured: true, items: [otherNode] })),
+      http.put(`${API}/egress/:node`, async ({ request, params }) => {
+        body = await request.json() as Record<string, unknown>; path = String(params.node);
+        return HttpResponse.json({ ...otherNode, label: 'Ana', userId: 'user-1', userName: 'Ana', isMine: true });
+      }),
+    );
+    render(<ProvisioningWizard tenantId="tenant-1" currentUserId="user-1" onJobCreated={vi.fn()} />);
+
+    expect(await screen.findByText('Nenhum PC está ligado a você. Escolha um PC online da operação.')).toBeInTheDocument();
+    // Nada selecionado ainda: sem botão.
+    expect(screen.queryByRole('button', { name: 'Este PC é meu' })).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole('radio', { name: /PC do Bruno/ }));
+    await userEvent.click(screen.getByRole('button', { name: 'Este PC é meu' }));
+
+    const mine = await screen.findByRole('radio', { name: /^Ana/ });
+    expect(path).toBe(otherNode.node);
+    expect(body).toEqual({ userId: 'user-1' });
+    expect(mine).toHaveAttribute('aria-checked', 'true');
+    expect(within(mine).getByText('você')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Este PC é meu' })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Continuar' })).toBeEnabled();
+  });
+
+  it('avisa de quem é o PC e mostra o erro se a ligação falhar', async () => {
+    const carlaOnline = { ...offlineNode, online: true };
+    server.use(
+      http.get(`${API}/egress`, () => HttpResponse.json({ configured: true, items: [carlaOnline] })),
+      http.put(`${API}/egress/:node`, () => HttpResponse.json({ message: 'Essa pessoa não faz parte desta empresa' }, { status: 400 })),
+    );
+    render(<ProvisioningWizard tenantId="tenant-1" currentUserId="user-1" onJobCreated={vi.fn()} />);
+
+    await userEvent.click(await screen.findByRole('radio', { name: /^Carla/ }));
+    expect(screen.getByText(/Este PC está ligado a/)).toHaveTextContent('Este PC está ligado a Carla.');
+    await userEvent.click(screen.getByRole('button', { name: 'Este PC é meu' }));
+    expect(await screen.findByText('Essa pessoa não faz parte desta empresa')).toBeInTheDocument();
+    expect(screen.getByRole('radio', { name: /^Carla/ })).toHaveAttribute('aria-checked', 'true');
+  });
+
+  it('sem o usuário logado não oferece "Este PC é meu"', async () => {
+    server.use(http.get(`${API}/egress`, () => HttpResponse.json({ configured: true, items: [otherNode] })));
+    render(<ProvisioningWizard tenantId="tenant-1" onJobCreated={vi.fn()} />);
+    await userEvent.click(await screen.findByRole('radio', { name: /PC do Bruno/ }));
+    expect(screen.queryByRole('button', { name: 'Este PC é meu' })).not.toBeInTheDocument();
+  });
+
   it('mostra uma mensagem clara quando a saída pelos PCs não está configurada no servidor', async () => {
     server.use(http.get(`${API}/egress`, () => HttpResponse.json({ configured: false, items: [] })));
     render(<ProvisioningWizard tenantId="tenant-1" onJobCreated={vi.fn()} />);

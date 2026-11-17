@@ -7,6 +7,8 @@ import type { WizardPrefill } from './provisioning.types';
 
 type Props = {
   tenantId: string;
+  /** Usuário logado: habilita "Este PC é meu" no passo de Rede. */
+  currentUserId?: string;
   /** Flag `whatsapp_provisioning` ligada e papel leader/super_admin (ver `canUseProvisioning`). */
   allowed: boolean;
   onOpenNumbers: () => void;
@@ -16,7 +18,7 @@ type Props = {
 type View = { kind: 'wizard'; prefill?: WizardPrefill; key: number } | { kind: 'job'; jobId: string };
 
 /** `/app/numeros/cadastrar` — assistente de cadastro de WhatsApp em cloud phones do GeeLark. */
-export function ProvisioningPage({ tenantId, allowed, onOpenNumbers, pollIntervalMs }: Props) {
+export function ProvisioningPage({ tenantId, currentUserId, allowed, onOpenNumbers, pollIntervalMs }: Props) {
   const [view, setView] = useState<View>({ kind: 'wizard', key: 0 });
 
   const heading = <div className="page-heading">
@@ -35,7 +37,7 @@ export function ProvisioningPage({ tenantId, allowed, onOpenNumbers, pollInterva
     {view.kind === 'job'
       ? <JobProgress key={view.jobId} tenantId={tenantId} jobId={view.jobId} pollIntervalMs={pollIntervalMs} onBack={() => newWizard()} onNewJob={newWizard} onOpenNumbers={onOpenNumbers} />
       : <>
-        <ProvisioningWizard key={view.key} tenantId={tenantId} prefill={view.prefill} onJobCreated={(job) => setView({ kind: 'job', jobId: job.id })} />
+        <ProvisioningWizard key={view.key} tenantId={tenantId} currentUserId={currentUserId} prefill={view.prefill} onJobCreated={(job) => setView({ kind: 'job', jobId: job.id })} />
         <RecentJobs tenantId={tenantId} onOpen={(jobId) => setView({ kind: 'job', jobId })} />
       </>}
   </div>;
