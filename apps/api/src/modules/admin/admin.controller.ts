@@ -2,7 +2,6 @@ import { BadRequestException, Body, Controller, Delete, Get, Param, Post, Query,
 import { AuditService } from '../audit/audit.service';
 import { AuthGuard, CurrentUser, Roles, RolesGuard, TenantAction, TenantMembershipGuard } from '../auth/auth.guards';
 import { DialerService } from '../dialer/dialer.service';
-import { waxumNodes } from '../../infrastructure/waxum/waxum.client';
 import { NumbersService } from '../numbers/numbers.service';
 import { AdminService } from './admin.service';
 
@@ -86,10 +85,7 @@ export class AdminController {
     return this.admin.tenantNumbers(tenantId, { limit: Number(limit), offset: Number(offset) });
   }
 
-  // Internet exits a line can use: `main` (the VPS) and each attendant's PC.
-  @Get('/waxum-nodes')
-  waxumNodes() { return { items: [...waxumNodes().keys()] }; }
-
+  // Internet exit of a line: `main` (the VPS) or the slot of an attendant's PC (GET /api/admin/egress/nodes).
   @Post('/tenants/:tenantId/numbers/:numberId/waxum-node')
   @UseGuards(TenantMembershipGuard)
   moveNumberToWaxumNode(@Param('tenantId') tenantId: string, @Param('numberId') numberId: string, @Body() body: { node?: string }, @CurrentUser() actor: any) {

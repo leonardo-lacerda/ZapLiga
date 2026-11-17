@@ -21,6 +21,12 @@ nats_has_own_rust_client() {
     | awk -v ip="\"$ip\"" '/"ip":/ { mine = index($0, ip) > 0 } /"lang":/ && mine && /"rust"/ { found = 1 } END { exit !found }'
 }
 
+# A PC slot whose Waxum is still waiting for a PC (infra/egress/waxum-edge-guard.sh)
+# is idle on purpose: nothing to check, and nothing to restart.
+if [ -n "${EGRESS_ROUTE_FILE:-}" ] && ! grep -qxE 'pc|offline|vps' "$EGRESS_ROUTE_FILE" 2>/dev/null; then
+  exit 0
+fi
+
 if curl -fsS --max-time 4 "$WAXUM_HEALTH_URL" >/dev/null && nats_has_own_rust_client; then
   rm -f "$FAILURE_FILE"
   exit 0

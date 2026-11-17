@@ -1327,3 +1327,6 @@ input, select { min-height: 35px; min-width: 0; padding: 8px 10px; border: 1px s
 .crm-integration-panel .integration-card > .integration-events { grid-column: 1 / -1; }
 .crm-integration-panel .integration-event-row { grid-template-columns: 8px minmax(0, 1fr) auto auto auto; }
 @media (max-width: 640px) { .crm-integration-panel .integration-event-row { grid-template-columns: 8px minmax(0, 1fr) auto; } }
+.egress-steps { margin: 12px 0; padding-inline-start: 18px; display: grid; gap: 10px; font-size: 11px; }.egress-steps a { color: var(--primary); }
+.egress-code { display: block; width: 100%; margin: 8px 0; padding: 8px 10px; border: 1px solid var(--border); border-radius: 7px; color: var(--text); background: var(--surface); font: 10px/1.5 ui-monospace, monospace; resize: vertical; }
+.egress-install { margin: 12px 0; padding: 12px; border: 1px solid var(--border); border-radius: 8px; }.egress-install code { word-break: break-all; }

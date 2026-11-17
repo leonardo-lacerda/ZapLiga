@@ -144,6 +144,11 @@ export class NumbersService {
     const number = await this.find(id, tenantId);
     if (number.status === 'removed') throw new NotFoundException('Número não encontrado');
     if (number.waxum_node === node) return number;
+    if (node !== MAIN_WAXUM_NODE) {
+      // The new session reads its QR through the PC, so the PC has to be answering now.
+      const pc = await this.db.query("SELECT 1 FROM egress_pcs WHERE slot = $1 AND route = 'pc' AND route_reported_at > now() - interval '1 minute'", [node]);
+      if (!pc.rows[0]) throw new BadRequestException('O PC dessa saída não está online. Confira em Admin → Saídas de internet.');
+    }
     const active = await this.db.query("SELECT 1 FROM calls WHERE number_id = $1 AND status IN ('reserved', 'dialing', 'media_active') LIMIT 1", [id]);
     if (active.rows[0]) throw new BadRequestException('Nao e possivel trocar a saida de um numero durante uma chamada');
 

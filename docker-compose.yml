@@ -4,9 +4,9 @@ x-api-environment: &api-environment
   DATABASE_URL: postgres://${POSTGRES_USER:-zapcall}:${POSTGRES_PASSWORD:-zapcall}@postgres:5432/${POSTGRES_DB:-zapcall}
   REDIS_URL: redis://redis:6379
   WAXUM_URL: http://waxum:3451
-  # Waxums that go out through an attendant's PC (profile `egress`), e.g.
-  # `edge-1=http://tailscale-edge-1:3451`. See docs/saida-pelo-pc-do-atendente.md.
-  WAXUM_EDGE_NODES: ${WAXUM_EDGE_NODES:-}
+  # The PC slots below: Waxums that go out through an attendant's PC
+  # (docs/saida-pelo-pc-do-atendente.md). Admin → Saídas de internet assigns them.
+  WAXUM_EDGE_NODES: ${WAXUM_EDGE_NODES:-edge-1=http://tailscale-edge-1:3451,edge-2=http://tailscale-edge-2:3451,edge-3=http://tailscale-edge-3:3451,edge-4=http://tailscale-edge-4:3451,edge-5=http://tailscale-edge-5:3451}
   WAXUM_API_KEY: ${WAXUM_API_KEY:-zapcall-local-waxum-token}
   WAXUM_JWT_SECRET: ${WAXUM_JWT_SECRET:-zapcall-local-jwt-secret-change-me}
   NATS_URL: nats://nats:4222
@@ -57,6 +57,38 @@ x-api-environment: &api-environment
   GROQ_TRANSCRIPTION_MODEL: ${GROQ_TRANSCRIPTION_MODEL:-whisper-large-v3}
   GROQ_TRANSCRIPTION_PROMPT: ${GROQ_TRANSCRIPTION_PROMPT:-}
   CALL_TRANSCRIPTION_MIN_SECONDS: ${CALL_TRANSCRIPTION_MIN_SECONDS:-15}
+
+x-edge-tailscale: &edge-tailscale
+  image: tailscale/tailscale:v1.104.7
+  entrypoint: ["/bin/sh", "/usr/local/bin/edge-entrypoint.sh"]
+  restart: unless-stopped
+  devices:
+    - /dev/net/tun:/dev/net/tun
+  cap_add:
+    - NET_ADMIN
+    - NET_RAW
+
+x-edge-waxum: &edge-waxum
+  image: zapliga-waxum:0.12.6-multirelay-v3
+  entrypoint: ["/bin/sh", "/usr/local/bin/waxum-edge-guard.sh"]
+  command: ["/app/waxum"]
+  restart: unless-stopped
+  healthcheck:
+    test: ["CMD", "/bin/sh", "/usr/local/bin/waxum-healthcheck.sh"]
+    interval: 30s
+    timeout: 5s
+    start_period: 20s
+    retries: 3
+
+x-edge-waxum-environment: &edge-waxum-environment
+  PORT: 3451
+  RUST_LOG: info
+  WHATSAPP_STORAGE_PATH: /app/whatsapp_sessions
+  SUPERADMIN_TOKEN: ${WAXUM_API_KEY:-zapcall-local-waxum-token}
+  JWT_SECRET: ${WAXUM_JWT_SECRET:-zapcall-local-jwt-secret-change-me}
+  NATS_URL: nats://nats:4222
+  RATE_LIMIT_ENABLED: "false"
+  EGRESS_ROUTE_FILE: /egress/route
 
 x-api-common: &api-common
   init: true
@@ -188,72 +220,145 @@ services:
       nats:
         condition: service_healthy
 
-  # --- Internet exit through an attendant's PC (docs/saida-pelo-pc-do-atendente.md) ---
-  # Off unless the VPS .env has COMPOSE_PROFILES=egress. Each PC is one pair:
-  # tailscale-edge-N sends everything in its network out through the PC, and
-  # waxum-edge-N holds that PC's lines inside that network. The API reaches it
-  # at http://tailscale-edge-N:3451 (WAXUM_EDGE_NODES).
+  # --- PC slots: internet exit through an attendant's PC (docs/saida-pelo-pc-do-atendente.md) ---
+  # Each slot is a pair: tailscale-edge-N sends everything in its network out
+  # through the PC that Admin → Saídas de internet put on the slot, and
+  # waxum-edge-N holds that PC's lines inside that network. A slot with no PC
+  # stays idle. The API reaches it at http://tailscale-edge-N:3451.
   tailscale-edge-1:
-    profiles: ["egress"]
-    image: tailscale/tailscale:v1.104.7
-    entrypoint: ["/bin/sh", "/usr/local/bin/edge-entrypoint.sh"]
-    restart: unless-stopped
+    <<: *edge-tailscale
     hostname: zapliga-edge-1
     environment:
-      TS_AUTHKEY: ${EDGE_1_TS_AUTHKEY:-}
-      TS_HOSTNAME: zapliga-edge-1
-      TS_STATE_DIR: /var/lib/tailscale
-      TS_USERSPACE: "false"
-      # Keep Docker's DNS: the Waxum must still resolve `nats`.
-      TS_ACCEPT_DNS: "false"
-      TS_AUTH_ONCE: "true"
-      EGRESS_EXIT_NODE: ${EDGE_1_EXIT_NODE:-}
-      EGRESS_FALLBACK: ${EDGE_1_FALLBACK:-offline}
-    devices:
-      - /dev/net/tun:/dev/net/tun
-    cap_add:
-      - NET_ADMIN
-      - NET_RAW
+      EGRESS_SLOT: edge-1
+      WAXUM_API_KEY: ${WAXUM_API_KEY:-zapcall-local-waxum-token}
     volumes:
       - tailscale_edge_1:/var/lib/tailscale
+      - egress_edge_1:/egress
       - ./infra/egress/edge-entrypoint.sh:/usr/local/bin/edge-entrypoint.sh:ro
-    healthcheck:
-      test: ["CMD", "test", "-s", "/tmp/egress-route"]
-      interval: 10s
-      timeout: 3s
-      start_period: 60s
-      retries: 3
 
   waxum-edge-1:
-    profiles: ["egress"]
-    image: zapliga-waxum:0.12.6-multirelay-v3
-    entrypoint: ["/bin/sh", "/usr/local/bin/waxum-entrypoint-guard.sh"]
-    command: ["/app/waxum"]
-    restart: unless-stopped
+    <<: *edge-waxum
     network_mode: service:tailscale-edge-1
     environment:
-      PORT: 3451
-      RUST_LOG: info
-      WHATSAPP_STORAGE_PATH: /app/whatsapp_sessions
-      SUPERADMIN_TOKEN: ${WAXUM_API_KEY:-zapcall-local-waxum-token}
-      JWT_SECRET: ${WAXUM_JWT_SECRET:-zapcall-local-jwt-secret-change-me}
-      NATS_URL: nats://nats:4222
-      RATE_LIMIT_ENABLED: "false"
-    healthcheck:
-      test: ["CMD", "/bin/sh", "/usr/local/bin/waxum-healthcheck.sh"]
-      interval: 30s
-      timeout: 5s
-      start_period: 20s
-      retries: 3
+      <<: *edge-waxum-environment
+      EGRESS_SLOT: edge-1
     volumes:
       - waxum_edge_1_data:/app/whatsapp_sessions
+      - egress_edge_1:/egress:ro
+      - ./infra/egress/waxum-edge-guard.sh:/usr/local/bin/waxum-edge-guard.sh:ro
       - ./infra/waxum/entrypoint-guard.sh:/usr/local/bin/waxum-entrypoint-guard.sh:ro
       - ./infra/waxum/healthcheck.sh:/usr/local/bin/waxum-healthcheck.sh:ro
     depends_on:
-      tailscale-edge-1:
-        condition: service_healthy
-      nats:
-        condition: service_healthy
+      - tailscale-edge-1
+      - nats
+
+  tailscale-edge-2:
+    <<: *edge-tailscale
+    hostname: zapliga-edge-2
+    environment:
+      EGRESS_SLOT: edge-2
+      WAXUM_API_KEY: ${WAXUM_API_KEY:-zapcall-local-waxum-token}
+    volumes:
+      - tailscale_edge_2:/var/lib/tailscale
+      - egress_edge_2:/egress
+      - ./infra/egress/edge-entrypoint.sh:/usr/local/bin/edge-entrypoint.sh:ro
+
+  waxum-edge-2:
+    <<: *edge-waxum
+    network_mode: service:tailscale-edge-2
+    environment:
+      <<: *edge-waxum-environment
+      EGRESS_SLOT: edge-2
+    volumes:
+      - waxum_edge_2_data:/app/whatsapp_sessions
+      - egress_edge_2:/egress:ro
+      - ./infra/egress/waxum-edge-guard.sh:/usr/local/bin/waxum-edge-guard.sh:ro
+      - ./infra/waxum/entrypoint-guard.sh:/usr/local/bin/waxum-entrypoint-guard.sh:ro
+      - ./infra/waxum/healthcheck.sh:/usr/local/bin/waxum-healthcheck.sh:ro
+    depends_on:
+      - tailscale-edge-2
+      - nats
+
+  tailscale-edge-3:
+    <<: *edge-tailscale
+    hostname: zapliga-edge-3
+    environment:
+      EGRESS_SLOT: edge-3
+      WAXUM_API_KEY: ${WAXUM_API_KEY:-zapcall-local-waxum-token}
+    volumes:
+      - tailscale_edge_3:/var/lib/tailscale
+      - egress_edge_3:/egress
+      - ./infra/egress/edge-entrypoint.sh:/usr/local/bin/edge-entrypoint.sh:ro
+
+  waxum-edge-3:
+    <<: *edge-waxum
+    network_mode: service:tailscale-edge-3
+    environment:
+      <<: *edge-waxum-environment
+      EGRESS_SLOT: edge-3
+    volumes:
+      - waxum_edge_3_data:/app/whatsapp_sessions
+      - egress_edge_3:/egress:ro
+      - ./infra/egress/waxum-edge-guard.sh:/usr/local/bin/waxum-edge-guard.sh:ro
+      - ./infra/waxum/entrypoint-guard.sh:/usr/local/bin/waxum-entrypoint-guard.sh:ro
+      - ./infra/waxum/healthcheck.sh:/usr/local/bin/waxum-healthcheck.sh:ro
+    depends_on:
+      - tailscale-edge-3
+      - nats
+
+  tailscale-edge-4:
+    <<: *edge-tailscale
+    hostname: zapliga-edge-4
+    environment:
+      EGRESS_SLOT: edge-4
+      WAXUM_API_KEY: ${WAXUM_API_KEY:-zapcall-local-waxum-token}
+    volumes:
+      - tailscale_edge_4:/var/lib/tailscale
+      - egress_edge_4:/egress
+      - ./infra/egress/edge-entrypoint.sh:/usr/local/bin/edge-entrypoint.sh:ro
+
+  waxum-edge-4:
+    <<: *edge-waxum
+    network_mode: service:tailscale-edge-4
+    environment:
+      <<: *edge-waxum-environment
+      EGRESS_SLOT: edge-4
+    volumes:
+      - waxum_edge_4_data:/app/whatsapp_sessions
+      - egress_edge_4:/egress:ro
+      - ./infra/egress/waxum-edge-guard.sh:/usr/local/bin/waxum-edge-guard.sh:ro
+      - ./infra/waxum/entrypoint-guard.sh:/usr/local/bin/waxum-entrypoint-guard.sh:ro
+      - ./infra/waxum/healthcheck.sh:/usr/local/bin/waxum-healthcheck.sh:ro
+    depends_on:
+      - tailscale-edge-4
+      - nats
+
+  tailscale-edge-5:
+    <<: *edge-tailscale
+    hostname: zapliga-edge-5
+    environment:
+      EGRESS_SLOT: edge-5
+      WAXUM_API_KEY: ${WAXUM_API_KEY:-zapcall-local-waxum-token}
+    volumes:
+      - tailscale_edge_5:/var/lib/tailscale
+      - egress_edge_5:/egress
+      - ./infra/egress/edge-entrypoint.sh:/usr/local/bin/edge-entrypoint.sh:ro
+
+  waxum-edge-5:
+    <<: *edge-waxum
+    network_mode: service:tailscale-edge-5
+    environment:
+      <<: *edge-waxum-environment
+      EGRESS_SLOT: edge-5
+    volumes:
+      - waxum_edge_5_data:/app/whatsapp_sessions
+      - egress_edge_5:/egress:ro
+      - ./infra/egress/waxum-edge-guard.sh:/usr/local/bin/waxum-edge-guard.sh:ro
+      - ./infra/waxum/entrypoint-guard.sh:/usr/local/bin/waxum-entrypoint-guard.sh:ro
+      - ./infra/waxum/healthcheck.sh:/usr/local/bin/waxum-healthcheck.sh:ro
+    depends_on:
+      - tailscale-edge-5
+      - nats
 
   api-a:
     <<: *api-common
@@ -300,4 +405,17 @@ volumes:
   waxum_data:
   call_recordings:
   tailscale_edge_1:
+  egress_edge_1:
   waxum_edge_1_data:
+  tailscale_edge_2:
+  egress_edge_2:
+  waxum_edge_2_data:
+  tailscale_edge_3:
+  egress_edge_3:
+  waxum_edge_3_data:
+  tailscale_edge_4:
+  egress_edge_4:
+  waxum_edge_4_data:
+  tailscale_edge_5:
+  egress_edge_5:
+  waxum_edge_5_data:
