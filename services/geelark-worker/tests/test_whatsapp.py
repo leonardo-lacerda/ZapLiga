@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import inspect
 import re
 from unittest import mock
 
@@ -109,11 +108,53 @@ def test_scrub_hierarchy_removes_edit_text_values():
     assert "123456" not in out and "Enter code" in out
 
 
-def test_handle_permission_is_reserved_for_human():
-    src = inspect.getsource(wa.handle_permission)
-    assert "TODO(human)" in src
-    with pytest.raises(NotImplementedError):
-        wa.handle_permission(object())
+class PermissionDialog:
+    """Diálogo de permissão do sistema: devolve o texto e registra o botão clicado."""
+
+    def __init__(self, message, buttons, pkg="com.android.permissioncontroller"):
+        self.message, self.buttons, self.pkg = message, set(buttons), pkg
+        self.clicked = []
+
+    def __call__(self, **sel):
+        pattern = sel.get("resourceIdMatches", "")
+        ids = [f"{self.pkg}:id/{b}" for b in self.buttons] + [f"{self.pkg}:id/permission_message"]
+        hit = next((i for i in ids if re.fullmatch(pattern, i)), None)
+        obj = mock.Mock(exists=hit is not None)
+        obj.wait.return_value = hit is not None
+        obj.get_text.return_value = self.message
+        obj.click.side_effect = lambda: self.clicked.append(hit.rsplit("/", 1)[1])
+        return obj
+
+
+@pytest.mark.parametrize("message,buttons,expected", [
+    ("Allow WhatsApp to send you notifications?", ["permission_allow_button", "permission_deny_button"],
+     "permission_allow_button"),
+    ("Permitir que o WhatsApp acesse a câmera?",
+     ["permission_allow_foreground_only_button", "permission_allow_one_time_button", "permission_deny_button"],
+     "permission_allow_foreground_only_button"),
+    ("Allow WhatsApp to access photos and videos?",
+     ["permission_allow_all_button", "permission_allow_selected_button", "permission_deny_button"],
+     "permission_allow_all_button"),
+    ("Permitir que o WhatsApp acesse a localização deste dispositivo?",
+     ["permission_allow_foreground_only_button", "permission_deny_button"], "permission_deny_button"),
+    ("Allow WhatsApp to access this device's location?",
+     ["permission_allow_foreground_only_button", "permission_deny_and_dont_ask_again_button"],
+     "permission_deny_and_dont_ask_again_button"),
+])
+def test_handle_permission_allows_all_but_location(message, buttons, expected):
+    d = PermissionDialog(message, buttons)
+    wa.handle_permission(d)
+    assert d.clicked == [expected]
+
+
+def test_handle_permission_google_permission_controller():
+    d = PermissionDialog("Allow WhatsApp to access your contacts?",
+                         ["permission_allow_button", "permission_deny_button"],
+                         pkg="com.google.android.permissioncontroller")
+    assert wa.detect_screen(FakeDevice(ids=["com.google.android.permissioncontroller:id/permission_allow_button"]),
+                            WA) == Screen.PERMISSION
+    wa.handle_permission(d)
+    assert d.clicked == ["permission_allow_button"]
 
 
 def test_android_major():
@@ -158,7 +199,8 @@ def test_set_network_expired_phone():
 def test_permission_dialog_maps_to_internal_with_clear_message():
     auto = make_auto(mock.Mock())
     auto.d = FakeDevice()
-    with pytest.raises(JobError) as exc:
+    with mock.patch.object(wa, "handle_permission", side_effect=NotImplementedError), \
+            pytest.raises(JobError) as exc:
         auto._handle_permission()
     assert exc.value.code == "internal" and exc.value.message == PERMISSION_TODO_MESSAGE
 

@@ -23,6 +23,12 @@ from functools import lru_cache
 from typing import Any
 
 
+# O diálogo de permissão é do sistema: com.android.permissioncontroller no AOSP e
+# com.google.android.permissioncontroller em builds com Google Play.
+PERMISSION_ID_PREFIX = r"com\.(google\.)?android\.permissioncontroller:id/"
+LOCATION_PERMISSION_TEXT = re.compile(r"(?is).*(location|localiza).*")
+
+
 @dataclass(frozen=True)
 class WhatsAppApp:
     key: str          # chave do contrato: "whatsapp" | "business"
@@ -137,7 +143,7 @@ def build_screens(app: WhatsAppApp) -> tuple[tuple[Screen, tuple[dict, ...]], ..
         (Screen.NO_INTERNET, ({"textMatches": NO_INTERNET_TEXT},)),
         (Screen.PHONE_HINT, ({"textMatches": PHONE_HINT_TITLE}, {"textMatches": NONE_OF_ABOVE_TEXT})),
         (Screen.PERMISSION, (
-            {"resourceIdMatches": r"com\.android\.permissioncontroller:id/permission_(allow|deny).*"},
+            {"resourceIdMatches": PERMISSION_ID_PREFIX + r"permission_(allow|deny).*"},
             {"resourceIdMatches": r"com\.android\.packageinstaller:id/permission_(allow|deny).*"},
         )),
         (Screen.VERIFY_CODE, ({"resourceId": w + "verify_sms_code_input"}, {"resourceId": w + "code_input"})),
@@ -222,6 +228,16 @@ def handle_permission(d: Any) -> None:
       ...:id/permission_allow_foreground_only_button -> Só durante o uso
       ...:id/permission_deny_button                  -> Não permitir
     O texto do diálogo (qual permissão está sendo pedida) fica em ...:id/permission_message.
+
+    Regra: nega localização (o cadastro não precisa e ela não deve contradizer o IP do PC)
+    e permite o resto (notificações, contatos, fotos, câmera), preferindo "só durante o
+    uso". Câmera fica permitida porque a tela de "Conectar aparelho" abre o leitor de QR
+    antes de oferecer "Conectar com número de telefone".
     """
-    # TODO(human): decidir quais permissões aceitar e quais negar.
-    raise NotImplementedError("handle_permission ainda não implementado")
+    message = first_text(d, {"resourceIdMatches": PERMISSION_ID_PREFIX + "permission_message"}) or ""
+    if LOCATION_PERMISSION_TEXT.match(message):
+        buttons = ("permission_deny_and_dont_ask_again_button", "permission_deny_button")
+    else:
+        buttons = ("permission_allow_foreground_only_button", "permission_allow_all_button",
+                   "permission_allow_button")
+    click_first(d, *({"resourceIdMatches": PERMISSION_ID_PREFIX + b} for b in buttons), timeout=1)
