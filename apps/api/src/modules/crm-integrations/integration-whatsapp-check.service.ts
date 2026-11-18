@@ -41,7 +41,6 @@ export class IntegrationWhatsappCheckService {
     if (cached) return cached;
 
     const lines = await this.pickLines(integration.tenant_id);
-    if (!lines.length) throw new ConflictException({ code: 'no_connected_number', message: 'Nenhuma linha de WhatsApp conectada para fazer a verificação' });
     await this.consumeBudget(integration.tenant_id);
 
     for (const sessionId of lines) {
@@ -81,17 +80,24 @@ export class IntegrationWhatsappCheckService {
     }
   }
 
-  /** Connected lines of the tenant, idle and healthy ones first. */
+  /**
+   * The lines to ask, idle and healthy ones first. When the tenant set lines aside for verification,
+   * only those are used: a line that makes calls is never exposed to lookups behind its back.
+   */
   private async pickLines(tenantId: string) {
-    const result = await this.db.query<{ waxum_session_id: string }>(`
-      SELECT n.waxum_session_id
+    const result = await this.db.query<{ waxum_session_id: string; verification_only: boolean; connected: boolean }>(`
+      SELECT n.waxum_session_id, n.verification_only, (n.status = ANY($2::text[])) AS connected
       FROM whatsapp_numbers n
-      WHERE n.tenant_id = $1 AND n.status = ANY($2::text[]) AND n.waxum_session_id IS NOT NULL
+      WHERE n.tenant_id = $1 AND n.status <> 'removed' AND n.waxum_session_id IS NOT NULL
       ORDER BY
         EXISTS (SELECT 1 FROM calls c WHERE c.number_id = n.id AND c.status IN ('reserved', 'dialing', 'media_active')) ASC,
         (n.flagged_until IS NOT NULL AND n.flagged_until > now()) ASC,
-        random()
-      LIMIT $3`, [tenantId, CONNECTED_STATUSES, MAX_LINES_TRIED]);
-    return result.rows.map((row) => row.waxum_session_id);
+        random()`, [tenantId, CONNECTED_STATUSES]);
+    const reserved = result.rows.filter((row) => row.verification_only);
+    const pool = reserved.length ? reserved : result.rows;
+    const lines = pool.filter((row) => row.connected).slice(0, MAX_LINES_TRIED).map((row) => row.waxum_session_id);
+    if (!lines.length && reserved.length) throw new ConflictException({ code: 'verification_line_unavailable', message: 'A linha reservada para verificação não está conectada' });
+    if (!lines.length) throw new ConflictException({ code: 'no_connected_number', message: 'Nenhuma linha de WhatsApp conectada para fazer a verificação' });
+    return lines;
   }
 }

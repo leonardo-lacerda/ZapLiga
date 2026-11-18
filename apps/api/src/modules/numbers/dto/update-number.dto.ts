@@ -1,4 +1,4 @@
-import { IsInt, IsOptional, IsString, Max, Min, MinLength } from 'class-validator';
+import { IsBoolean, IsInt, IsOptional, IsString, Max, Min, MinLength } from 'class-validator';
 
 export class UpdateNumberDto {
   @IsOptional() @IsString() @MinLength(2) label?: string;
@@ -6,4 +6,6 @@ export class UpdateNumberDto {
   @IsOptional() @IsInt() @Min(0) @Max(3600) cooldownSeconds?: number;
   @IsOptional() @IsInt() @Min(1) @Max(20) maxCallsPerWindow?: number;
   @IsOptional() @IsInt() @Min(60) @Max(3600) callWindowSeconds?: number;
+  // A verification-only line only checks whether phones have WhatsApp; it never places calls.
+  @IsOptional() @IsBoolean() verificationOnly?: boolean;
 }

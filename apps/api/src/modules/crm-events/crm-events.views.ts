@@ -20,6 +20,7 @@ export const lineView = (row: any) => {
   return {
     id: row.id, label: row.label, phone: row.phone ?? null, status: row.status,
     in_call: Number(row.active_calls ?? 0) > 0,
+    verification_only: Boolean(row.verification_only),
     available_at: quarantinedUntil ?? futureIso(row.last_call_ended_at),
     quarantined_until: quarantinedUntil,
     protection: { cooldown_seconds: row.cooldown_seconds, max_calls_per_window: row.max_calls_per_window, call_window_seconds: row.call_window_seconds, max_concurrent_calls: row.max_concurrent_calls },

@@ -16,8 +16,10 @@ describe('normalizeE164', () => {
 });
 
 describe('IntegrationWhatsappCheckService', () => {
-  const makeService = (options: { sessions?: string[]; cached?: string | null; count?: number } = {}) => {
-    const db = { query: jest.fn().mockResolvedValue({ rows: (options.sessions ?? ['sess-1', 'sess-2']).map((waxum_session_id) => ({ waxum_session_id })) }) };
+  type Line = { waxum_session_id: string; verification_only?: boolean; connected?: boolean };
+  const makeService = (options: { sessions?: string[]; lines?: Line[]; cached?: string | null; count?: number } = {}) => {
+    const lines = options.lines ?? (options.sessions ?? ['sess-1', 'sess-2']).map((waxum_session_id) => ({ waxum_session_id }));
+    const db = { query: jest.fn().mockResolvedValue({ rows: lines.map((line) => ({ verification_only: false, connected: true, ...line })) }) };
     const redis = {
       client: {
         get: jest.fn().mockResolvedValue(options.cached ?? null),
@@ -65,6 +67,25 @@ describe('IntegrationWhatsappCheckService', () => {
     expect(redis.client.incr).not.toHaveBeenCalled();
   });
 
+  it('uses only the lines set aside for verification, never the calling lines', async () => {
+    const { service, waxum } = makeService({ lines: [{ waxum_session_id: 'calls-1' }, { waxum_session_id: 'verify-1', verification_only: true }, { waxum_session_id: 'calls-2' }] });
+    waxum.checkContact.mockRejectedValue(new Error('Waxum 503'));
+    await expect(service.check(integration, '+5531989739997')).rejects.toMatchObject({ status: 502, response: { code: 'check_failed' } });
+    expect(waxum.checkContact.mock.calls.map(([session]) => session)).toEqual(['verify-1']);
+  });
+
+  it('answers 409 verification_line_unavailable when the verification lines are all disconnected', async () => {
+    const { service, waxum, redis } = makeService({ lines: [{ waxum_session_id: 'calls-1' }, { waxum_session_id: 'verify-1', verification_only: true, connected: false }] });
+    await expect(service.check(integration, '+5531989739997')).rejects.toMatchObject({ status: 409, response: { code: 'verification_line_unavailable' } });
+    expect(waxum.checkContact).not.toHaveBeenCalled();
+    expect(redis.client.incr).not.toHaveBeenCalled();
+  });
+
+  it('answers 409 no_connected_number when no line is connected and none is set aside', async () => {
+    const { service } = makeService({ lines: [{ waxum_session_id: 'calls-1', connected: false }] });
+    await expect(service.check(integration, '+5531989739997')).rejects.toMatchObject({ status: 409, response: { code: 'no_connected_number' } });
+  });
+
   it('prefers idle, non-quarantined lines of the tenant', async () => {
     const { service, db, waxum } = makeService();
     waxum.checkContact.mockResolvedValue({ jid: 'x@s.whatsapp.net', isRegistered: true });
@@ -97,5 +118,13 @@ describe('IntegrationWhatsappCheckService', () => {
     empty.waxum.checkContact.mockResolvedValue(null);
     await expect(empty.service.check(integration, '+5531989739997')).rejects.toMatchObject({ status: 502, response: { code: 'check_failed' } });
     expect(empty.redis.client.set).not.toHaveBeenCalled();
+  });
+});
+
+describe('lineView', () => {
+  it('tells the CRM which lines are only for verification', async () => {
+    const { lineView } = await import('../crm-events/crm-events.views');
+    expect(lineView({ id: 'n-1', verification_only: true })).toMatchObject({ verification_only: true });
+    expect(lineView({ id: 'n-2' })).toMatchObject({ verification_only: false });
   });
 });

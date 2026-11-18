@@ -1,5 +1,5 @@
 import { FormEvent, useState } from 'react';
-import { render, screen, within } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { http, HttpResponse } from 'msw';
 import { vi } from 'vitest';
@@ -96,4 +96,22 @@ it('conecta por código sem abrir o QR: gera o código de 8 caracteres para digi
   expect(showQr).not.toHaveBeenCalled();
   await userEvent.click(within(dialog).getByRole('button', { name: 'Fechar modal' }));
   expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+});
+
+it('marca uma linha como só para verificação de WhatsApp', async () => {
+  const bodies: unknown[] = [];
+  server.use(http.patch('*/api/numbers/number-2/settings', async ({ request }) => {
+    const body = await request.json() as Record<string, unknown>;
+    bodies.push(body);
+    return HttpResponse.json({ id: 'number-2', verification_only: body.verificationOnly });
+  }));
+  render(<Harness onCreate={vi.fn()} numbers={[
+    { id: 'number-2', label: 'Telefone 4', phone: '5527999990000', status: 'connected', max_concurrent_calls: 1, verification_only: false },
+  ]} />);
+
+  const toggle = screen.getByRole('checkbox', { name: /Só para verificação de WhatsApp/ });
+  expect(toggle).not.toBeChecked();
+  await userEvent.click(toggle);
+  await waitFor(() => expect(toggle).toBeChecked());
+  expect(bodies).toEqual([{ verificationOnly: true }]);
 });

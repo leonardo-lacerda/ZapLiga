@@ -53,11 +53,11 @@ Erros de discagem retornam `409` com `{code, message, retry_after_seconds}`.
 | `GET /me` | — | `{contract_version, tenant, integration, access, seats}` |
 | `POST /handshake` | `webhooks` | `{webhookUrl, allowedOrigins?, externalAccountId?}` → `{integration, webhook_secret, contract_version}` |
 | `GET /catalog` | — | `{call_results[{code,label,default_pipeline_stage,requires_notes,requires_callback_at}], pipeline_stages}` |
-| `GET /numbers` | `numbers:read` | `{items[{id,label,phone,status,in_call,available_at,quarantined_until,protection,usage{last_call_at,calls_24h,failed_calls_24h}}]}` |
+| `GET /numbers` | `numbers:read` | `{items[{id,label,phone,status,in_call,verification_only,available_at,quarantined_until,protection,usage{last_call_at,calls_24h,failed_calls_24h}}]}` |
 | `POST /numbers` | `numbers:write` | `{label, phone?}` → linha (depois, buscar o QR) |
 | `GET /numbers/:id/qr` | `numbers:write` | Payload do Waxum (`qr`/`qr_codes`, `status: connected` quando pareado) |
 | `POST /numbers/:id/reconnect` | `numbers:write` | — |
-| `PATCH /numbers/:id/settings` | `numbers:write` | `{label?, cooldownSeconds?, maxCallsPerWindow?, callWindowSeconds?}` |
+| `PATCH /numbers/:id/settings` | `numbers:write` | `{label?, cooldownSeconds?, maxCallsPerWindow?, callWindowSeconds?, verificationOnly?}` |
 | `DELETE /numbers/:id` | `numbers:write` | Arquiva a linha (recusa se estiver em ligação) |
 | `POST /whatsapp-check` | `numbers:read` | `{phone}` (E.164, com ou sem `+`) → `{phone, on_whatsapp, jid}` |
 | `GET /agents` | `agents` | Vínculos com estado da estação |
@@ -86,6 +86,7 @@ Detalhes por rota:
 - **`POST /whatsapp-check`** pergunta a uma linha de WhatsApp Web do tenant se o telefone tem WhatsApp (serve para separar "sem WhatsApp" de "bloqueou a empresa" no erro 131026 da Cloud API).
   - Só os dígitos vão ao Waxum. `phone` na resposta é esse número só com dígitos; `jid` vem `null` quando `on_whatsapp` é `false`.
   - A linha usada é uma conectada do tenant, de preferência fora de ligação e fora de quarentena. Se ela falhar, tenta mais uma.
+  - Se o tenant marcou alguma linha como **só para verificação** (`verification_only`), a consulta usa só essas linhas e nunca volta para as linhas de ligação. Sem nenhuma marcada, usa as linhas conectadas como acima.
   - `on_whatsapp: false` só sai quando o Waxum respondeu que o número não está registrado. Falha ou timeout nunca viram "não".
   - Cache de 24 h por telefone, compartilhado entre tenants (`CRM_WHATSAPP_CHECK_CACHE_SECONDS`). Só respostas reais entram no cache.
   - Limite próprio: 10 consultas ao Waxum por minuto por tenant (`CRM_WHATSAPP_CHECK_PER_MINUTE`); respostas do cache não contam. Consultar em volume faz a linha ser banida, então use só para o caso do 131026.
@@ -95,8 +96,10 @@ Detalhes por rota:
   | Verificado | `200` com `{phone, on_whatsapp, jid}` |
   | Telefone inválido | `422` com `code: invalid_phone` |
   | Nenhuma linha conectada no tenant | `409` com `code: no_connected_number` |
+  | Há linha só para verificação, mas nenhuma delas está conectada | `409` com `code: verification_line_unavailable` |
   | Limite de consultas excedido | `429` com `code: rate_limited` e `retry_after_seconds` |
   | Waxum falhou ou deu timeout | `502` com `code: check_failed` (tente depois; não é "sem WhatsApp") |
+- **Linha só para verificação** (`verification_only`): marcada no painel (Números) ou por `PATCH /numbers/:id/settings` com `verificationOnly`. Ela fica fora do discador automático e manual, e `POST /dial-intents` com ela responde `409 line_verification_only`. O Franco deve escondê-la no seletor de linha de ligação.
 - **Suprimir não tem rota de remoção, de propósito:** retirar um "não ligar" é decisão humana no painel do ZapLiga.
 
 ### Códigos de recusa da discagem
@@ -113,6 +116,7 @@ Os mesmos códigos valem para `POST /dial-intents` (`409`) e para a mensagem `di
 | `line_quarantined` | Quarentena por sinais de bloqueio (`retry_after_seconds`) |
 | `line_protected` | Backoff de proteção do WhatsApp (`retry_after_seconds`) |
 | `line_busy` | A linha já está em ligação |
+| `line_verification_only` | A linha é só para verificação de WhatsApp e não faz ligações |
 | `self_call` | O destino é a própria linha |
 | `suppressed` | O número está na lista de não contato |
 | `invalid_phone` / `invalid_external_ref` | Entrada inválida |

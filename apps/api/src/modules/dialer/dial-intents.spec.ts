@@ -60,6 +60,7 @@ describe('DialerService dial intents', () => {
     ['agent_busy', { busy: true }],
     ['line_not_found', { numbers: [] }],
     ['line_disconnected', { numbers: [{ ...line, status: 'disconnected' }] }],
+    ['line_verification_only', { numbers: [{ ...line, verification_only: true }] }],
     ['line_busy', { numbers: [{ ...line, active_calls: 1 }] }],
     ['self_call', { numbers: [{ ...line, phone: '5511999990000' }] }],
     ['suppressed', { suppressed: true }],

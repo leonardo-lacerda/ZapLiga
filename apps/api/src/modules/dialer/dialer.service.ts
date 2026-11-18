@@ -543,7 +543,7 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
       // Manual calls keep the line PROTECTIONS (quarantine after instant
       // failures, Waxum 429 backoff -- both future-date last_call_ended_at) but
       // not the automatic dialer's pacing: a person may dial again right away.
-      this.db.query(`SELECT * FROM whatsapp_numbers WHERE tenant_id = $1 AND status IN ('connected', 'online', 'ready', 'authenticated') AND (flagged_until IS NULL OR flagged_until <= now()) ORDER BY last_call_ended_at NULLS FIRST, last_call_ended_at ASC`, [tenantId]),
+      this.db.query(`SELECT * FROM whatsapp_numbers WHERE tenant_id = $1 AND verification_only = false AND status IN ('connected', 'online', 'ready', 'authenticated') AND (flagged_until IS NULL OR flagged_until <= now()) ORDER BY last_call_ended_at NULLS FIRST, last_call_ended_at ASC`, [tenantId]),
       this.db.query(`SELECT l.*, f.is_active AS folder_active,
           EXISTS (SELECT 1 FROM contact_suppressions cs WHERE cs.tenant_id = l.tenant_id AND cs.phone = l.phone AND cs.lifted_at IS NULL) AS contact_suppressed,
           EXISTS (SELECT 1 FROM calls active_call WHERE active_call.tenant_id = l.tenant_id AND active_call.lead_id = l.id AND active_call.status IN ('reserved','dialing','media_active')) AS active_call,
@@ -690,7 +690,7 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
         ORDER BY s.last_assigned_at NULLS FIRST, s.last_assigned_at ASC
       `, [tenantId, sdrUserId ?? null]),
       // A CRM call names its line: never silently swap it for another one.
-      this.db.query(`SELECT * FROM whatsapp_numbers WHERE tenant_id = $1 AND status IN ('connected', 'online', 'ready', 'authenticated') AND (flagged_until IS NULL OR flagged_until <= now()) AND ($2::text IS NULL OR id = $2) ORDER BY last_call_ended_at NULLS FIRST, last_call_ended_at ASC`, [tenantId, input.numberId ?? null]),
+      this.db.query(`SELECT * FROM whatsapp_numbers WHERE tenant_id = $1 AND verification_only = false AND status IN ('connected', 'online', 'ready', 'authenticated') AND (flagged_until IS NULL OR flagged_until <= now()) AND ($2::text IS NULL OR id = $2) ORDER BY last_call_ended_at NULLS FIRST, last_call_ended_at ASC`, [tenantId, input.numberId ?? null]),
     ]);
     const execution = this.campaignExecution ? await this.campaignExecution.resolveForLead(tenantId, lead) : undefined;
     if (execution && !execution.allowed) throw new Error('A campanha deste lead não está em execução ou não possui recursos disponíveis');
@@ -761,6 +761,7 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
     if (busy.rows[0]) throw new DialRefusedError('agent_busy', 'O agente já está em uma ligação');
     const number = numbers.rows[0];
     if (!number) throw new DialRefusedError('line_not_found', 'Linha não encontrada');
+    if (number.verification_only) throw new DialRefusedError('line_verification_only', 'Esta linha é só para verificação de WhatsApp e não faz ligações');
     if (!CONNECTED_LINE_STATUSES.includes(String(number.status).toLowerCase())) throw new DialRefusedError('line_disconnected', 'A linha escolhida não está conectada');
     const secondsUntil = (value: unknown) => Math.max(1, Math.ceil((new Date(String(value)).getTime() - Date.now()) / 1000));
     if (number.flagged_until && new Date(number.flagged_until).getTime() > Date.now()) throw new DialRefusedError('line_quarantined', 'A linha está em quarentena (aquecimento de número novo ou sinais de bloqueio do WhatsApp)', secondsUntil(number.flagged_until));
@@ -1010,7 +1011,7 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
       this.getSettings(tenantId),
       this.db.query(`SELECT id FROM sdrs WHERE tenant_id = $1 AND user_id = $2 LIMIT 1`, [tenantId, userId]),
       // Per-tenant lines: expose only whether a line is available, never how many.
-      this.db.query(`SELECT EXISTS (SELECT 1 FROM whatsapp_numbers WHERE tenant_id = $1 AND status IN ('connected', 'online', 'ready', 'authenticated') AND (flagged_until IS NULL OR flagged_until <= now())) AS ready`, [tenantId]),
+      this.db.query(`SELECT EXISTS (SELECT 1 FROM whatsapp_numbers WHERE tenant_id = $1 AND verification_only = false AND status IN ('connected', 'online', 'ready', 'authenticated') AND (flagged_until IS NULL OR flagged_until <= now())) AS ready`, [tenantId]),
       this.schedule ? this.schedule.evaluate(tenantId, new Date(), true) : Promise.resolve({ allowed: true, reason: 'schedule_service_unavailable' }),
     ]);
     const sdr = ownSdr.rows[0] ? await this.getSdrState(ownSdr.rows[0].id, tenantId) : null;
@@ -1201,7 +1202,7 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
             )
           ORDER BY s.last_assigned_at NULLS FIRST, s.last_assigned_at ASC
         `, [tenantId]),
-        this.db.query(`SELECT * FROM whatsapp_numbers WHERE tenant_id = $1 AND status IN ('connected', 'online', 'ready', 'authenticated') AND (flagged_until IS NULL OR flagged_until <= now()) AND (last_call_ended_at IS NULL OR last_call_ended_at <= now() - (cooldown_seconds * interval '1 second')) ORDER BY last_call_ended_at NULLS FIRST, last_call_ended_at ASC`, [tenantId]),
+        this.db.query(`SELECT * FROM whatsapp_numbers WHERE tenant_id = $1 AND verification_only = false AND status IN ('connected', 'online', 'ready', 'authenticated') AND (flagged_until IS NULL OR flagged_until <= now()) AND (last_call_ended_at IS NULL OR last_call_ended_at <= now() - (cooldown_seconds * interval '1 second')) ORDER BY last_call_ended_at NULLS FIRST, last_call_ended_at ASC`, [tenantId]),
           this.db.query(`
           WITH active_folders AS (
             SELECT f.id, (ROW_NUMBER() OVER (ORDER BY f.sort_order ASC, f.created_at ASC) - 1)::int AS folder_index,

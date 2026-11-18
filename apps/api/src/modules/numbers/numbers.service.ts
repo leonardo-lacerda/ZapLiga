@@ -12,7 +12,7 @@ import { CrmEventsService, CrmLineEventType } from '../crm-events/crm-events.ser
 const digits = (value: unknown) => String(value ?? '').replace(/\D/g, '');
 
 export type CreateNumberInput = { label?: string; phone?: string; maxConcurrentCalls?: number; cooldownSeconds?: number; maxCallsPerWindow?: number; callWindowSeconds?: number };
-export type UpdateNumberInput = { label?: string; maxConcurrentCalls?: number; cooldownSeconds?: number; maxCallsPerWindow?: number; callWindowSeconds?: number };
+export type UpdateNumberInput = { label?: string; maxConcurrentCalls?: number; cooldownSeconds?: number; maxCallsPerWindow?: number; callWindowSeconds?: number; verificationOnly?: boolean };
 
 /**
  * WhatsApp line management shared by the panel (NumbersController) and the CRM
@@ -148,9 +148,9 @@ export class NumbersService {
 
   async updateSettings(tenantId: string, actorUserId: string | null, id: string, body: UpdateNumberInput) {
     await this.entitlement.assertAction(tenantId, 'write', actorUserId ?? undefined);
-    const result = await this.db.query(`UPDATE whatsapp_numbers SET max_concurrent_calls = COALESCE($1,max_concurrent_calls), cooldown_seconds = COALESCE($2,cooldown_seconds), max_calls_per_window = COALESCE($3,max_calls_per_window), call_window_seconds = COALESCE($4,call_window_seconds), label = COALESCE($5,label) WHERE id = $6 AND tenant_id = $7 AND status <> 'removed' RETURNING *`, [body.maxConcurrentCalls == null ? null : Number(body.maxConcurrentCalls), body.cooldownSeconds == null ? null : Number(body.cooldownSeconds), body.maxCallsPerWindow == null ? null : Number(body.maxCallsPerWindow), body.callWindowSeconds == null ? null : Number(body.callWindowSeconds), body.label ? String(body.label) : null, id, tenantId]);
+    const result = await this.db.query(`UPDATE whatsapp_numbers SET max_concurrent_calls = COALESCE($1,max_concurrent_calls), cooldown_seconds = COALESCE($2,cooldown_seconds), max_calls_per_window = COALESCE($3,max_calls_per_window), call_window_seconds = COALESCE($4,call_window_seconds), label = COALESCE($5,label), verification_only = COALESCE($8,verification_only) WHERE id = $6 AND tenant_id = $7 AND status <> 'removed' RETURNING *`, [body.maxConcurrentCalls == null ? null : Number(body.maxConcurrentCalls), body.cooldownSeconds == null ? null : Number(body.cooldownSeconds), body.maxCallsPerWindow == null ? null : Number(body.maxCallsPerWindow), body.callWindowSeconds == null ? null : Number(body.callWindowSeconds), body.label ? String(body.label) : null, id, tenantId, typeof body.verificationOnly === 'boolean' ? body.verificationOnly : null]);
     if (!result.rows[0]) throw new NotFoundException('Número não encontrado');
-    await this.audit.record({ actorUserId, tenantId, action: 'number.settings_changed', entityType: 'whatsapp_number', entityId: id });
+    await this.audit.record({ actorUserId, tenantId, action: 'number.settings_changed', entityType: 'whatsapp_number', entityId: id, ...(typeof body.verificationOnly === 'boolean' ? { metadata: { verificationOnly: body.verificationOnly } } : {}) });
     this.emitCrmLine(tenantId, id, 'number.updated');
     return result.rows[0];
   }

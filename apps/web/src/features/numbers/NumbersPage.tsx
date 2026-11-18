@@ -72,6 +72,7 @@ export function NumbersPage({ numbers, numbersTotal, numbersOffset, onNumbersPag
         <h3>{number.label}</h3><p>{number.phone || 'Telefone não informado'}</p>
         <div className="resource-meta"><span>Limite de chamadas</span><strong>{number.max_concurrent_calls}</strong></div>
         <div className="resource-meta"><span>Cadência protegida</span><strong>{number.max_calls_per_window ?? 3} / {number.call_window_seconds ?? 180}s</strong></div>
+        <VerificationOnlyToggle number={number} canManage={canManageNumbers} />
         {canManageNumbers && <div className="card-actions">{!connectedStatuses.includes(String(number.status).toLowerCase()) && <><Button variant="secondary" icon="qr" disabled={qrLoading} onClick={() => void showQr(number.id)}>Abrir QR</Button><Button variant="secondary" icon="phone" disabled={qrLoading} onClick={() => setPairNumber(number)}>Conectar por código</Button></>}<Button variant="ghost" icon="refresh" disabled={qrLoading} onClick={() => void reconnectNumber(number.id)}>Reconectar</Button><Button variant="danger" icon="close" disabled={qrLoading} onClick={() => void removeNumber(number.id, number.label)}>Remover</Button></div>}
       </div>)}
       {!numbers.length && <div className="full-span"><EmptyState title="Nenhum número cadastrado" description={canManageNumbers ? 'Adicione uma sessão para conectar seu WhatsApp.' : 'Os números serão configurados pelo administrador da plataforma.'} /></div>}
@@ -79,6 +80,32 @@ export function NumbersPage({ numbers, numbersTotal, numbersOffset, onNumbersPag
     <Pagination offset={numbersOffset} limit={PAGE_SIZE} total={numbersTotal} onChange={onNumbersPageChange} />
     {qr && <QrModal qr={qr} closeQr={closeQr} numberId={qrNumberId} defaultPhone={numbers.find((number: AnyRow) => number.id === qrNumberId)?.phone ?? ''} />}
     {pairNumber && <PairCodeModal number={pairNumber} onClose={() => setPairNumber(null)} />}
+  </>;
+}
+
+/**
+ * Linha "só para verificação": usada apenas para checar se um telefone tem WhatsApp
+ * (integração com o CRM) e fica fora do discador, automático e manual.
+ */
+export function VerificationOnlyToggle({ number, canManage }: { number: AnyRow; canManage: boolean }) {
+  const [enabled, setEnabled] = useState(Boolean(number.verification_only));
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState('');
+  if (!canManage) return enabled ? <div className="resource-meta"><span>Uso</span><Badge tone="info">Só verificação</Badge></div> : null;
+  const change = async (next: boolean) => {
+    setSaving(true); setError('');
+    try {
+      const saved = await json(`/api/numbers/${number.id}/settings`, { method: 'PATCH', body: JSON.stringify({ verificationOnly: next }) });
+      setEnabled(Boolean(saved?.verification_only ?? next));
+    } catch (failure) { setError(failure instanceof Error ? failure.message : String(failure)); }
+    finally { setSaving(false); }
+  };
+  return <>
+    <label className="admin-flag-row">
+      <span>Só para verificação de WhatsApp<small>A linha só confere se um telefone tem WhatsApp e não faz ligações.</small></span>
+      <input type="checkbox" checked={enabled} disabled={saving} onChange={(event) => void change(event.target.checked)} />
+    </label>
+    {error && <div className="alert" role="alert"><Icon name="alert" /><span>{error}</span></div>}
   </>;
 }
 
