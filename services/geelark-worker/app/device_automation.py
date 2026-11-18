@@ -299,6 +299,8 @@ class GeeLarkAutomation:
             Screen.EULA: lambda: self._click({"resourceId": w + "eula_accept"}, {"textMatches": wa.EULA_TEXT}),
             Screen.USE_OTHER_NUMBER: lambda: self._click({"textMatches": wa.OTHER_NUMBER_TEXT}),
             Screen.RESTORE_BACKUP: self._skip_restore,
+            Screen.TWO_STEP_PIN: self._ask_two_step_pin,
+            Screen.BUSINESS_WELCOME: lambda: self._click({"textMatches": wa.GET_STARTED_TEXT}),
             Screen.OPTIONAL_PROMPT: lambda: self._click({"textMatches": wa.SKIP_TEXT}),
         }
 
@@ -312,8 +314,13 @@ class GeeLarkAutomation:
             self.d.press("back")
 
     def _skip_restore(self) -> None:
-        self._click({"textMatches": wa.SKIP_TEXT})
-        self._click({"textMatches": wa.SKIP_TEXT}, timeout=3)  # diálogo de confirmação
+        # "Cancelar" no diálogo que pede os contatos; "Pular" na tela de restaurar.
+        self._click({"textMatches": wa.RESTORE_SKIP_TEXT}, {"resourceId": "android:id/button2"})
+        self._click({"textMatches": wa.RESTORE_SKIP_TEXT}, timeout=3)  # diálogo de confirmação
+
+    def _ask_two_step_pin(self) -> None:
+        raise JobError("unknown_screen", "O WhatsApp pede o PIN da verificação em duas etapas deste número. "
+                                         "Digite o PIN pela tela ao vivo (só o dono do número sabe).")
 
     def _drive(
         self,
@@ -329,6 +336,7 @@ class GeeLarkAutomation:
         last, repeats, unknown_since, relaunches = None, 0, None, 0
         while True:
             self.ctx.check()
+            self.ctx.check_takeover()
             screen = wa.detect_screen(self.d, self.app)
             if screen in targets:
                 return screen
@@ -461,6 +469,7 @@ class GeeLarkAutomation:
         handlers = self._common_actions()
         while time.monotonic() < deadline:
             self.ctx.sleep(3)
+            self.ctx.check_takeover()
             if self._exists({"textMatches": wa.WRONG_CODE_TEXT}):
                 return SmsResult(False, "Código incorreto. Confira o SMS e digite de novo.")
             screen = wa.detect_screen(self.d, self.app)
@@ -475,6 +484,10 @@ class GeeLarkAutomation:
         if wa.detect_screen(self.d, self.app) == Screen.VERIFY_CODE:
             return SmsResult(False, "O WhatsApp não aceitou o código. Confira o SMS e digite de novo.")
         raise JobError("unknown_screen", "O WhatsApp não saiu da verificação do código.")
+
+    def finish_verification(self) -> None:
+        self._drive({Screen.PROFILE_NAME, Screen.CHATS, Screen.BUSINESS_CATEGORY},
+                    what="perfil (depois do código)", timeout=120, unknown_grace=30)
 
     def request_code(self, method: str) -> str:
         label = "uma ligação com o código" if method == "voice" else "um novo SMS"
@@ -505,6 +518,18 @@ class GeeLarkAutomation:
         self._pause()
         self._click({"textMatches": wa.NEXT_TEXT}, timeout=3)
 
+    def _fill_business_category(self) -> None:
+        """No perfil comercial a categoria pode ser um campo da mesma tela: abre a lista e escolhe "Outros"."""
+        w = self.app.wid
+        field = ({"resourceIdMatches": re.escape(w) + r".*categor.*"}, {"textMatches": wa.CATEGORY_FIELD_TEXT})
+        if not any(self._exists(sel) for sel in field):
+            return
+        self._click(*field, timeout=3)
+        self._pause(1.5, 2.5)
+        if wa.detect_screen(self.d, self.app) == Screen.BUSINESS_CATEGORY or self._exists({"textMatches": wa.CATEGORY_OTHER}):
+            self._choose_category()
+            self._pause()
+
     def save_profile(self, name: str, photo: bytes | None, photo_mime: str | None) -> str | None:
         w = self.app.wid
         screen = self._drive({Screen.PROFILE_NAME, Screen.CHATS},
@@ -532,6 +557,8 @@ class GeeLarkAutomation:
             raise JobError("unknown_screen", "Não encontrei o campo de nome na tela de perfil.")
         name_field.set_text(name)
         self._pause()
+        if self.app.is_business:
+            self._fill_business_category()
 
         def accept() -> None:
             self._click({"resourceId": w + "register_name_accept"}, {"textMatches": wa.NEXT_TEXT})

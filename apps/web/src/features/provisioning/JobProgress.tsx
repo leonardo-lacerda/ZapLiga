@@ -5,7 +5,7 @@ import { LiveScreen } from './LiveScreen';
 import { ProfileForm } from './ProfileForm';
 import { SmsCodeInput } from './SmsCodeInput';
 import { createObjectUrl, revokeObjectUrl } from './objectUrl';
-import { cancelJob, fetchJobScreenshot, requestNewCode, resumeRobot, submitLinkDecision, submitProfile, submitSmsCode } from './provisioning.api';
+import { cancelJob, fetchJobScreenshot, requestNewCode, resumeRobot, submitLinkDecision, submitProfile, submitSmsCode, takeOverJob } from './provisioning.api';
 import { appLabels, errorExplanation, formatPhone, isJobActive, isNetworkCheck, splitJobNumber, statusLabels, statusTone, stepLabel } from './provisioning.labels';
 import type { Job, WizardPrefill } from './provisioning.types';
 import { JOB_POLL_INTERVAL_MS, useProvisioningJob } from './useProvisioningJob';
@@ -33,6 +33,7 @@ export function JobProgress({ tenantId, jobId, pollIntervalMs = JOB_POLL_INTERVA
   const { job, applyJob, loadError, notFound } = useProvisioningJob(tenantId, jobId, pollIntervalMs);
   const [actionError, setActionError] = useState('');
   const [cancelling, setCancelling] = useState(false);
+  const [takingOver, setTakingOver] = useState(false);
 
   const run = async (action: () => Promise<Job>) => {
     setActionError('');
@@ -55,6 +56,13 @@ export function JobProgress({ tenantId, jobId, pollIntervalMs = JOB_POLL_INTERVA
 
   const active = isJobActive(job);
   const network = isNetworkCheck(job);
+  // Com o robô andando: o operador pede o controle; o robô para na próxima tela do WhatsApp.
+  const canTakeOver = active && !network && job.status === 'running' && !linkingSteps.has(job.step);
+  const pausing = canTakeOver && (job.message ?? '').startsWith('Pausando o robô');
+  const takeOver = async () => {
+    setTakingOver(true);
+    try { await run(() => takeOverJob(tenantId, jobId)); } finally { setTakingOver(false); }
+  };
   return <div className="provisioning-progress-layout">
     <Panel className="provisioning-progress">
       <div className="detail-heading">
@@ -72,6 +80,10 @@ export function JobProgress({ tenantId, jobId, pollIntervalMs = JOB_POLL_INTERVA
       <div className="provisioning-action">
         <JobAction job={job} tenantId={tenantId} run={run} onNewJob={onNewJob} onOpenNumbers={onOpenNumbers} />
       </div>
+      {canTakeOver && <div className="provisioning-takeover">
+        <Button variant="secondary" icon="phone" onClick={() => void takeOver()} disabled={takingOver || pausing}>{pausing ? 'Pausando o robô…' : takingOver ? 'Pedindo…' : 'Assumir o controle'}</Button>
+        <span className="form-hint">O robô para na próxima tela e você mexe no phone pela imagem abaixo.</span>
+      </div>}
       {active && <LiveScreen tenantId={tenantId} jobId={job.id} controllable={job.status === 'waiting_input'} />}
 
       <div className="provisioning-inline-actions">
@@ -180,8 +192,9 @@ function ManualHelp({ job, tenantId, run }: { job: Job; tenantId: string; run: A
     setBusy(true);
     try { await run(() => resumeRobot(tenantId, job.id)); } finally { setBusy(false); }
   };
+  const taken = (job.message ?? '').startsWith('Você assumiu o controle');
   return <div className="provisioning-input-card">
-    <h3>O robô parou numa tela que não conhece</h3>
+    <h3>{taken ? 'Você está no controle do phone' : 'O robô parou numa tela que não conhece'}</h3>
     <p>Clique na tela do phone abaixo para tocar nela, como num celular, até passar desta tela. Depois devolva o phone ao robô: ele continua de onde estiver.</p>
     {job.message && <p className="provisioning-detail">{job.message}</p>}
     <div className="provisioning-inline-actions">

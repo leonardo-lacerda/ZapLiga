@@ -325,6 +325,15 @@ export class WhatsappProvisioningService implements OnModuleInit, OnModuleDestro
     return { ok: true };
   }
 
+  /** "Assumir o controle" while the robot is working: it stops at the next screen and waits for the operator. */
+  async takeOver(tenantId: string, actorUserId: string, id: string) {
+    await this.entitlement.assertAction(tenantId, 'write', actorUserId);
+    const row = this.assertOpen(await this.findRow(tenantId, id));
+    const next = await this.withWorker(row, actorUserId, () => this.worker.takeOver(row.id));
+    await this.audit.record({ actorUserId, tenantId, action: 'provisioning.manual_takeover', entityType: 'provisioning_job', entityId: row.id });
+    return this.toJob(next);
+  }
+
   /** "Devolver ao robô": after driving the phone by hand on a screen the robot did not know. */
   async resumeRobot(tenantId: string, actorUserId: string, id: string) {
     await this.entitlement.assertAction(tenantId, 'write', actorUserId);

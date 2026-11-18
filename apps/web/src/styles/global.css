@@ -1398,6 +1398,7 @@ input, select { min-height: 35px; min-width: 0; padding: 8px 10px; border: 1px s
 .provisioning-live-touch:disabled { cursor: progress; opacity: .7; }
 .provisioning-live-screen.is-controllable img { border-color: var(--primary, #2563eb); }
 .provisioning-live-controls { display: grid; gap: 8px; max-width: 420px; }
+.provisioning-takeover { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-top: 12px; }
 .provisioning-live-text { display: flex; gap: 8px; }
 .provisioning-live-text input { flex: 1; min-width: 0; }
 .provisioning-live-placeholder { display: grid; place-items: center; width: 220px; height: 400px; padding: 16px; border: 1px dashed var(--border); border-radius: 12px; color: var(--subtle); font-size: 11px; text-align: center; }

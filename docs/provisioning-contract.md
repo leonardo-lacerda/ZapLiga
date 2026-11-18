@@ -67,6 +67,7 @@ Base: `GEELARK_WORKER_URL` (ex.: `http://geelark-worker:8080`). Toda rota exige 
 | `POST /jobs/{jobId}/input` | `JobInput` | `WorkerJob` · `409 not_awaiting` |
 | `POST /jobs/{jobId}/cancel` | — | `WorkerJob` |
 | `GET /jobs/{jobId}/screen` | — | `image/png` da tela agora (cache de 2 s) · `404` sem phone conectado |
+| `POST /jobs/{jobId}/takeover` | — | `WorkerJob` ("Assumir o controle": o robô para na próxima tela e vai para `awaiting=manual`; já parado, nada muda) · `409 not_running` |
 | `POST /jobs/{jobId}/manual` | `ManualAction` | `{ "ok": true }` · `409 robot_busy` (só com `status=waiting_input`) · `502 device_error` |
 | `GET /jobs/{jobId}/screenshot` | — | `image/png` · `404` |
 
@@ -152,6 +153,7 @@ passa por `entitlement.assertAction(tenantId, 'write', userId)`.
 | `POST jobs/{id}/resend` | `{ method: 'sms' \| 'voice' }` | `Job` (só com `awaiting=sms`) |
 | `GET jobs/{id}/screen` | — | `image/png` da tela agora, enquanto o job roda |
 | `POST jobs/{id}/manual` | `ManualAction` | `{ ok: true }` · `409 robot_busy`. Auditado (`provisioning.manual_action`) sem o texto |
+| `POST jobs/{id}/takeover` | — | `Job` (auditado `provisioning.manual_takeover`) |
 | `POST jobs/{id}/resume` | — | `Job` (só com `awaiting=manual`; auditado `provisioning.robot_resumed`) |
 | `GET jobs/{id}/screenshot` | — | `image/png` |
 

@@ -18,7 +18,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Callable, Protocol
 
-from .errors import JobCancelled, JobTimedOut
+from .errors import JobCancelled, JobError, JobTimedOut
 
 
 @dataclass(frozen=True)
@@ -69,8 +69,10 @@ class SmsResult:
 class JobContext:
     """Cancelamento e prazo do job, compartilhados com a automação."""
 
-    def __init__(self, cancel_event: threading.Event, deadline: float, timeout_message: str):
+    def __init__(self, cancel_event: threading.Event, deadline: float, timeout_message: str,
+                 takeover: threading.Event | None = None):
         self._cancel = cancel_event
+        self._takeover = takeover
         self.deadline = deadline
         self._timeout_message = timeout_message
 
@@ -86,6 +88,11 @@ class JobContext:
             raise JobCancelled()
         if time.monotonic() >= self.deadline:
             raise JobTimedOut(self._timeout_message)
+
+    def check_takeover(self) -> None:
+        """O operador clicou em "Assumir o controle": para a etapa (só entre uma tela e outra)."""
+        if self._takeover is not None and self._takeover.is_set():
+            raise JobError("manual_takeover", "Você assumiu o controle do phone.")
 
     def sleep(self, seconds: float) -> None:
         """Dorme até `seconds`, acordando na hora se o job for cancelado ou estourar o prazo."""
@@ -120,6 +127,9 @@ class PhoneAutomation(Protocol):
 
     def submit_sms_code(self, code: str) -> SmsResult:
         """Digita o código. Aceito = chegou na tela de perfil (ou depois)."""
+
+    def finish_verification(self) -> None:
+        """Depois do código (e da ajuda do operador): passa as telas até o perfil."""
 
     def request_code(self, method: str) -> str:
         """Na tela do código, pede outro por "sms" ou "voice" (ligação). Só a pedido do usuário:

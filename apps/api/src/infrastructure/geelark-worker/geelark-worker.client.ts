@@ -167,6 +167,9 @@ export class GeelarkWorkerClient {
     return this.json<WorkerJob>(`/jobs/${encodeURIComponent(jobId)}/input`, { method: 'POST', body: input, timeoutMs: 30_000 });
   }
 
+  /** "Assumir o controle": the robot stops at the next screen and waits (awaiting=manual). */
+  async takeOver(jobId: string) { return this.json<WorkerJob>(`/jobs/${encodeURIComponent(jobId)}/takeover`, { method: 'POST', timeoutMs: 30_000 }); }
+
   async manualAction(jobId: string, action: WorkerManualAction) {
     return this.json<{ ok: boolean }>(`/jobs/${encodeURIComponent(jobId)}/manual`, { method: 'POST', body: action, timeoutMs: 30_000 });
   }

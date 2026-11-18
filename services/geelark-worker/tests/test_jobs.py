@@ -455,6 +455,67 @@ def test_unknown_screen_waits_for_the_operator_and_resumes():
     manager.cancel("job-1")
 
 
+def test_take_over_stops_the_robot_at_the_next_screen():
+    """O robô está numa etapa demorada (enter_number); o operador assume o controle."""
+    from app.automation import JobContext
+
+    class Factory(FakeFactory):
+        def __call__(self, spec, ctx: JobContext):
+            auto = super().__call__(spec, ctx)
+            first = {"done": False}
+
+            def enter_number():
+                auto.calls.append("enter_number")
+                if not first["done"]:
+                    while True:  # como o _drive: confere o pedido de controle a cada tela
+                        ctx.check_takeover()
+                        ctx.sleep(0.01)
+            auto.enter_number = enter_number
+            auto.first = first
+            return auto
+
+    factory = Factory()
+    manager = JobManager(factory, input_timeout_s=5, job_timeout_s=10)
+    manager.create(make_spec())
+    wait_for(lambda: "job-1" in factory.instances and "enter_number" in factory.instances["job-1"].calls)
+    job = manager.take_over("job-1")
+    assert "Pausando o robô" in job.message
+    awaiting(manager, "job-1", "manual")
+    assert manager.get("job-1").message.startswith("Você assumiu o controle do phone.")
+    manager.manual_action("job-1", {"type": "key", "key": "back"})
+    factory.instances["job-1"].first["done"] = True
+    manager.submit_input("job-1", {"type": "resume"})
+    awaiting(manager, "job-1", "sms")
+    assert not manager.get("job-1").takeover.is_set()
+    manager.cancel("job-1")
+
+
+def test_take_over_while_waiting_does_nothing_and_finished_is_refused(manager):
+    manager.create(make_spec())
+    awaiting(manager, "job-1", "sms")
+    assert manager.take_over("job-1").awaiting == "sms"
+    assert not manager.get("job-1").takeover.is_set()
+    manager.cancel("job-1")
+    with pytest.raises(ApiError) as exc:
+        manager.take_over("job-1")
+    assert exc.value.code == "not_running"
+
+
+def test_stuck_after_the_code_asks_for_help_then_finishes_verification():
+    factory = FakeFactory(fail={"submit_sms_code": JobError("unknown_screen", "O WhatsApp não saiu da verificação do código.")})
+    manager = JobManager(factory, input_timeout_s=5, job_timeout_s=10)
+    manager.create(make_spec())
+    awaiting(manager, "job-1", "sms")
+    manager.submit_input("job-1", {"type": "sms", "code": "123456"})
+    awaiting(manager, "job-1", "manual")
+    manager.submit_input("job-1", {"type": "resume"})
+    # Não digita o código de novo: só passa as telas até o perfil.
+    awaiting(manager, "job-1", "profile")
+    calls = factory.instances["job-1"].calls
+    assert calls.count("submit_sms_code") == 1 and "finish_verification" in calls
+    manager.cancel("job-1")
+
+
 def test_manual_action_is_refused_while_the_robot_works():
     factory = FakeFactory(block="enter_number")
     manager = JobManager(factory, input_timeout_s=5, job_timeout_s=10)

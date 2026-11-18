@@ -6,6 +6,7 @@ ERROR_CODES = frozenset({
     "egress_offline", "egress_mismatch", "no_internet", "phone_start_failed",
     "adb_failed", "install_failed", "unknown_screen", "number_banned", "sms_rejected",
     "timeout", "pair_failed", "link_timeout", "worker_lost", "cancelled", "internal",
+    "manual_takeover",  # interno: o operador assumiu o controle (nunca vira errorCode de job)
 })
 
 PERMISSION_TODO_MESSAGE = (

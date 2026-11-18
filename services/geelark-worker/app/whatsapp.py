@@ -54,6 +54,7 @@ class Screen(Enum):
     NO_INTERNET = "sem conexão"
     PHONE_HINT = "seletor de número do Google"
     PERMISSION = "pedido de permissão"
+    TWO_STEP_PIN = "PIN da verificação em duas etapas"
     VERIFY_CODE = "digitar código"
     CONFIRM_NUMBER = "confirmar número"
     USE_OTHER_NUMBER = "escolher número (Business)"
@@ -63,6 +64,7 @@ class Screen(Enum):
     EULA = "termos (concordar e continuar)"
     RESTORE_BACKUP = "restaurar backup"
     BUSINESS_CATEGORY = "categoria da empresa"
+    BUSINESS_WELCOME = "boas-vindas do Business (começar)"
     PROFILE_NAME = "perfil (nome e foto)"
     CHATS = "conversas (registrado)"
     INITIALIZING = "inicializando"
@@ -71,7 +73,29 @@ class Screen(Enum):
 
 
 # ------------------------------------------------------------- textos (EN + pt-BR)
-SKIP_TEXT = r"(?i)^(not now|agora não|skip|pular|later|mais tarde|no,? thanks|não,? obrigad[oa])$"
+# Sugestões opcionais (e-mail, chave de acesso, backup, divulgação do Business: Meta Verified,
+# Facebook/Instagram, catálogo, horário, endereço): o cadastro sempre pula.
+SKIP_TEXT = (
+    r"(?i)^(not now|agora não|não agora|skip|pular|skip for now|pular por enquanto|later|mais tarde"
+    r"|maybe later|talvez (mais tarde|depois)|remind me later|lembrar (mais tarde|depois)"
+    r"|no,? thanks|não,? obrigad[oa])$"
+)
+# Boas-vindas do WhatsApp Business depois do perfil ("Começar").
+GET_STARTED_TEXT = r"(?i)^(get started|começar|vamos começar|let.?s go|continuar para o whatsapp business)$"
+# Campo "Categoria" na tela de perfil comercial (abre a lista de categorias).
+CATEGORY_FIELD_TEXT = r"(?i)^(category|categoria|select (a )?category|selecionar (uma )?categoria|escolha uma categoria|categoria da empresa)$"
+# Depois do SMS: "Restaurar um backup" (pede acesso aos contatos), tela de restaurar conversas,
+# transferir histórico do aparelho antigo. Número novo: nunca restaura, sempre pula.
+RESTORE_TEXT = (
+    r"(?is).*(restore (a |your )?(backup|chats|chat history)|restaurar (um |o |seu )?backup"
+    r"|restaurar (as |suas )?conversas|restaurar (o )?hist[oó]rico|transfer(ir)? (o )?(chat history|hist[oó]rico)).*"
+)
+RESTORE_SKIP_TEXT = (
+    r"(?i)^(not now|agora não|skip|pular|skip restore|pular restauração|cancel|cancelar"
+    r"|don.?t restore|não restaurar|no,? thanks|não,? obrigad[oa])$"
+)
+# Número com verificação em duas etapas: só o dono sabe o PIN (o operador digita pela tela ao vivo).
+TWO_STEP_TEXT = r"(?is).*(two.step verification|verifica[cç][aã]o em duas etapas|enter your (6.digit )?pin|digite (o |seu )?pin).*"
 CONFIRM_TEXT = r"(?i)^(yes|sim|ok|confirm|confirmar|continue|continuar)$"
 # Tela do código: pedir de novo. Enquanto o relógio corre o texto vem com a contagem
 # ("Reenviar SMS em 0:45"); no WhatsApp novo as opções ficam atrás de "Não recebeu o código?".
@@ -166,6 +190,7 @@ def build_screens(app: WhatsAppApp) -> tuple[tuple[Screen, tuple[dict, ...]], ..
             {"resourceIdMatches": PERMISSION_ID_PREFIX + r"permission_(allow|deny).*"},
             {"resourceIdMatches": r"com\.android\.packageinstaller:id/permission_(allow|deny).*"},
         )),
+        (Screen.TWO_STEP_PIN, ({"textMatches": TWO_STEP_TEXT},)),
         (Screen.VERIFY_CODE, ({"resourceId": w + "verify_sms_code_input"}, {"resourceId": w + "code_input"})),
         (Screen.CONFIRM_NUMBER, ({"textMatches": CONFIRM_NUMBER_TEXT},)),
     ]
@@ -179,7 +204,7 @@ def build_screens(app: WhatsAppApp) -> tuple[tuple[Screen, tuple[dict, ...]], ..
         # Depois da lista de métodos: se a lista também oferecer "outra forma", escolhe o SMS nela.
         (Screen.MISSED_CALL_INTRO, ({"textMatches": OTHER_VERIFY_TEXT},)),
         (Screen.EULA, ({"resourceId": w + "eula_accept"}, {"textMatches": EULA_TEXT})),
-        (Screen.RESTORE_BACKUP, ({"textMatches": r"(?is).*(restore backup|restaurar backup|restaurar conversas|restore chats).*"},)),
+        (Screen.RESTORE_BACKUP, ({"textMatches": RESTORE_TEXT},)),
     ]
     if app.is_business:
         screens.append((Screen.BUSINESS_CATEGORY, (
@@ -195,6 +220,8 @@ def build_screens(app: WhatsAppApp) -> tuple[tuple[Screen, tuple[dict, ...]], ..
         (Screen.INITIALIZING, ({"textMatches": INITIALIZING_TEXT},)),
         (Screen.OPTIONAL_PROMPT, ({"textMatches": SKIP_TEXT},)),
     ]
+    if app.is_business:
+        screens.append((Screen.BUSINESS_WELCOME, ({"textMatches": GET_STARTED_TEXT},)))
     return tuple(screens)
 
 

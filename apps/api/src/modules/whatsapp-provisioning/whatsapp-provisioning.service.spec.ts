@@ -108,6 +108,7 @@ const makeService = (options: { tailscaleConnected?: boolean; pcs?: Pc[] } = {})
     screenshot: jest.fn(),
     liveScreen: jest.fn(),
     manualAction: jest.fn().mockResolvedValue({ ok: true }),
+    takeOver: jest.fn(),
   };
   const pcs: Pc[] = options.pcs ?? [
     { id: PC_ID, name: 'PC da Ana', slot: 'edge-1', online: true },
@@ -455,6 +456,16 @@ describe('WhatsappProvisioningService — SMS help (live screen, resend, call)',
     expect(JSON.stringify(ctx.audit.record.mock.calls)).not.toContain('123456');
     ctx.db.jobs.get(id).finished_at = new Date();
     await expect(ctx.service.manualAction(TENANT, USER, id, { type: 'tap', x: 0.5, y: 0.5 })).rejects.toMatchObject({ status: 409 });
+  });
+
+  it('asks the worker to stop the robot and audits the takeover', async () => {
+    const ctx = makeService();
+    const id = await startJob(ctx);
+    ctx.worker.takeOver.mockResolvedValue(workerJob({ jobId: id, status: 'running', step: 'entering_number', message: 'Pausando o robô: ele para assim que chegar na próxima tela do WhatsApp.' }));
+    const job = await ctx.service.takeOver(TENANT, USER, id);
+    expect(ctx.worker.takeOver).toHaveBeenCalledWith(id);
+    expect(job.message).toMatch(/Pausando o robô/);
+    expect(ctx.audit.record).toHaveBeenCalledWith(expect.objectContaining({ action: 'provisioning.manual_takeover' }));
   });
 
   it('hands the phone back to the robot only while it waits for the operator', async () => {

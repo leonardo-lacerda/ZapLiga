@@ -276,6 +276,16 @@ def test_manual_control_on_an_unknown_screen(geelark):
         c.post(f"/jobs/{job_id}/cancel", headers=H)
 
 
+def test_takeover_route(client):
+    job_id = client.post("/jobs", headers=H, json=job_body()).json()["jobId"]
+    wait_for(lambda: client.manager.get(job_id).awaiting == "sms")
+    resp = client.post(f"/jobs/{job_id}/takeover", headers=H)
+    assert resp.status_code == 200 and resp.json()["awaiting"] == "sms"
+    assert client.post(f"/jobs/{job_id}/takeover").status_code == 401
+    client.post(f"/jobs/{job_id}/cancel", headers=H)
+    assert client.post(f"/jobs/{job_id}/takeover", headers=H).status_code == 409
+
+
 def test_cancel_running_job(client):
     job_id = client.post("/jobs", headers=H, json=job_body()).json()["jobId"]
     wait_for(lambda: client.manager.get(job_id).awaiting == "sms")

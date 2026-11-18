@@ -18,7 +18,7 @@ import time
 from datetime import datetime, timezone
 from typing import Any, Callable
 
-from .automation import AutomationFactory, JobContext, JobSpec, PhoneAutomation, ProbeProxySpec
+from .automation import AutomationFactory, JobContext, JobSpec, PhoneAutomation, ProbeProxySpec, SmsResult
 from .egress_probe import ProbeFailed, probe_egress_ip
 from .errors import PERMISSION_TODO_MESSAGE, ApiError, JobCancelled, JobError, JobTimedOut
 from .geelark_api import GeeLarkError
@@ -56,6 +56,9 @@ AWAITING_LABEL = {
 # Tela que o robô não conhece: em vez de falhar, ele para e deixa o operador mexer no phone
 # pela tela ao vivo. Limite por etapa para não ficar num vai e volta sem fim.
 MAX_MANUAL_HELPS = 3
+# Erros de uma etapa do app que o operador pode destravar mexendo no phone.
+HELP_CODES = frozenset({"unknown_screen", "manual_takeover", "pair_failed"})
+TAKEOVER_MESSAGE = "Você assumiu o controle do phone."
 MANUAL_HINT = ('Mexa no phone pela tela ao vivo (clique nela) até passar desta tela e clique em '
                '"Devolver ao robô". Se não der, cancele o cadastro.')
 
@@ -104,6 +107,7 @@ class Job:
         self.finished_mono: float | None = None
         # sincronização
         self.cancel_event = threading.Event()
+        self.takeover = threading.Event()  # "Assumir o controle": o robô para na próxima tela
         self.wake = threading.Event()
         self.pending_input: dict[str, Any] | None = None
         self.finished = threading.Event()  # thread terminou (phone desligado e liberado)
@@ -385,7 +389,7 @@ class JobManager:
         spec = job.spec
         minutes = max(1, round(self.job_timeout_s / 60))
         ctx = JobContext(job.cancel_event, job.started_mono + self.job_timeout_s,
-                         f"O cadastro passou de {minutes} min e foi interrompido.")
+                         f"O cadastro passou de {minutes} min e foi interrompido.", takeover=job.takeover)
         auto: PhoneAutomation | None = None
         outcome: tuple[str, str, str] | None = None  # (status, errorCode, message)
         try:
@@ -474,19 +478,42 @@ class JobManager:
 
     def _with_help(self, job: Job, ctx: JobContext, auto: PhoneAutomation, step: str,
                    fn: Callable[[], Any]) -> Any:
-        """Roda uma etapa do app; numa tela desconhecida, pede ajuda ao operador e tenta de novo."""
+        """Roda uma etapa do app; numa tela desconhecida (ou se o operador assumir o controle),
+        espera o operador mexer no phone e tenta a etapa de novo."""
         helps = 0
         while True:
             try:
                 return fn()
             except JobError as exc:
-                if exc.code != "unknown_screen" or helps >= MAX_MANUAL_HELPS:
+                taken = exc.code == "manual_takeover"
+                if exc.code not in HELP_CODES or (not taken and helps >= MAX_MANUAL_HELPS):
                     raise
-                helps += 1
-                self._save_debug_xml(job, auto)  # para ensinar a tela nova ao robô depois
-                log.info("[%s] tela desconhecida em %s; esperando o operador (%s)", job.spec.job_id, step, helps)
-                self._wait_input(job, ctx, "waiting_manual", "manual", f"{exc.message} {MANUAL_HINT}")
-                self._set_step(job, step)
+                if not taken:
+                    helps += 1
+                self._ask_help(job, ctx, auto, step, exc)
+
+    def _ask_help(self, job: Job, ctx: JobContext, auto: PhoneAutomation, step: str, exc: JobError) -> None:
+        taken = exc.code == "manual_takeover"
+        job.takeover.clear()
+        if not taken:
+            self._save_debug_xml(job, auto)  # para ensinar a tela nova ao robô depois
+        log.info("[%s] %s em %s; esperando o operador", job.spec.job_id, exc.code, step)
+        self._wait_input(job, ctx, "waiting_manual", "manual", f"{exc.message} {MANUAL_HINT}")
+        self._set_step(job, step)
+
+    def take_over(self, job_id: str) -> Job:
+        """"Assumir o controle": o robô para na próxima tela que olhar e espera o operador."""
+        with self._lock:
+            job = self._require(job_id)
+            if job.terminal or job.spec.mode != "register":
+                raise ApiError(409, "not_running", "Este cadastro não está rodando.")
+            if job.status == "waiting_input":
+                return job  # o robô já está parado: dá para mexer direto
+            job.takeover.set()
+            job.message = "Pausando o robô: ele para assim que chegar na próxima tela do WhatsApp."
+            job.updated_at = _now_iso()
+        log.info("[%s] operador pediu o controle", job_id)
+        return job
 
     def _no_internet_message(self, job: Job, auto: PhoneAutomation) -> str:
         """Diz se o problema é o PC (parou de sair) ou o caminho do phone até ele."""
@@ -587,7 +614,15 @@ class JobManager:
                 message = auto.request_code("voice" if inp["type"] == "call_me" else "sms")
                 continue
             self._set_step(job, "verifying")
-            result = auto.submit_sms_code(inp["code"])
+            try:
+                result = auto.submit_sms_code(inp["code"])
+            except JobError as exc:
+                if exc.code not in HELP_CODES:
+                    raise
+                # O código já foi digitado: depois da ajuda, só passa as telas até o perfil.
+                self._ask_help(job, ctx, auto, "verifying", exc)
+                self._with_help(job, ctx, auto, "verifying", auto.finish_verification)
+                result = SmsResult(True)
             del inp
             if result.accepted:
                 break

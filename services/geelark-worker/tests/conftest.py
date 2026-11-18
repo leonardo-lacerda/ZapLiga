@@ -74,6 +74,7 @@ class FakeAutomation:
         return self.photo_warning
 
     def open_link_screen(self): self._do("open_link_screen")
+    def finish_verification(self): self._do("finish_verification")
 
     def enter_pair_code(self, code):
         self._do("enter_pair_code")

@@ -200,6 +200,10 @@ def create_app(
             raise ApiError(404, "not_found", "Sem tela ao vivo: o job ainda não conectou ao phone ou já terminou.")
         return Response(content=png, media_type="image/png", headers={"Cache-Control": "no-store"})
 
+    @app.post("/jobs/{job_id}/takeover", dependencies=auth)
+    def take_over(job_id: str) -> dict:
+        return manager.snapshot(manager.take_over(job_id))
+
     @app.post("/jobs/{job_id}/manual", dependencies=auth)
     def manual_action(job_id: str, body: ManualAction) -> dict:
         manager.manual_action(job_id, body.model_dump())

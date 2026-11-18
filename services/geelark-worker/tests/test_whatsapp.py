@@ -83,7 +83,30 @@ def test_each_app_uses_its_own_prefix():
 def test_business_only_screens():
     comum = {s for s, _ in wa.build_screens(WA)}
     business = {s for s, _ in wa.build_screens(BIZ)}
-    assert business - comum == {Screen.USE_OTHER_NUMBER, Screen.BUSINESS_CATEGORY}
+    assert business - comum == {Screen.USE_OTHER_NUMBER, Screen.BUSINESS_CATEGORY, Screen.BUSINESS_WELCOME}
+
+
+def test_after_sms_screens():
+    # Diálogo que apareceu depois do código: tem de ser "restaurar backup" (pular), não tela desconhecida.
+    dialog = ["Restaurar um backup", "Para localizar e restaurar o backup salvo no armazenamento do Google, "
+              "permita que o WhatsApp acesse seus contatos.", "Cancelar", "Continuar"]
+    assert wa.detect_screen(FakeDevice(dialog, []), WA) == Screen.RESTORE_BACKUP
+    assert wa.detect_screen(FakeDevice(["Restore a backup", "Cancel", "Continue"], []), WA) == Screen.RESTORE_BACKUP
+    for skip in ("Cancelar", "Pular", "Pular restauração", "Skip", "Não restaurar"):
+        assert java_matches(wa.RESTORE_SKIP_TEXT, skip), skip
+    assert not java_matches(wa.RESTORE_SKIP_TEXT, "Continuar")
+    assert not java_matches(wa.RESTORE_SKIP_TEXT, "Restaurar")
+    assert wa.detect_screen(FakeDevice(["Verificação em duas etapas", "Digite seu PIN de 6 dígitos"], []), WA) == Screen.TWO_STEP_PIN
+    for text in ("Talvez mais tarde", "Agora não", "Pular por enquanto", "Remind me later"):
+        assert java_matches(wa.SKIP_TEXT, text), text
+
+
+def test_business_profile_and_welcome():
+    assert wa.detect_screen(FakeDevice(["Bem-vindo ao WhatsApp Business", "Começar"], []), BIZ) == Screen.BUSINESS_WELCOME
+    # No WhatsApp comum, "Começar" não é tela conhecida.
+    assert wa.detect_screen(FakeDevice(["Começar"], []), WA) == Screen.UNKNOWN
+    for text in ("Categoria", "Selecionar categoria", "Category"):
+        assert java_matches(wa.CATEGORY_FIELD_TEXT, text), text
 
 
 class FakeDevice:

@@ -67,6 +67,10 @@ export type ManualAction =
 export const sendManualAction = (tenantId: string, jobId: string, action: ManualAction): Promise<{ ok: boolean }> =>
   json(`${jobPath(tenantId, jobId)}/manual`, { method: 'POST', body: JSON.stringify(action) });
 
+/** "Assumir o controle": o robô para na próxima tela e espera você mexer no phone. */
+export const takeOverJob = (tenantId: string, jobId: string): Promise<Job> =>
+  json(`${jobPath(tenantId, jobId)}/takeover`, { method: 'POST' });
+
 /** "Devolver ao robô" depois de mexer no phone numa tela que ele não conhece. */
 export const resumeRobot = (tenantId: string, jobId: string): Promise<Job> =>
   json(`${jobPath(tenantId, jobId)}/resume`, { method: 'POST' });

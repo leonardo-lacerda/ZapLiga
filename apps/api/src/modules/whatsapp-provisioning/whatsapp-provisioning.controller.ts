@@ -57,6 +57,10 @@ export class WhatsappProvisioningController {
     return this.provisioning.manualAction(tenantId, user.id, id, action);
   }
 
+  @Post('/jobs/:id/takeover')
+  @HttpCode(200)
+  takeOver(@Param('id') id: string, @CurrentTenant() tenantId: string, @CurrentUser() user: any) { return this.provisioning.takeOver(tenantId, user.id, id); }
+
   @Post('/jobs/:id/resume')
   @HttpCode(200)
   resume(@Param('id') id: string, @CurrentTenant() tenantId: string, @CurrentUser() user: any) { return this.provisioning.resumeRobot(tenantId, user.id, id); }

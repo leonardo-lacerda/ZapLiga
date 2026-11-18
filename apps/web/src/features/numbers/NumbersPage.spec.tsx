@@ -1,10 +1,12 @@
 import { FormEvent, useState } from 'react';
-import { render, screen } from '@testing-library/react';
+import { render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { http, HttpResponse } from 'msw';
 import { vi } from 'vitest';
+import { server } from '../../test/setup';
 import { NumbersPage } from './NumbersPage';
 
-function Harness({ onCreate, canProvision = false, onOpenProvisioning }: { onCreate: (payload: Record<string, unknown>) => void; canProvision?: boolean; onOpenProvisioning?: () => void }) {
+function Harness({ onCreate, canProvision = false, onOpenProvisioning, numbers = [] }: { onCreate: (payload: Record<string, unknown>) => void; canProvision?: boolean; onOpenProvisioning?: () => void; numbers?: Record<string, unknown>[] }) {
   const [numberForm, setNumberForm] = useState({ label: '', phone: '' });
   const createNumber = (event: FormEvent) => {
     event.preventDefault();
@@ -12,8 +14,8 @@ function Harness({ onCreate, canProvision = false, onOpenProvisioning }: { onCre
   };
   return (
     <NumbersPage
-      numbers={[]}
-      numbersTotal={0}
+      numbers={numbers}
+      numbersTotal={numbers.length}
       numbersOffset={0}
       onNumbersPageChange={() => undefined}
       numberForm={numberForm}
@@ -68,4 +70,30 @@ it('envia apenas nome e telefone ao criar a sessão', async () => {
   await userEvent.click(screen.getByRole('button', { name: /Criar sessão/i }));
 
   expect(onCreate).toHaveBeenCalledWith({ label: 'Comercial SP', phone: '5511999999999' });
+});
+
+it('conecta por código sem abrir o QR: gera o código de 8 caracteres para digitar no celular', async () => {
+  const bodies: unknown[] = [];
+  server.use(http.post('*/api/numbers/number-1/pair', async ({ request }) => {
+    bodies.push(await request.json());
+    return HttpResponse.json({ code: 'ABCDEFGH', timeout_seconds: 180 });
+  }));
+  const showQr = vi.fn();
+  render(<Harness onCreate={vi.fn()} numbers={[
+    { id: 'number-1', label: 'Comercial SP', phone: '', status: 'disconnected', max_concurrent_calls: 1 },
+    { id: 'number-2', label: 'Ligada', phone: '5527999990000', status: 'connected', max_concurrent_calls: 1 },
+  ]} />);
+
+  // Só a linha desconectada oferece conectar.
+  expect(screen.getAllByRole('button', { name: 'Conectar por código' })).toHaveLength(1);
+  await userEvent.click(screen.getByRole('button', { name: 'Conectar por código' }));
+  const dialog = screen.getByRole('dialog', { name: 'Conectar por código' });
+  await userEvent.type(within(dialog).getByLabelText('Telefone do WhatsApp'), '5527981545066');
+  await userEvent.click(within(dialog).getByRole('button', { name: 'Gerar código' }));
+
+  expect(await within(dialog).findByLabelText('Código de conexão')).toHaveTextContent('ABCD-EFGH');
+  expect(bodies).toEqual([{ phone: '5527981545066' }]);
+  expect(showQr).not.toHaveBeenCalled();
+  await userEvent.click(within(dialog).getByRole('button', { name: 'Fechar modal' }));
+  expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
 });
