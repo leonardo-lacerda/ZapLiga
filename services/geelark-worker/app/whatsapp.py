@@ -72,6 +72,12 @@ class Screen(Enum):
 # ------------------------------------------------------------- textos (EN + pt-BR)
 SKIP_TEXT = r"(?i)^(not now|agora não|skip|pular|later|mais tarde|no,? thanks|não,? obrigad[oa])$"
 CONFIRM_TEXT = r"(?i)^(yes|sim|ok|confirm|confirmar|continue|continuar)$"
+# Janela depois de digitar o número; o texto muda entre versões ("O número está certo?",
+# "Este número está correto?", "Is this the correct number?"...). O "Sim" pede o SMS.
+CONFIRM_NUMBER_TEXT = (
+    r"(?is).*(is this (the )?(correct|right)( phone)? number|is (this|the|your) (phone )?number (correct|right)"
+    r"|n[uú]mero( de telefone)? est[aá] (certo|correto)|confirm.*number|confirme o n[uú]mero).*"
+)
 NEXT_TEXT = r"(?i)^(next|avançar|próximo|done|concluir|salvar|save)$"
 OTHER_NUMBER_TEXT = r"(?i)^(use a different number|usar (um )?outro número)$"
 EULA_TEXT = r"(?i)^(agree and continue|concordar e continuar|aceitar e continuar)$"
@@ -147,7 +153,7 @@ def build_screens(app: WhatsAppApp) -> tuple[tuple[Screen, tuple[dict, ...]], ..
             {"resourceIdMatches": r"com\.android\.packageinstaller:id/permission_(allow|deny).*"},
         )),
         (Screen.VERIFY_CODE, ({"resourceId": w + "verify_sms_code_input"}, {"resourceId": w + "code_input"})),
-        (Screen.CONFIRM_NUMBER, ({"textMatches": r"(?is).*(is this (the )?correct|este número está correto|confirm.*number|confirme o número).*"},)),
+        (Screen.CONFIRM_NUMBER, ({"textMatches": CONFIRM_NUMBER_TEXT},)),
     ]
     if app.is_business:
         # Com o WhatsApp comum instalado, o Business oferece reaproveitar o mesmo número.

@@ -39,6 +39,9 @@ def java_matches(pattern: str, text: str) -> bool:
     (wa.MORE_OPTIONS["descriptionMatches"], ["More options", "Mais opções"]),
     (wa.BANNED_TEXT, ["This account is not allowed to use WhatsApp.", "Esta conta não pode usar o WhatsApp."]),
     (wa.WAIT_LIMIT_TEXT, ["Please wait 2 hours", "Tente novamente em 5 horas"]),
+    (wa.CONFIRM_NUMBER_TEXT, ["O número está certo?", "Este número está correto?", "Is this the correct number?",
+                              "Is this the right phone number?", "Is your phone number correct?",
+                              "Confirme o número de telefone"]),
 ])
 def test_selectors_match_english_and_portuguese(pattern, texts):
     for text in texts:
@@ -49,6 +52,8 @@ def test_no_false_positives():
     assert not java_matches(wa.WAIT_LIMIT_TEXT, "Couldn't connect. Please try again later.")
     assert not java_matches(wa.PHONE_HINT_TITLE, "+55 11 99999-8888")
     assert not java_matches(wa.SKIP_TEXT, "Next")
+    assert not java_matches(wa.CONFIRM_NUMBER_TEXT, "Insira seu número de telefone")
+    assert not java_matches(wa.CONFIRM_NUMBER_TEXT, "Qual é o meu número de telefone?")
 
 
 def test_each_app_uses_its_own_prefix():
@@ -89,6 +94,9 @@ class FakeDevice:
     (["Initializing…"], [], Screen.INITIALIZING),
     (["algo novo"], [], Screen.UNKNOWN),
     ([], ["com.android.permissioncontroller:id/permission_allow_button"], Screen.PERMISSION),
+    # A janela de confirmação fica por cima da tela do número: tem de ganhar dela.
+    (["O número está certo?", "+55 27 98152-2584", "Editar", "Sim"], ["com.whatsapp:id/registration_phone"], Screen.CONFIRM_NUMBER),
+    (["O número está certo?", "Editar", "Sim"], [], Screen.CONFIRM_NUMBER),
 ])
 def test_detect_screen(texts, ids, expected):
     assert wa.detect_screen(FakeDevice(texts, ids), WA) == expected
