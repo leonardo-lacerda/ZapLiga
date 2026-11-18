@@ -39,6 +39,7 @@ def java_matches(pattern: str, text: str) -> bool:
     (wa.MORE_OPTIONS["descriptionMatches"], ["More options", "Mais opções"]),
     (wa.BANNED_TEXT, ["This account is not allowed to use WhatsApp.", "Esta conta não pode usar o WhatsApp."]),
     (wa.WAIT_LIMIT_TEXT, ["Please wait 2 hours", "Tente novamente em 5 horas"]),
+    (wa.UNDER_REVIEW_TEXT, ["Conta em análise", "Análise pedida em: 18 de novembro de 2026", "Account under review"]),
     (wa.RESEND_SMS_TEXT, ["Reenviar SMS", "Reenviar SMS em 0:45", "Resend SMS", "Resend SMS in 1:02"]),
     (wa.CALL_ME_TEXT, ["Ligar para mim", "Ligar para mim em 1:00", "Call me", "Receber ligação"]),
     (wa.OTHER_VERIFY_TEXT, ["Usar outra forma de verificação", "Use another verification method", "Verify another way"]),
@@ -134,6 +135,8 @@ class FakeDevice:
     ([], ["com.whatsapp:id/fab"], Screen.CHATS),
     (["Initializing…"], [], Screen.INITIALIZING),
     (["algo novo"], [], Screen.UNKNOWN),
+    # Conta antiga suspensa: ganha da tela de conversas que fica por baixo.
+    (["Conta em análise", "Análise pedida em: 18 de novembro de 2026"], ["com.whatsapp:id/fab"], Screen.UNDER_REVIEW),
     ([], ["com.android.permissioncontroller:id/permission_allow_button"], Screen.PERMISSION),
     # A janela de confirmação fica por cima da tela do número: tem de ganhar dela.
     (["O número está certo?", "+55 27 98152-2584", "Editar", "Sim"], ["com.whatsapp:id/registration_phone"], Screen.CONFIRM_NUMBER),
@@ -380,3 +383,32 @@ def test_egress_ip_with_wget_and_with_no_tool():
     assert bare.egress_ip() is None
     assert bare.egress_tool_missing and "não tem curl, wget nem nc" in bare.last_egress_error
     assert bare.adb.shell.call_count == 1  # não fica tentando à toa
+
+
+@pytest.mark.parametrize("dead", [Screen.UNDER_REVIEW, Screen.BANNED])
+def test_open_app_wipes_an_old_account_that_is_banned_or_under_review(dead):
+    auto, shell = make_open_app()
+    screens = iter([dead, Screen.PHONE_ENTRY])
+    with mock.patch.object(wa, "detect_screen", side_effect=lambda *a: next(screens)):
+        auto.open_app()
+    assert shell == [["pm", "clear", "com.whatsapp"]]
+    assert auto.d.app_start.call_count == 2
+
+
+def test_open_app_still_blocked_after_wiping_is_number_banned():
+    auto, shell = make_open_app()
+    with mock.patch.object(wa, "detect_screen", return_value=Screen.UNDER_REVIEW), pytest.raises(JobError) as exc:
+        auto.open_app()
+    assert exc.value.code == "number_banned" and shell == [["pm", "clear", "com.whatsapp"]]
+
+
+def test_typing_puts_the_phone_keyboard_back():
+    auto = make_auto(mock.Mock())
+    auto.d = mock.Mock()
+    auto.d.current_ime.return_value = "com.android.inputmethod.latin/.LatinIME"
+    shell = []
+    auto._shell = lambda cmd, timeout=30: (shell.append(cmd), "")[1]
+    auto._type("123456", clear=True)
+    auto.d.send_keys.assert_called_once_with("123456", clear=True)
+    assert shell == [["ime", "set", "com.android.inputmethod.latin/.LatinIME"],
+                     ["ime", "disable", "com.github.uiautomator/.AdbKeyboard"]]

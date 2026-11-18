@@ -50,6 +50,7 @@ APPS = {
 
 class Screen(Enum):
     BANNED = "banido"
+    UNDER_REVIEW = "conta em análise"
     WAIT_LIMIT = "aguardar (muitas tentativas)"
     NO_INTERNET = "sem conexão"
     PHONE_HINT = "seletor de número do Google"
@@ -124,6 +125,10 @@ OTHER_VERIFY_TEXT = (
 
 BANNED_TEXT = r"(?is).*(not allowed to use whatsapp|não (tem permissão|pode) usar o whatsapp|is banned|foi banido|banned from|banido).*"
 WAIT_LIMIT_TEXT = r"(?is).*(wait \d+|try again in \d|aguarde \d+|tente novamente (em|daqui a) \d).*"
+# "Conta em análise / Análise pedida em: ..." (conta suspensa esperando a revisão do WhatsApp).
+UNDER_REVIEW_TEXT = (
+    r"(?is)^\s*(conta em an[aá]lise|account (is )?(under|in) review|an[aá]lise pedida em.*|review requested.*)\s*$"
+)
 # "Couldn't connect. Please try again later." / "WhatsApp service status unavailable."
 NO_INTERNET_TEXT = (
     r"(?is).*(couldn.?t connect|could not connect|unable to connect|não foi possível (se )?conectar"
@@ -183,6 +188,7 @@ def build_screens(app: WhatsAppApp) -> tuple[tuple[Screen, tuple[dict, ...]], ..
     w = app.wid
     screens: list[tuple[Screen, tuple[dict, ...]]] = [
         (Screen.BANNED, ({"textMatches": BANNED_TEXT},)),
+        (Screen.UNDER_REVIEW, ({"textMatches": UNDER_REVIEW_TEXT},)),
         (Screen.WAIT_LIMIT, ({"textMatches": WAIT_LIMIT_TEXT},)),
         (Screen.NO_INTERNET, ({"textMatches": NO_INTERNET_TEXT},)),
         (Screen.PHONE_HINT, ({"textMatches": PHONE_HINT_TITLE}, {"textMatches": NONE_OF_ABOVE_TEXT})),

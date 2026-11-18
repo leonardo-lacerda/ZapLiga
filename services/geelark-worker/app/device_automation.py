@@ -290,6 +290,8 @@ class GeeLarkAutomation:
         w = self.app.wid
         return {
             Screen.BANNED: lambda: self._fail_with_text("number_banned", wa.BANNED_TEXT, "O WhatsApp bloqueou este número."),
+            Screen.UNDER_REVIEW: lambda: self._fail_with_text(
+                "number_banned", wa.UNDER_REVIEW_TEXT, "O WhatsApp colocou esta conta em análise."),
             # Não é o código errado: é o WhatsApp pedindo um tempo. O operador decide se espera.
             Screen.WAIT_LIMIT: lambda: self._fail_with_text(
                 "wait_limit", wa.WAIT_LIMIT_TEXT, "O WhatsApp pediu para esperar antes de tentar de novo."),
@@ -304,6 +306,30 @@ class GeeLarkAutomation:
             Screen.BUSINESS_WELCOME: lambda: self._click({"textMatches": wa.GET_STARTED_TEXT}),
             Screen.OPTIONAL_PROMPT: lambda: self._click({"textMatches": wa.SKIP_TEXT}),
         }
+
+    def _type(self, text: str, clear: bool = False) -> None:
+        """Digita pelo teclado do uiautomator2 e volta o teclado normal do phone.
+
+        O send_keys troca o teclado padrão para o AdbKeyboard (barra "Clear Text / Done /
+        Switch IME") e o deixa assim: um rastro de automação que o WhatsApp consegue ler."""
+        before = ""
+        try:
+            before = self.d.current_ime()
+        except Exception:
+            pass
+        try:
+            self.d.send_keys(text, clear=clear)
+        finally:
+            self._restore_ime(before)
+
+    def _restore_ime(self, before: str) -> None:
+        adb_ime = "com.github.uiautomator/.AdbKeyboard"
+        try:
+            if before and before != adb_ime:
+                self._shell(["ime", "set", before], timeout=10)
+            self._shell(["ime", "disable", adb_ime], timeout=10)
+        except Exception as exc:
+            log.warning("[%s] não consegui voltar o teclado do phone (%s)", self.spec.job_id, type(exc).__name__)
 
     def _fail_with_text(self, code: str, pattern: str, default: str) -> None:
         text = wa.first_text(self.d, {"textMatches": pattern})
@@ -421,8 +447,21 @@ class GeeLarkAutomation:
             self.d.app_start(self.app.package, wait=True)
             self._pause(2, 4)
 
+        def dead_account() -> None:
+            # Conta antiga banida ou em análise: é de outro número e não serve mais neste phone.
+            # Sem apagar, o WhatsApp nunca mostra a tela de digitar o número novo.
+            nonlocal cleared
+            if cleared:
+                raise JobError("number_banned", f"O {self.app.label} continua bloqueado neste phone mesmo depois de apagado.")
+            self._clear_app("conta antiga banida ou em análise")
+            cleared = True
+            self.d.app_start(self.app.package, wait=True)
+            self._pause(2, 4)
+
         half_done = (Screen.VERIFY_CODE, Screen.CONFIRM_NUMBER, Screen.VERIFY_METHOD, Screen.MISSED_CALL_INTRO)
-        self._drive({Screen.PHONE_ENTRY}, {Screen.CHATS: already_registered, **{s: mid_registration for s in half_done}},
+        self._drive({Screen.PHONE_ENTRY}, {Screen.CHATS: already_registered, Screen.BANNED: dead_account,
+                                           Screen.UNDER_REVIEW: dead_account,
+                                           **{s: mid_registration for s in half_done}},
                     what="digitar número")
 
     def _fill_number(self) -> None:
@@ -464,7 +503,7 @@ class GeeLarkAutomation:
             field = self.d(resourceId=w + "code_input")
         field.click()
         self._pause(0.3, 0.8)
-        self.d.send_keys(code, clear=True)  # o WhatsApp valida sozinho ao completar 6 dígitos
+        self._type(code, clear=True)  # o WhatsApp valida sozinho ao completar 6 dígitos
 
         deadline = time.monotonic() + 45
         handlers = self._common_actions()
@@ -659,7 +698,7 @@ class GeeLarkAutomation:
         if field.exists:
             field.click()
             self.ctx.sleep(0.3)
-        self.d.send_keys(code, clear=True)
+        self._type(code, clear=True)
 
         deadline = time.monotonic() + 60
         while time.monotonic() < deadline:
@@ -687,7 +726,7 @@ class GeeLarkAutomation:
             start, end = (bottom, top) if action["key"] == "scroll_down" else (top, bottom)
             self.d.swipe(width // 2, start, width // 2, end, duration=0.25)
         elif kind == "text":
-            self.d.send_keys(action["text"])
+            self._type(action["text"])
         else:
             raise JobError("invalid_action", "Ação manual desconhecida.")
         time.sleep(random.uniform(0.6, 1.2))  # deixa a tela reagir antes do próximo print
