@@ -2,7 +2,7 @@ import { Body, Controller, Get, Header, HttpCode, Param, Post, Put, Query, Strea
 import { FileInterceptor } from '@nestjs/platform-express';
 import { AuthGuard, CurrentTenant, CurrentUser, Roles, RolesGuard, TenantMembershipGuard } from '../auth/auth.guards';
 import { FeatureFlagGuard, RequiresFeature } from '../feature-flags/feature-flags.guard';
-import { AssignEgressNodeDto, CreatePhoneDto, CreateProvisioningJobDto, LinkDecisionDto, RequestCodeDto, SubmitProfileDto, SubmitSmsCodeDto } from './dto/provisioning.dto';
+import { AssignEgressNodeDto, CreatePhoneDto, CreateProvisioningJobDto, LinkDecisionDto, ManualActionDto, RequestCodeDto, SubmitProfileDto, SubmitSmsCodeDto } from './dto/provisioning.dto';
 import { MAX_PROFILE_PHOTO_BYTES, WhatsappProvisioningService } from './whatsapp-provisioning.service';
 
 /** WhatsApp registration on GeeLark cloud phones (internal; docs/provisioning-contract.md section 3). */
@@ -47,6 +47,19 @@ export class WhatsappProvisioningController {
   @Post('/jobs/:id/resend')
   @HttpCode(200)
   resend(@Param('id') id: string, @Body() body: RequestCodeDto, @CurrentTenant() tenantId: string, @CurrentUser() user: any) { return this.provisioning.requestNewCode(tenantId, user.id, id, body.method); }
+
+  @Post('/jobs/:id/manual')
+  @HttpCode(200)
+  manual(@Param('id') id: string, @Body() body: ManualActionDto, @CurrentTenant() tenantId: string, @CurrentUser() user: any) {
+    const action = body.type === 'tap' ? { type: 'tap' as const, x: Number(body.x), y: Number(body.y) }
+      : body.type === 'key' ? { type: 'key' as const, key: body.key! }
+        : { type: 'text' as const, text: String(body.text) };
+    return this.provisioning.manualAction(tenantId, user.id, id, action);
+  }
+
+  @Post('/jobs/:id/resume')
+  @HttpCode(200)
+  resume(@Param('id') id: string, @CurrentTenant() tenantId: string, @CurrentUser() user: any) { return this.provisioning.resumeRobot(tenantId, user.id, id); }
 
   @Get('/jobs/:id/screen')
   @Header('Cache-Control', 'no-store')

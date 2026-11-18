@@ -11,6 +11,7 @@ export const stepLabels: Record<string, string> = {
   opening_app: 'Abrindo o app',
   entering_number: 'Digitando o número',
   waiting_sms: 'Aguardando o código SMS',
+  waiting_manual: 'Esperando você mexer no phone',
   verifying: 'Verificando o código',
   waiting_profile: 'Aguardando nome e foto',
   saving_profile: 'Salvando o perfil',

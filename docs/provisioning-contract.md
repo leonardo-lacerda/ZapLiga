@@ -33,7 +33,9 @@ Todos os JSON usam camelCase. Datas em ISO-8601 UTC. O código SMS e o código d
 | `linking` | API | worker terminou; a API espera a sessão Waxum ficar `connected` (máx. 120 s) |
 | `done` | ambos | fim. `linked=true/false` diz se a linha foi conectada ao ZapLiga |
 
-`awaiting`: `null` | `sms` | `profile` | `link_decision` | `pair_code`
+| `waiting_manual` | worker | `status=waiting_input`, `awaiting=manual`: tela que o robô não conhece em `opening_app`, `entering_number`, `saving_profile` ou `opening_link_screen`. O operador mexe no phone pela tela ao vivo e devolve com `{type:'resume'}`; o robô repete a etapa (até 3 vezes por etapa, depois `failed`/`unknown_screen`) |
+
+`awaiting`: `null` | `sms` | `profile` | `link_decision` | `pair_code` | `manual`
 
 Erros: `status=failed`, `errorCode` (abaixo), `message` em português para o usuário e
 `hasScreenshot=true` quando houver print da tela do phone.
@@ -64,6 +66,8 @@ Base: `GEELARK_WORKER_URL` (ex.: `http://geelark-worker:8080`). Toda rota exige 
 | `GET /jobs/{jobId}` | — | `WorkerJob` · `404 not_found` (ex.: worker reiniciou) |
 | `POST /jobs/{jobId}/input` | `JobInput` | `WorkerJob` · `409 not_awaiting` |
 | `POST /jobs/{jobId}/cancel` | — | `WorkerJob` |
+| `GET /jobs/{jobId}/screen` | — | `image/png` da tela agora (cache de 2 s) · `404` sem phone conectado |
+| `POST /jobs/{jobId}/manual` | `ManualAction` | `{ "ok": true }` · `409 robot_busy` (só com `status=waiting_input`) · `502 device_error` |
 | `GET /jobs/{jobId}/screenshot` | — | `image/png` · `404` |
 
 ```ts
@@ -104,13 +108,21 @@ type JobInput =
   | { type: 'profile'; name: string; photoBase64?: string; photoMime?: 'image/jpeg' | 'image/png' }
   | { type: 'link' }                                                 // usuário quer conectar ao ZapLiga
   | { type: 'finish' }                                               // usuário não quer conectar
-  | { type: 'pair_code'; code: string };                             // "ABCD-EFGH" ou "ABCDEFGH"
+  | { type: 'pair_code'; code: string }                              // "ABCD-EFGH" ou "ABCDEFGH"
+  | { type: 'resend_sms' } | { type: 'call_me' }                    // só com awaiting=sms
+  | { type: 'resume' };                                             // só com awaiting=manual
+
+// Toque do operador na tela ao vivo. x/y em proporção (0 a 1) do print; o texto nunca vai para log.
+type ManualAction =
+  | { type: 'tap'; x: number; y: number }
+  | { type: 'key'; key: 'back' | 'home' | 'scroll_up' | 'scroll_down' }
+  | { type: 'text'; text: string };                                // 1 a 200 caracteres
 
 type WorkerJob = {
   jobId: string; phoneId: string; mode: 'register' | 'network_check';
   app: 'whatsapp' | 'business' | null; number: string | null; // número completo, só dígitos; null no network_check
   status: 'running' | 'waiting_input' | 'done' | 'failed' | 'cancelled';
-  step: string; awaiting: null | 'sms' | 'profile' | 'link_decision' | 'pair_code';
+  step: string; awaiting: null | 'sms' | 'profile' | 'link_decision' | 'pair_code' | 'manual';
   message: string | null; errorCode: string | null; hasScreenshot: boolean;
   egressIp: string | null;    // IP visto de dentro do phone
   history: { step: string; at: string; message: string | null }[];
@@ -137,6 +149,10 @@ passa por `entitlement.assertAction(tenantId, 'write', userId)`.
 | `POST jobs/{id}/profile` | multipart: `name` (texto) + `photo` (arquivo opcional, JPEG/PNG ≤ 2 MB) | `Job` |
 | `POST jobs/{id}/link` | `{ connect: boolean }` | `Job` (com `connect=true` a API conduz o pareamento) |
 | `POST jobs/{id}/cancel` | — | `Job` |
+| `POST jobs/{id}/resend` | `{ method: 'sms' \| 'voice' }` | `Job` (só com `awaiting=sms`) |
+| `GET jobs/{id}/screen` | — | `image/png` da tela agora, enquanto o job roda |
+| `POST jobs/{id}/manual` | `ManualAction` | `{ ok: true }` · `409 robot_busy`. Auditado (`provisioning.manual_action`) sem o texto |
+| `POST jobs/{id}/resume` | — | `Job` (só com `awaiting=manual`; auditado `provisioning.robot_resumed`) |
 | `GET jobs/{id}/screenshot` | — | `image/png` |
 
 ```ts

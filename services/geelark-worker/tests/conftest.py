@@ -80,6 +80,10 @@ class FakeAutomation:
         self.received["pair_code"] = code
         return None
 
+    def manual(self, action):
+        self.calls.append(f"manual:{action['type']}")
+        self.received.setdefault("manual", []).append(action)
+
     def screenshot(self):
         self.calls.append("screenshot")
         return PNG

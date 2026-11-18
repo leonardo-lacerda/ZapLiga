@@ -170,7 +170,31 @@ class PairCodeInput(_Body):
         return clean
 
 
+class ResumeInput(_Body):
+    """O operador terminou de mexer no phone: o robô volta a trabalhar."""
+    type: Literal["resume"]
+
+
 JobInput = Annotated[
-    Union[SmsInput, ResendSmsInput, CallMeInput, ProfileInput, LinkInput, FinishInput, PairCodeInput],
+    Union[SmsInput, ResendSmsInput, CallMeInput, ProfileInput, LinkInput, FinishInput, PairCodeInput, ResumeInput],
     Field(discriminator="type"),
 ]
+
+
+class TapAction(_Body):
+    type: Literal["tap"]
+    x: float = Field(ge=0, le=1)  # proporção da largura do print
+    y: float = Field(ge=0, le=1)
+
+
+class KeyAction(_Body):
+    type: Literal["key"]
+    key: Literal["back", "home", "scroll_up", "scroll_down"]
+
+
+class TextAction(_Body):
+    type: Literal["text"]
+    text: str = Field(min_length=1, max_length=200, repr=False)
+
+
+ManualAction = Annotated[Union[TapAction, KeyAction, TextAction], Field(discriminator="type")]

@@ -209,6 +209,58 @@ it('na espera do SMS mostra a tela do phone ao vivo e pede reenvio ou ligação'
   expect(screen.getByLabelText('Código SMS')).toBeInTheDocument();
 });
 
+it('numa tela desconhecida deixa tocar no phone pela tela ao vivo e devolver ao robô', async () => {
+  const actions: unknown[] = [];
+  let resumed = false;
+  let current = job({ status: 'waiting_input', step: 'waiting_manual', awaiting: 'manual', message: "Tela desconhecida enquanto esperava 'digitar código'.", history: historyOf('queued', 'entering_number', 'waiting_manual') });
+  URL.createObjectURL = vi.fn(() => 'blob:live-1');
+  URL.revokeObjectURL = vi.fn();
+  server.use(
+    http.get(`${API}/jobs/job-1`, () => HttpResponse.json(current)),
+    http.get(`${API}/jobs/job-1/screen`, () => new HttpResponse(new Uint8Array([137, 80, 78, 71]), { headers: { 'content-type': 'image/png' } })),
+    http.post(`${API}/jobs/job-1/manual`, async ({ request }) => { actions.push(await request.json()); return HttpResponse.json({ ok: true }); }),
+    http.post(`${API}/jobs/job-1/resume`, () => {
+      resumed = true;
+      current = job({ status: 'running', step: 'entering_number', awaiting: null, message: 'Digitando o número.', history: historyOf('queued', 'entering_number', 'waiting_manual', 'entering_number') });
+      return HttpResponse.json(current);
+    }),
+  );
+  render(<JobProgress tenantId="tenant-1" jobId="job-1" pollIntervalMs={POLL_MS} onBack={vi.fn()} onNewJob={vi.fn()} onOpenNumbers={vi.fn()} />);
+
+  expect(await screen.findByRole('heading', { name: 'O robô parou numa tela que não conhece' })).toBeInTheDocument();
+  expect(screen.getByText(/digitar código/)).toBeInTheDocument();
+  const touch = await screen.findByRole('button', { name: /Tocar na tela do phone/ });
+  const image = within(touch).getByRole('img');
+  image.getBoundingClientRect = () => ({ left: 100, top: 50, width: 200, height: 400, right: 300, bottom: 450, x: 100, y: 50, toJSON: () => ({}) });
+  await userEvent.pointer({ keys: '[MouseLeft]', target: touch, coords: { clientX: 150, clientY: 350 } });
+  await vi.waitFor(() => expect(actions).toEqual([{ type: 'tap', x: 0.25, y: 0.75 }]));
+  await userEvent.click(screen.getByRole('button', { name: 'Voltar no phone' }));
+  await userEvent.type(screen.getByLabelText('Texto para digitar no phone'), 'Loja');
+  await userEvent.click(screen.getByRole('button', { name: 'Digitar' }));
+  await vi.waitFor(() => expect(actions).toEqual([{ type: 'tap', x: 0.25, y: 0.75 }, { type: 'key', key: 'back' }, { type: 'text', text: 'Loja' }]));
+  expect(screen.getByLabelText('Texto para digitar no phone')).toHaveValue('');
+
+  await userEvent.click(screen.getByRole('button', { name: 'Devolver ao robô' }));
+  expect(await screen.findByText('Digitando o número.')).toBeInTheDocument();
+  expect(resumed).toBe(true);
+  // Com o robô andando de novo, a tela volta a ser só para olhar.
+  expect(screen.queryByRole('button', { name: /Tocar na tela do phone/ })).not.toBeInTheDocument();
+  expect(screen.queryByRole('button', { name: 'Voltar no phone' })).not.toBeInTheDocument();
+});
+
+it('mostra o erro quando o robô ainda está mexendo no phone', async () => {
+  URL.createObjectURL = vi.fn(() => 'blob:live-2');
+  URL.revokeObjectURL = vi.fn();
+  server.use(
+    http.get(`${API}/jobs/job-1`, () => HttpResponse.json(job({ status: 'waiting_input', step: 'waiting_sms', awaiting: 'sms', history: historyOf('queued', 'waiting_sms') }))),
+    http.get(`${API}/jobs/job-1/screen`, () => new HttpResponse(new Uint8Array([137, 80, 78, 71]), { headers: { 'content-type': 'image/png' } })),
+    http.post(`${API}/jobs/job-1/manual`, () => HttpResponse.json({ statusCode: 409, code: 'robot_busy', message: 'O robô está mexendo no phone agora. Dá para mexer quando ele parar e pedir algo.' }, { status: 409 })),
+  );
+  render(<JobProgress tenantId="tenant-1" jobId="job-1" pollIntervalMs={POLL_MS} onBack={vi.fn()} onNewJob={vi.fn()} onOpenNumbers={vi.fn()} />);
+  await userEvent.click(await screen.findByRole('button', { name: 'Tela inicial' }));
+  expect(await screen.findByText(/O robô está mexendo no phone agora/)).toBeInTheDocument();
+});
+
 it('teste de internet: mostra o telefone, o IP conferido e leva ao cadastro nesse telefone', async () => {
   server.use(http.get(`${API}/jobs/job-1`, () => HttpResponse.json(job({
     mode: 'network_check', app: null, number: null, status: 'done', step: 'network_ok', egressIp: '131.255.254.90',

@@ -16,7 +16,7 @@ from __future__ import annotations
 import threading
 import time
 from dataclasses import dataclass, field
-from typing import Callable, Protocol
+from typing import Any, Callable, Protocol
 
 from .errors import JobCancelled, JobTimedOut
 
@@ -133,6 +133,10 @@ class PhoneAutomation(Protocol):
 
     def enter_pair_code(self, code: str) -> str | None:
         """Digita o código de 8 caracteres. Retorna uma observação para `message`."""
+
+    def manual(self, action: dict[str, Any]) -> None:
+        """Ação do operador: {"type": "tap", "x", "y"} (0 a 1, proporção da tela),
+        {"type": "key", "key": back|home|scroll_up|scroll_down} ou {"type": "text", "text"}."""
 
     def screenshot(self) -> bytes | None: ...
 

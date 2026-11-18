@@ -68,6 +68,7 @@ class GeeLarkAutomation:
         self.adb: Any = None   # adbutils.AdbDevice
         self.d: Any = None     # uiautomator2.Device
         self._number_submitted_at = float("-inf")
+        self._reset_done = False  # "apagar o app" do cadastro já feito (não repete ao tentar de novo)
 
     # ----------------------------------------------------------------- utils
     def _pause(self, lo: float = 1.0, hi: float = 2.5) -> None:
@@ -316,8 +317,10 @@ class GeeLarkAutomation:
 
     def open_app(self) -> None:
         self.ctx.check()
-        if self.spec.reset_app:
+        # Tentar de novo depois da ajuda do operador não apaga o que ele já fez.
+        if self.spec.reset_app and not self._reset_done:
             self._clear_app("pedido no cadastro")
+            self._reset_done = True
         self.d.app_start(self.app.package, wait=True)
         self._pause(2, 4)
         cleared = self.spec.reset_app
@@ -571,6 +574,26 @@ class GeeLarkAutomation:
         return "Código digitado; o phone não confirmou na tela. Aguardando a conexão no ZapLiga."
 
     # --------------------------------------------------------------- limpeza
+    def manual(self, action: dict[str, Any]) -> None:
+        kind = action.get("type")
+        if kind == "tap":
+            # O print aparece reduzido na página: ela manda a posição em proporção (0 a 1).
+            width, height = self.d.window_size()
+            self.d.click(int(action["x"] * (width - 1)), int(action["y"] * (height - 1)))
+        elif kind == "key" and action.get("key") in ("back", "home"):
+            self.d.press(action["key"])
+        elif kind == "key" and action.get("key") in ("scroll_up", "scroll_down"):
+            width, height = self.d.window_size()
+            top, bottom = int(height * 0.3), int(height * 0.7)
+            # Ver o que está mais abaixo = arrastar o dedo de baixo para cima.
+            start, end = (bottom, top) if action["key"] == "scroll_down" else (top, bottom)
+            self.d.swipe(width // 2, start, width // 2, end, duration=0.25)
+        elif kind == "text":
+            self.d.send_keys(action["text"])
+        else:
+            raise JobError("invalid_action", "Ação manual desconhecida.")
+        time.sleep(random.uniform(0.6, 1.2))  # deixa a tela reagir antes do próximo print
+
     def screenshot(self) -> bytes | None:
         if self.d is None:
             return None

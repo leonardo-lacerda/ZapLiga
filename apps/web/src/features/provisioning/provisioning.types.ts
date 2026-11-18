@@ -7,7 +7,7 @@ export type JobMode = 'register' | 'network_check';
 
 export type JobStatus = 'running' | 'waiting_input' | 'done' | 'failed' | 'cancelled';
 
-export type JobAwaiting = null | 'sms' | 'profile' | 'link_decision' | 'pair_code';
+export type JobAwaiting = null | 'sms' | 'profile' | 'link_decision' | 'pair_code' | 'manual';
 
 export type JobStep =
   | 'queued' | 'checking_tunnel' | 'setting_network' | 'starting_phone' | 'connecting_adb' | 'checking_network'

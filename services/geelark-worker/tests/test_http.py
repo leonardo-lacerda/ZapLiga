@@ -242,18 +242,38 @@ def test_unknown_job_is_404(client):
 
 
 def test_cancel_and_failure_screenshot(geelark):
-    factory = FakeFactory(fail={"enter_number": JobError("unknown_screen", "tela nova")})
+    factory = FakeFactory(fail={"enter_number": JobError("number_banned", "banido")})
     manager = JobManager(factory, input_timeout_s=5, job_timeout_s=10)
     app = create_app(Settings(worker_token=TOKEN), geelark=geelark, manager=manager)
     with TestClient(app) as c:
         job_id = c.post("/jobs", headers=H, json=job_body()).json()["jobId"]
         wait_for(lambda: manager.get(job_id).finished.is_set())
         job = c.get(f"/jobs/{job_id}", headers=H).json()
-        assert job["status"] == "failed" and job["errorCode"] == "unknown_screen" and job["hasScreenshot"] is True
+        assert job["status"] == "failed" and job["errorCode"] == "number_banned" and job["hasScreenshot"] is True
         shot = c.get(f"/jobs/{job_id}/screenshot", headers=H)
         assert shot.status_code == 200 and shot.headers["content-type"] == "image/png" and shot.content == PNG
         # cancelar um job terminado devolve o estado atual
         assert c.post(f"/jobs/{job_id}/cancel", headers=H).json()["status"] == "failed"
+
+
+def test_manual_control_on_an_unknown_screen(geelark):
+    factory = FakeFactory(fail={"open_app": JobError("unknown_screen", "tela nova")})
+    manager = JobManager(factory, input_timeout_s=5, job_timeout_s=10)
+    app = create_app(Settings(worker_token=TOKEN), geelark=geelark, manager=manager)
+    with TestClient(app) as c:
+        job_id = c.post("/jobs", headers=H, json=job_body()).json()["jobId"]
+        wait_for(lambda: manager.get(job_id).awaiting == "manual")
+        for body in ({"type": "tap", "x": 0.25, "y": 1}, {"type": "key", "key": "back"},
+                     {"type": "key", "key": "scroll_down"}, {"type": "text", "text": "Loja"}):
+            resp = c.post(f"/jobs/{job_id}/manual", headers=H, json=body)
+            assert resp.status_code == 200 and resp.json() == {"ok": True}, body
+        for bad in ({"type": "tap", "x": 1.5, "y": 0}, {"type": "key", "key": "power"}, {"type": "text", "text": ""}):
+            assert c.post(f"/jobs/{job_id}/manual", headers=H, json=bad).status_code == 400, bad
+        assert c.post(f"/jobs/{job_id}/manual", json={"type": "key", "key": "back"}).status_code == 401
+        assert factory.instances[job_id].received["manual"][0] == {"type": "tap", "x": 0.25, "y": 1.0}
+        resp = c.post(f"/jobs/{job_id}/input", headers=H, json={"type": "resume"})
+        assert resp.status_code == 200 and resp.json()["status"] == "running"
+        c.post(f"/jobs/{job_id}/cancel", headers=H)
 
 
 def test_cancel_running_job(client):

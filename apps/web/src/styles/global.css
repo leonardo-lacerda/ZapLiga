@@ -1393,6 +1393,13 @@ input, select { min-height: 35px; min-width: 0; padding: 8px 10px; border: 1px s
 .provisioning-result.is-error { border-color: #f2b8b5; background: var(--error-soft); color: #b42318; }
 .provisioning-result .provisioning-detail { color: var(--text); font-size: 11px; }
 .provisioning-live-screen { margin-top: 12px; }
+.provisioning-live-touch { display: block; padding: 0; border: 0; background: none; cursor: crosshair; border-radius: 12px; }
+.provisioning-live-touch:focus-visible { outline: 2px solid var(--primary, #2563eb); outline-offset: 2px; }
+.provisioning-live-touch:disabled { cursor: progress; opacity: .7; }
+.provisioning-live-screen.is-controllable img { border-color: var(--primary, #2563eb); }
+.provisioning-live-controls { display: grid; gap: 8px; max-width: 420px; }
+.provisioning-live-text { display: flex; gap: 8px; }
+.provisioning-live-text input { flex: 1; min-width: 0; }
 .provisioning-live-placeholder { display: grid; place-items: center; width: 220px; height: 400px; padding: 16px; border: 1px dashed var(--border); border-radius: 12px; color: var(--subtle); font-size: 11px; text-align: center; }
 .provisioning-resend { display: grid; gap: 8px; margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--border); }
 .provisioning-screenshot { margin: 0; display: grid; gap: 6px; justify-items: start; }

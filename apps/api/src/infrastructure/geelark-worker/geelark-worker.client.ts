@@ -3,7 +3,7 @@ import { HttpException, HttpStatus, Injectable } from '@nestjs/common';
 // Formats from docs/provisioning-contract.md section 2 (geelark-worker internal HTTP API).
 export type WorkerApp = 'whatsapp' | 'business';
 export type WorkerJobStatus = 'running' | 'waiting_input' | 'done' | 'failed' | 'cancelled';
-export type WorkerAwaiting = null | 'sms' | 'profile' | 'link_decision' | 'pair_code';
+export type WorkerAwaiting = null | 'sms' | 'profile' | 'link_decision' | 'pair_code' | 'manual';
 
 export type WorkerPhone = {
   id: string; name: string; status: 'on' | 'starting' | 'off' | 'expired' | 'unknown';
@@ -43,7 +43,15 @@ export type WorkerJobInput =
   | { type: 'profile'; name: string; photoBase64?: string; photoMime?: 'image/jpeg' | 'image/png' }
   | { type: 'link' }
   | { type: 'finish' }
-  | { type: 'pair_code'; code: string };
+  | { type: 'pair_code'; code: string }
+  /** The operator finished driving the phone by hand: the robot goes on. */
+  | { type: 'resume' };
+
+/** Operator's touch on the live screen; x/y are fractions (0-1) of the screenshot. Text is never logged. */
+export type WorkerManualAction =
+  | { type: 'tap'; x: number; y: number }
+  | { type: 'key'; key: 'back' | 'home' | 'scroll_up' | 'scroll_down' }
+  | { type: 'text'; text: string };
 
 export type CreateWorkerPhone = { name: string; androidVersion: string; proxy: WorkerProxy };
 
@@ -71,6 +79,7 @@ const messageFor = (status: number, code: string, workerMessage: string | null) 
   if (code === 'phone_busy') return 'Este telefone já está em outro cadastro. Aguarde ele terminar ou cancele-o.';
   if (code === 'worker_full') return 'O cadastrador já está com o máximo de cadastros simultâneos. Tente novamente em alguns minutos.';
   if (code === 'not_awaiting') return 'O cadastro não está aguardando essa informação agora. Atualize a página.';
+  if ((code === 'robot_busy' || code === 'device_error') && workerMessage) return workerMessage;
   // The worker's own Portuguese text says what GeeLark refused (proxy check, balance...).
   if ((code === 'egress_offline' || code === 'geelark_error') && workerMessage) return workerMessage;
   if (status === 404) return 'Cadastro ou telefone não encontrado no cadastrador.';
@@ -156,6 +165,10 @@ export class GeelarkWorkerClient {
 
   async sendInput(jobId: string, input: WorkerJobInput) {
     return this.json<WorkerJob>(`/jobs/${encodeURIComponent(jobId)}/input`, { method: 'POST', body: input, timeoutMs: 30_000 });
+  }
+
+  async manualAction(jobId: string, action: WorkerManualAction) {
+    return this.json<{ ok: boolean }>(`/jobs/${encodeURIComponent(jobId)}/manual`, { method: 'POST', body: action, timeoutMs: 30_000 });
   }
 
   async cancelJob(jobId: string) { return this.json<WorkerJob>(`/jobs/${encodeURIComponent(jobId)}/cancel`, { method: 'POST', timeoutMs: 30_000 }); }

@@ -1,7 +1,7 @@
 import { BadRequestException, ConflictException, HttpException, HttpStatus, Injectable, Logger, NotFoundException, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
 import { DatabaseService } from '../../database/database.service';
-import { GeelarkWorkerClient, GeelarkWorkerError, WorkerJob, WorkerJobStatus } from '../../infrastructure/geelark-worker/geelark-worker.client';
+import { GeelarkWorkerClient, GeelarkWorkerError, WorkerJob, WorkerJobStatus, WorkerManualAction } from '../../infrastructure/geelark-worker/geelark-worker.client';
 import { RedisService } from '../../infrastructure/redis/redis.service';
 import { WaxumClient } from '../../infrastructure/waxum/waxum.client';
 import { normalizeWaxumStatus } from '../../infrastructure/waxum/waxum-status';
@@ -26,7 +26,7 @@ const SWEEP_BATCH = 50;
 
 const JOB_STATUSES = new Set<WorkerJobStatus>(['running', 'waiting_input', 'done', 'failed', 'cancelled']);
 const FINISHED_STATUSES = new Set<string>(['done', 'failed', 'cancelled']);
-const AWAITING_VALUES = new Set(['sms', 'profile', 'link_decision', 'pair_code']);
+const AWAITING_VALUES = new Set(['sms', 'profile', 'link_decision', 'pair_code', 'manual']);
 // `node` is the id of an attendant PC (egress_pcs.id).
 const NODE_ID = /^[A-Za-z0-9][A-Za-z0-9-]{0,63}$/;
 
@@ -308,6 +308,30 @@ export class WhatsappProvisioningService implements OnModuleInit, OnModuleDestro
     if (row.awaiting !== 'sms') throw new ConflictException({ statusCode: 409, code: 'not_awaiting', message: 'Só dá para pedir outro código enquanto o cadastro espera o SMS.' });
     const next = await this.withWorker(row, actorUserId, () => this.worker.sendInput(row.id, { type: method === 'voice' ? 'call_me' : 'resend_sms' }));
     await this.audit.record({ actorUserId, tenantId, action: 'provisioning.code_requested', entityType: 'provisioning_job', entityId: row.id, metadata: { method } });
+    return this.toJob(next);
+  }
+
+  /**
+   * The operator touches the phone through the live screen. The worker only accepts it while
+   * the robot is stopped waiting for someone (409 robot_busy otherwise). Audited without the text.
+   */
+  async manualAction(tenantId: string, actorUserId: string, id: string, action: WorkerManualAction) {
+    await this.entitlement.assertAction(tenantId, 'write', actorUserId);
+    const row = this.assertOpen(await this.findRow(tenantId, id));
+    await this.worker.manualAction(row.id, action);
+    const metadata: Record<string, unknown> = { type: action.type };
+    if (action.type === 'key') metadata.key = action.key;
+    await this.audit.record({ actorUserId, tenantId, action: 'provisioning.manual_action', entityType: 'provisioning_job', entityId: row.id, metadata });
+    return { ok: true };
+  }
+
+  /** "Devolver ao robô": after driving the phone by hand on a screen the robot did not know. */
+  async resumeRobot(tenantId: string, actorUserId: string, id: string) {
+    await this.entitlement.assertAction(tenantId, 'write', actorUserId);
+    const row = this.assertOpen(await this.findRow(tenantId, id));
+    if (row.awaiting !== 'manual') throw new ConflictException({ statusCode: 409, code: 'not_awaiting', message: 'O robô não está esperando você agora. Atualize a página.' });
+    const next = await this.withWorker(row, actorUserId, () => this.worker.sendInput(row.id, { type: 'resume' }));
+    await this.audit.record({ actorUserId, tenantId, action: 'provisioning.robot_resumed', entityType: 'provisioning_job', entityId: row.id });
     return this.toJob(next);
   }
 

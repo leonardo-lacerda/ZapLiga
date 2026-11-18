@@ -1,4 +1,4 @@
-import { IsBoolean, IsIn, IsOptional, IsString, Matches, MaxLength, MinLength, ValidateIf } from 'class-validator';
+import { IsBoolean, IsIn, IsNumber, IsOptional, IsString, Matches, Max, MaxLength, Min, MinLength, ValidateIf } from 'class-validator';
 
 const isRegister = (object: { mode?: string }) => object.mode !== 'network_check';
 
@@ -41,6 +41,16 @@ export class SubmitProfileDto {
 
 export class RequestCodeDto {
   @IsIn(['sms', 'voice']) method!: 'sms' | 'voice';
+}
+
+/** A touch on the live screen: tap (x/y as 0-1 fractions of the screenshot), a key, or text. */
+export class ManualActionDto {
+  @IsIn(['tap', 'key', 'text']) type!: 'tap' | 'key' | 'text';
+  @ValidateIf((o) => o.type === 'tap') @IsNumber() @Min(0) @Max(1) x?: number;
+  @ValidateIf((o) => o.type === 'tap') @IsNumber() @Min(0) @Max(1) y?: number;
+  @ValidateIf((o) => o.type === 'key') @IsIn(['back', 'home', 'scroll_up', 'scroll_down']) key?: 'back' | 'home' | 'scroll_up' | 'scroll_down';
+  // May be anything the operator types (even a code): never logged nor audited.
+  @ValidateIf((o) => o.type === 'text') @IsString() @MinLength(1) @MaxLength(200) text?: string;
 }
 
 export class LinkDecisionDto {

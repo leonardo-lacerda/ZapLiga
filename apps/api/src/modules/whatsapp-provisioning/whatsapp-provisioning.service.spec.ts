@@ -107,6 +107,7 @@ const makeService = (options: { tailscaleConnected?: boolean; pcs?: Pc[] } = {})
     stopPhone: jest.fn().mockResolvedValue({ ok: true }),
     screenshot: jest.fn(),
     liveScreen: jest.fn(),
+    manualAction: jest.fn().mockResolvedValue({ ok: true }),
   };
   const pcs: Pc[] = options.pcs ?? [
     { id: PC_ID, name: 'PC da Ana', slot: 'edge-1', online: true },
@@ -442,6 +443,31 @@ describe('WhatsappProvisioningService — SMS help (live screen, resend, call)',
     const id = await startJob(ctx);
     await expect(ctx.service.requestNewCode(TENANT, USER, id, 'sms')).rejects.toMatchObject({ status: 409 });
     expect(ctx.worker.sendInput).not.toHaveBeenCalled();
+  });
+
+  it('passes the operator touches to the worker and audits them without the text', async () => {
+    const ctx = makeService();
+    const id = await startJob(ctx);
+    expect(await ctx.service.manualAction(TENANT, USER, id, { type: 'key', key: 'back' })).toEqual({ ok: true });
+    await ctx.service.manualAction(TENANT, USER, id, { type: 'text', text: '123456' });
+    expect(ctx.worker.manualAction).toHaveBeenLastCalledWith(id, { type: 'text', text: '123456' });
+    expect(ctx.audit.record).toHaveBeenCalledWith(expect.objectContaining({ action: 'provisioning.manual_action', metadata: { type: 'key', key: 'back' } }));
+    expect(JSON.stringify(ctx.audit.record.mock.calls)).not.toContain('123456');
+    ctx.db.jobs.get(id).finished_at = new Date();
+    await expect(ctx.service.manualAction(TENANT, USER, id, { type: 'tap', x: 0.5, y: 0.5 })).rejects.toMatchObject({ status: 409 });
+  });
+
+  it('hands the phone back to the robot only while it waits for the operator', async () => {
+    const ctx = makeService();
+    const id = await startJob(ctx);
+    await expect(ctx.service.resumeRobot(TENANT, USER, id)).rejects.toMatchObject({ status: 409 });
+    ctx.worker.getJob.mockResolvedValueOnce(workerJob({ jobId: id, status: 'waiting_input', step: 'waiting_manual', awaiting: 'manual', message: 'Tela desconhecida.' }));
+    expect(await ctx.service.getJob(TENANT, USER, id)).toMatchObject({ awaiting: 'manual', step: 'waiting_manual' });
+    ctx.worker.sendInput.mockResolvedValue(workerJob({ jobId: id, status: 'running', step: 'entering_number' }));
+    const job = await ctx.service.resumeRobot(TENANT, USER, id);
+    expect(ctx.worker.sendInput).toHaveBeenCalledWith(id, { type: 'resume' });
+    expect(job).toMatchObject({ status: 'running', awaiting: null });
+    expect(ctx.audit.record).toHaveBeenCalledWith(expect.objectContaining({ action: 'provisioning.robot_resumed' }));
   });
 
   it('serves the live screen while the job runs and 404 once it is over', async () => {

@@ -5,7 +5,7 @@ import { LiveScreen } from './LiveScreen';
 import { ProfileForm } from './ProfileForm';
 import { SmsCodeInput } from './SmsCodeInput';
 import { createObjectUrl, revokeObjectUrl } from './objectUrl';
-import { cancelJob, fetchJobScreenshot, requestNewCode, submitLinkDecision, submitProfile, submitSmsCode } from './provisioning.api';
+import { cancelJob, fetchJobScreenshot, requestNewCode, resumeRobot, submitLinkDecision, submitProfile, submitSmsCode } from './provisioning.api';
 import { appLabels, errorExplanation, formatPhone, isJobActive, isNetworkCheck, splitJobNumber, statusLabels, statusTone, stepLabel } from './provisioning.labels';
 import type { Job, WizardPrefill } from './provisioning.types';
 import { JOB_POLL_INTERVAL_MS, useProvisioningJob } from './useProvisioningJob';
@@ -72,7 +72,7 @@ export function JobProgress({ tenantId, jobId, pollIntervalMs = JOB_POLL_INTERVA
       <div className="provisioning-action">
         <JobAction job={job} tenantId={tenantId} run={run} onNewJob={onNewJob} onOpenNumbers={onOpenNumbers} />
       </div>
-      {active && <LiveScreen tenantId={tenantId} jobId={job.id} />}
+      {active && <LiveScreen tenantId={tenantId} jobId={job.id} controllable={job.status === 'waiting_input'} />}
 
       <div className="provisioning-inline-actions">
         {active && <Button variant="danger" icon="close" onClick={() => void cancel()} disabled={cancelling}>{cancelling ? 'Cancelando…' : network ? 'Cancelar teste' : 'Cancelar cadastro'}</Button>}
@@ -145,6 +145,7 @@ function JobAction({ job, tenantId, run, onNewJob, onOpenNumbers }: ActionProps)
     </div>;
   }
   if (job.status === 'waiting_input' && job.awaiting === 'link_decision') return <LinkDecision job={job} tenantId={tenantId} run={run} />;
+  if (job.status === 'waiting_input' && job.awaiting === 'manual') return <ManualHelp job={job} tenantId={tenantId} run={run} />;
 
   const linking = job.awaiting === 'pair_code' || linkingSteps.has(job.step);
   return <div className="provisioning-working" role="status" aria-live="polite">
@@ -169,6 +170,24 @@ function ResendCode({ job, tenantId, run }: { job: Job; tenantId: string; run: A
       <Button variant="secondary" icon="refresh" onClick={() => void ask('sms')} disabled={Boolean(busy)}>{busy === 'sms' ? 'Pedindo…' : 'Reenviar SMS'}</Button>
       <Button variant="secondary" icon="phone" onClick={() => void ask('voice')} disabled={Boolean(busy)}>{busy === 'voice' ? 'Pedindo…' : 'Receber por ligação'}</Button>
     </div>
+  </div>;
+}
+
+/** Tela que o robô não conhece: o operador passa dela pela tela ao vivo e devolve o phone. */
+function ManualHelp({ job, tenantId, run }: { job: Job; tenantId: string; run: ActionProps['run'] }) {
+  const [busy, setBusy] = useState(false);
+  const resume = async () => {
+    setBusy(true);
+    try { await run(() => resumeRobot(tenantId, job.id)); } finally { setBusy(false); }
+  };
+  return <div className="provisioning-input-card">
+    <h3>O robô parou numa tela que não conhece</h3>
+    <p>Clique na tela do phone abaixo para tocar nela, como num celular, até passar desta tela. Depois devolva o phone ao robô: ele continua de onde estiver.</p>
+    {job.message && <p className="provisioning-detail">{job.message}</p>}
+    <div className="provisioning-inline-actions">
+      <Button icon="check" onClick={() => void resume()} disabled={busy}>{busy ? 'Devolvendo…' : 'Devolver ao robô'}</Button>
+    </div>
+    <p className="form-hint">O phone continua ligado (e cobrando) enquanto espera você.</p>
   </div>;
 }
 

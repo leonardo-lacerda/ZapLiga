@@ -19,7 +19,7 @@ from .errors import ApiError
 from .geelark_api import PHONE_OFF, PROXY_CHECK_FAILED, GeeLarkAPI, GeeLarkError
 from .jobs import JobManager
 from .phones import to_phone
-from .schemas import CreatePhone, CreateWorkerJob, JobInput, ProfileInput
+from .schemas import CreatePhone, CreateWorkerJob, JobInput, ManualAction, ProfileInput
 
 log = logging.getLogger("geelark_worker")
 
@@ -199,6 +199,11 @@ def create_app(
         if not png:
             raise ApiError(404, "not_found", "Sem tela ao vivo: o job ainda não conectou ao phone ou já terminou.")
         return Response(content=png, media_type="image/png", headers={"Cache-Control": "no-store"})
+
+    @app.post("/jobs/{job_id}/manual", dependencies=auth)
+    def manual_action(job_id: str, body: ManualAction) -> dict:
+        manager.manual_action(job_id, body.model_dump())
+        return {"ok": True}
 
     @app.get("/jobs/{job_id}/screenshot", dependencies=auth)
     def screenshot(job_id: str) -> Response:

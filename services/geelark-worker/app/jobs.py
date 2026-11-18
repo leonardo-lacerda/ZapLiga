@@ -44,13 +44,20 @@ ACCEPTED_INPUTS = {
     "profile": {"profile"},
     "link_decision": {"link", "finish"},
     "pair_code": {"pair_code"},
+    "manual": {"resume"},
 }
 AWAITING_LABEL = {
     "sms": "o código SMS",
     "profile": "o nome do perfil",
     "link_decision": "a decisão de conectar ao ZapLiga",
     "pair_code": "o código de pareamento",
+    "manual": "você devolver o phone ao robô",
 }
+# Tela que o robô não conhece: em vez de falhar, ele para e deixa o operador mexer no phone
+# pela tela ao vivo. Limite por etapa para não ficar num vai e volta sem fim.
+MAX_MANUAL_HELPS = 3
+MANUAL_HINT = ('Mexa no phone pela tela ao vivo (clique nela) até passar desta tela e clique em '
+               '"Devolver ao robô". Se não der, cancele o cadastro.')
 
 
 def _now_iso() -> str:
@@ -75,6 +82,7 @@ def _step_message(step: str, app_label: str) -> str | None:
         "opening_link_screen": "Abrindo a tela de conectar aparelho.",
         "waiting_pair_code": "Aguardando o código de pareamento.",
         "entering_pair_code": "Digitando o código de pareamento.",
+        "waiting_manual": "O robô parou numa tela que não conhece.",
     }.get(step)
 
 
@@ -260,6 +268,25 @@ class JobManager:
                 job.live_screen = (time.monotonic(), png)
             return png
 
+    def manual_action(self, job_id: str, action: dict[str, Any]) -> None:
+        """Toque, tecla ou texto do operador no phone. Só quando o robô está parado esperando
+        alguém (status waiting_input): com o robô andando, os dois brigariam pela tela."""
+        with self._lock:
+            job = self._require(job_id)
+            auto = job.auto if job.status == "waiting_input" else None
+        if auto is None:
+            raise ApiError(409, "robot_busy",
+                           "O robô está mexendo no phone agora. Dá para mexer quando ele parar e pedir algo.")
+        with job.screen_lock:
+            try:
+                auto.manual(action)
+            except Exception as exc:
+                log.warning("[%s] controle manual falhou (%s)", job_id, type(exc).__name__)
+                raise ApiError(502, "device_error", "Não consegui mexer no phone agora. Tente de novo.") from None
+            finally:
+                job.live_screen = None  # o próximo print já mostra o resultado
+        log.info("[%s] controle manual: %s", job_id, action.get("type"))  # nunca o texto digitado
+
     # ---------------------------------------------------------- vigia
     def sweep_handed(self, now: float | None = None) -> list[str]:
         """Desliga os phones entregues à API ligados há mais de `handoff_max_s`.
@@ -429,7 +456,11 @@ class JobManager:
                     job.screenshot = png
         except Exception as exc:
             log.warning("[%s] sem screenshot (%s)", job.spec.job_id, type(exc).__name__)
-        if error_code == "unknown_screen" and self._debug_dir:
+        if error_code == "unknown_screen":
+            self._save_debug_xml(job, auto)
+
+    def _save_debug_xml(self, job: Job, auto: PhoneAutomation) -> None:
+        if self._debug_dir:
             try:
                 xml = auto.debug_dump()
                 if xml:
@@ -440,6 +471,22 @@ class JobManager:
                     log.warning("[%s] XML da tela desconhecida salvo em %s", job.spec.job_id, path)
             except Exception as exc:
                 log.warning("[%s] sem XML de diagnóstico (%s)", job.spec.job_id, type(exc).__name__)
+
+    def _with_help(self, job: Job, ctx: JobContext, auto: PhoneAutomation, step: str,
+                   fn: Callable[[], Any]) -> Any:
+        """Roda uma etapa do app; numa tela desconhecida, pede ajuda ao operador e tenta de novo."""
+        helps = 0
+        while True:
+            try:
+                return fn()
+            except JobError as exc:
+                if exc.code != "unknown_screen" or helps >= MAX_MANUAL_HELPS:
+                    raise
+                helps += 1
+                self._save_debug_xml(job, auto)  # para ensinar a tela nova ao robô depois
+                log.info("[%s] tela desconhecida em %s; esperando o operador (%s)", job.spec.job_id, step, helps)
+                self._wait_input(job, ctx, "waiting_manual", "manual", f"{exc.message} {MANUAL_HINT}")
+                self._set_step(job, step)
 
     def _probe_pc_ip(self, job: Job) -> str:
         """IP do PC visto pelo probeProxy; sem resposta = egress_offline (contrato §4)."""
@@ -507,11 +554,11 @@ class JobManager:
             ctx.check()
 
         self._set_step(job, "opening_app")
-        auto.open_app()
+        self._with_help(job, ctx, auto, "opening_app", auto.open_app)
         ctx.check()
 
         self._set_step(job, "entering_number")
-        auto.enter_number()
+        self._with_help(job, ctx, auto, "entering_number", auto.enter_number)
 
         message = None
         attempts = 0
@@ -532,7 +579,9 @@ class JobManager:
 
         inp = self._wait_input(job, ctx, "waiting_profile", "profile")
         self._set_step(job, "saving_profile")
-        warning = auto.save_profile(inp["name"], inp.get("photo"), inp.get("photoMime"))
+        name, photo, photo_mime = inp["name"], inp.get("photo"), inp.get("photoMime")
+        warning = self._with_help(job, ctx, auto, "saving_profile", lambda: auto.save_profile(name, photo, photo_mime))
+        del photo
         del inp
 
         registered_msg = "Número cadastrado." + (f" {warning}" if warning else "")
@@ -542,7 +591,7 @@ class JobManager:
             return
 
         self._set_step(job, "opening_link_screen")
-        auto.open_link_screen()
+        self._with_help(job, ctx, auto, "opening_link_screen", auto.open_link_screen)
 
         inp = self._wait_input(job, ctx, "waiting_pair_code", "pair_code")
         self._set_step(job, "entering_pair_code")

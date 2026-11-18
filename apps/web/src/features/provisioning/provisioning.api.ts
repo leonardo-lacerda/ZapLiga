@@ -57,6 +57,20 @@ export const cancelJob = (tenantId: string, jobId: string): Promise<Job> =>
 export const requestNewCode = (tenantId: string, jobId: string, method: 'sms' | 'voice'): Promise<Job> =>
   json(`${jobPath(tenantId, jobId)}/resend`, { method: 'POST', body: JSON.stringify({ method }) });
 
+/** Toque do operador na tela ao vivo: x/y em proporção (0 a 1) da imagem. */
+export type ManualAction =
+  | { type: 'tap'; x: number; y: number }
+  | { type: 'key'; key: 'back' | 'home' | 'scroll_up' | 'scroll_down' }
+  | { type: 'text'; text: string };
+
+/** Só funciona com o robô parado esperando alguém; senão a API responde 409 (robot_busy). */
+export const sendManualAction = (tenantId: string, jobId: string, action: ManualAction): Promise<{ ok: boolean }> =>
+  json(`${jobPath(tenantId, jobId)}/manual`, { method: 'POST', body: JSON.stringify(action) });
+
+/** "Devolver ao robô" depois de mexer no phone numa tela que ele não conhece. */
+export const resumeRobot = (tenantId: string, jobId: string): Promise<Job> =>
+  json(`${jobPath(tenantId, jobId)}/resume`, { method: 'POST' });
+
 /** Tela do phone agora (image/png), enquanto o job roda. */
 export const fetchLiveScreen = async (tenantId: string, jobId: string, signal?: AbortSignal): Promise<Blob> => {
   const path = `${jobPath(tenantId, jobId)}/screen`;

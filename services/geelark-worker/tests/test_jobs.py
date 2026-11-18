@@ -351,8 +351,86 @@ def test_unknown_screen_saves_debug_xml(tmp_path):
     factory = FakeFactory(fail={"enter_number": JobError("unknown_screen", "tela nova")})
     manager = JobManager(factory, input_timeout_s=5, job_timeout_s=10, debug_dir=str(tmp_path))
     manager.create(make_spec())
-    finished(manager, "job-1")
+    awaiting(manager, "job-1", "manual")  # o XML já fica salvo quando o robô pede ajuda
     assert (tmp_path / "job-1.xml").read_text(encoding="utf-8") == "<hierarchy/>"
+    manager.cancel("job-1")
+
+
+class FailsOnce:
+    """Tela desconhecida só na primeira vez: depois da ajuda do operador a etapa passa."""
+
+    def __init__(self, times=1):
+        self.left = times
+
+    def install(self, auto, name):
+        original = getattr(auto, name)
+
+        def wrapped(*args):
+            if self.left:
+                self.left -= 1
+                auto.calls.append(name)
+                raise JobError("unknown_screen", "Tela desconhecida enquanto esperava 'digitar código'.")
+            return original(*args)
+        setattr(auto, name, wrapped)
+
+
+def manager_with_flaky(step, times=1):
+    flaky = FailsOnce(times)
+
+    class Factory(FakeFactory):
+        def __call__(self, spec, ctx):
+            auto = super().__call__(spec, ctx)
+            flaky.install(auto, step)
+            return auto
+
+    factory = Factory()
+    return JobManager(factory, input_timeout_s=5, job_timeout_s=10), factory
+
+
+def test_unknown_screen_waits_for_the_operator_and_resumes():
+    manager, factory = manager_with_flaky("enter_number")
+    manager.create(make_spec())
+    awaiting(manager, "job-1", "manual")
+    job = manager.get("job-1")
+    assert (job.status, job.step) == ("waiting_input", "waiting_manual")
+    assert "Devolver ao robô" in job.message and "digitar código" in job.message
+    # O operador mexe no phone enquanto o robô espera; o texto digitado não vai para o log.
+    manager.manual_action("job-1", {"type": "tap", "x": 0.5, "y": 0.9})
+    manager.manual_action("job-1", {"type": "text", "text": "segredo"})
+    auto = factory.instances["job-1"]
+    assert auto.calls[-2:] == ["manual:tap", "manual:text"]
+    manager.submit_input("job-1", {"type": "resume"})
+    awaiting(manager, "job-1", "sms")
+    assert steps(manager.get("job-1"))[-3:] == ["waiting_manual", "entering_number", "waiting_sms"]
+    assert auto.calls.count("enter_number") == 2
+    manager.cancel("job-1")
+
+
+def test_manual_action_is_refused_while_the_robot_works():
+    factory = FakeFactory(block="enter_number")
+    manager = JobManager(factory, input_timeout_s=5, job_timeout_s=10)
+    manager.create(make_spec())
+    wait_for(lambda: "enter_number" in factory.instances.get("job-1", FakeFactory()).calls
+             if "job-1" in factory.instances else False)
+    with pytest.raises(ApiError) as exc:
+        manager.manual_action("job-1", {"type": "key", "key": "back"})
+    assert (exc.value.status, exc.value.code) == (409, "robot_busy")
+    manager.cancel("job-1")
+
+
+def test_gives_up_after_too_many_helps():
+    manager, _ = manager_with_flaky("open_app", times=10)
+    manager.create(make_spec())
+    for _ in range(3):
+        awaiting(manager, "job-1", "manual")
+        manager.submit_input("job-1", {"type": "resume"})
+    job = finished(manager, "job-1")
+    assert (job.status, job.error_code) == ("failed", "unknown_screen")
+    assert "power_off" in manager_calls(manager)
+
+
+def manager_calls(manager):
+    return manager._factory.instances["job-1"].calls
 
 
 def test_keeps_phone_on_when_power_off_disabled():
