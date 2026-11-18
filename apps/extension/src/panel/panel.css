@@ -148,3 +148,8 @@ textarea { resize: vertical; min-height: 64px; }
 .pin-bar:hover:not(:disabled) { background: #0a4f7c; }
 .pin-bar:disabled { opacity: 1; font-weight: 600; background: var(--success-dark); }
 body.standalone #root { flex: 1; min-height: 0; height: auto; }
+
+.line-pause { display: flex; gap: 8px; align-items: center; margin: 8px 0 0; padding: 8px 10px; border-radius: 10px; background: var(--warning-soft); border: 1px solid #fde4b8; color: #93560a; font-size: 12px; line-height: 1.35; }
+.line-pause span { flex: 1; } .line-pause strong { font-weight: 600; }
+.line-pause.chosen { border-color: #f59e0b; box-shadow: 0 0 0 1px #f59e0b inset; }
+.pause-clock { font-variant-numeric: tabular-nums; font-size: 15px; font-weight: 700; color: #b45309; min-width: 42px; text-align: right; }

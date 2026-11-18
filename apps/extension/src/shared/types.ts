@@ -24,7 +24,13 @@ export type StationSnapshot = {
   };
   muted: boolean;
   /** Connected WhatsApp lines the user may pick (leaders and admins; SDRs always get the automatic one). */
-  lines: { id: string; label: string; phone: string }[];
+  lines: {
+    id: string; label: string; phone: string;
+    /** WhatsApp protection pause: the line cannot call before this time (ms since epoch). */
+    waitUntil?: number;
+    /** The pause is a quarantine (signs of a WhatsApp block), not a short rate-limit pause. */
+    quarantine?: boolean;
+  }[];
   /** '' = automatic: the server picks the least recently used line. */
   lineId: string;
   postCall: null | { id: string; leadName?: string; leadPhone?: string; durationSeconds: number };
@@ -44,6 +50,7 @@ export type PanelCommand =
   | { cmd: 'hangup' }
   | { cmd: 'toggleMute' }
   | { cmd: 'selectLine'; lineId: string }
+  | { cmd: 'refreshLines' }
   | { cmd: 'refreshLines' }
   | { cmd: 'finishPostCall'; callResult: string; pipelineStage: string; notes: string; callbackAt?: string }
   | { cmd: 'takeOver' }

@@ -55,6 +55,7 @@ export class Station {
   private reconnectAttempt = 0;
   private audioCallId = '';
   private pendingHangup = false;
+  private linesLoadedAt = 0;
 
   constructor() {
     this.state = {
@@ -67,6 +68,8 @@ export class Station {
       if (call && call.hearing !== level.receiving) this.patch({ call: { ...call, hearing: level.receiving } });
     });
     window.addEventListener('zapliga:access-changed', () => void this.restoreSession());
+    // A line can be paused by calls made elsewhere (site, automatic dialer): keep the timers current.
+    window.setInterval(() => { if (this.state.auth === 'signed_in' && !this.state.call) void this.loadLines(); }, 30_000);
     // No timed refresh: `json` renews an expiring token right before each request, and every
     // extra rotation would also invalidate the token of the zapliga.com tabs.
   }
@@ -122,6 +125,10 @@ export class Station {
         case 'dial': return await this.dial(command.phone, command.name);
         case 'hangup': return this.hangup();
         case 'toggleMute': { const muted = !this.state.muted; this.audio.setMuted(muted); return this.patch({ muted }); }
+        case 'refreshLines':
+          // Opening the picker or the window asks again, so a line connected a moment ago shows up.
+          if (Date.now() - this.linesLoadedAt > 3000) await this.loadLines();
+          return;
         case 'selectLine': {
           try { localStorage.setItem(LINE_KEY + this.state.tenantId, command.lineId); } catch { /* só nesta sessão */ }
           return this.patch({ lineId: command.lineId });
@@ -194,12 +201,21 @@ export class Station {
     const tenantId = this.state.tenantId;
     const tenant = this.state.tenants.find((t) => t.id === tenantId);
     if (!tenant || tenant.role === 'sdr') { this.patch({ lines: [], lineId: '' }); return; }
+    this.linesLoadedAt = Date.now();
     try {
       const page = await api('/api/numbers?limit=200');
       if (this.state.tenantId !== tenantId) return;
       const lines = (page.items ?? [])
         .filter((n: any) => CONNECTED_LINE.has(String(n.status).toLowerCase()))
-        .map((n: any) => ({ id: String(n.id), label: String(n.label ?? ''), phone: String(n.phone ?? '') }));
+        .map((n: any) => {
+          const now = Date.now();
+          const at = (value: unknown) => { const t = value ? new Date(String(value)).getTime() : 0; return Number.isFinite(t) && t > now ? t : 0; };
+          // The server marks a protected line by dating its last call in the future (rate limit or
+          // rapid-drop pause) or by `flagged_until` (quarantine). Both mean: this line waits until then.
+          const pause = at(n.last_call_ended_at), quarantine = at(n.flagged_until);
+          const waitUntil = Math.max(pause, quarantine);
+          return { id: String(n.id), label: String(n.label ?? ''), phone: String(n.phone ?? ''), ...(waitUntil ? { waitUntil, quarantine: quarantine >= pause } : {}) };
+        });
       let remembered = '';
       try { remembered = localStorage.getItem(LINE_KEY + tenantId) ?? ''; } catch { /* sem preferência */ }
       const wanted = this.state.lineId || remembered;
@@ -391,6 +407,8 @@ export class Station {
         const error = data.outcome === 'waxum_rate_limited' ? 'A linha WhatsApp atingiu um limite temporário de chamadas. Aguarde alguns minutos.' : this.state.error;
         this.patch({ call: null, muted: false, postCall: pause, error, notice: '' });
         void this.loadLines();
+        // The server keeps the line list cached for a moment: look again so a new pause shows up.
+        window.setTimeout(() => void this.loadLines(), 2500);
         if (data.available) socket.send(JSON.stringify({ type: 'availability', available: false }));
         break;
       }
@@ -433,6 +451,8 @@ export class Station {
       }
       const current = this.state.call as StationSnapshot['call'];
       if (!current?.callId) { this.patch({ call: null }); void this.audio.stop(); }
+      // Refused because a line is paused: fetch the lines so the panel shows that line's timer.
+      if (/protegida|quarentena/i.test(message(error))) void this.loadLines();
       throw error;
     }
   }

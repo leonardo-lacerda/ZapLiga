@@ -27,6 +27,21 @@ const elapsed = (since?: number) => {
   const s = Math.max(0, Math.floor((Date.now() - since) / 1000));
   return `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`;
 };
+const clock = (ms: number) => { const total = Math.max(0, Math.ceil(ms / 1000)); const h = Math.floor(total / 3600), m = Math.floor((total % 3600) / 60), sec = total % 60;
+  return h ? `${h}h${String(m).padStart(2, '0')}` : `${m}:${String(sec).padStart(2, '0')}`; };
+const lineName = (line: { label: string; phone: string }) => [line.label, formatPhone(line.phone)].filter(Boolean).join(' · ');
+/** Lines still inside a WhatsApp protection pause, re-evaluated every second while any is counting down. */
+function usePausedLines(lines: StationSnapshot['lines']) {
+  const [now, setNow] = useState(Date.now());
+  const counting = lines.some((line) => (line.waitUntil ?? 0) > now);
+  useEffect(() => {
+    if (!counting) return;
+    const timer = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, [counting]);
+  return { now, paused: lines.filter((line) => (line.waitUntil ?? 0) > now) };
+}
+const PAUSE_ERROR = /temporariamente protegida|limite tempor[aá]rio|quarentena/i;
 const initials = (name?: string) => (name ?? '').trim().split(/\s+/).slice(0, 2).map((part) => part[0]?.toUpperCase() ?? '').join('') || '';
 const openSite = (path = '') => void chrome.runtime.sendMessage({ type: 'open-url', url: `${WEB_URL}${path}` });
 
@@ -48,6 +63,8 @@ function Logo() {
 
 function Alert({ state, send }: ViewProps) {
   if (!state.error) return null;
+  // A line pause has its own alert with a timer under the line picker: no need to repeat it here.
+  if (PAUSE_ERROR.test(state.error) && state.lines.some((line) => (line.waitUntil ?? 0) > Date.now())) return null;
   return <div className="alert" role="alert"><Icon name="alert" size={16} /><span>{state.error}</span><button type="button" aria-label="Fechar" onClick={() => send({ cmd: 'clearError' })}><Icon name="close" size={14} /></button></div>;
 }
 
@@ -116,7 +133,19 @@ function Dialer({ state, send }: ViewProps) {
     setName(state.prefill.name ?? '');
     send({ cmd: 'clearPrefill' });
   }, [state.prefill?.at]);
-  const submit = (event: FormEvent) => { event.preventDefault(); if (digits.length >= 10) send({ cmd: 'dial', phone, name }); };
+  // Lines change on the site (a number connected or removed): ask again when the window comes into view.
+  useEffect(() => {
+    const refresh = () => send({ cmd: 'refreshLines' });
+    refresh();
+    window.addEventListener('focus', refresh);
+    document.addEventListener('visibilitychange', refresh);
+    return () => { window.removeEventListener('focus', refresh); document.removeEventListener('visibilitychange', refresh); };
+  }, []);
+  const { now, paused } = usePausedLines(state.lines);
+  const chosenPause = paused.find((line) => line.id === state.lineId);
+  const allPaused = !state.lineId && state.lines.length > 0 && paused.length === state.lines.length;
+  const blockedFor = chosenPause ? chosenPause.waitUntil! - now : allPaused ? Math.min(...paused.map((line) => line.waitUntil!)) - now : 0;
+  const submit = (event: FormEvent) => { event.preventDefault(); if (digits.length >= 10 && !blockedFor) send({ cmd: 'dial', phone, name }); };
   return <form className="dialer" onSubmit={submit}>
     <div className="display">
       <input className="number" inputMode="tel" placeholder="(00) 00000-0000" aria-label="Telefone para ligar" value={phone} onChange={(e) => setPhone(typingPhone(e.target.value))} autoFocus />
@@ -128,11 +157,16 @@ function Dialer({ state, send }: ViewProps) {
         ? <button type="button" key={key} className="key" onClick={() => setPhone((p) => typingPhone(p.replace(/\D/g, '') + key))}><span>{key}</span><small>{letters}</small></button>
         : <span key={`blank-${index}`} />)}</div>
     {state.lines.length > 0 && <label className="line-pick"><span><Icon name="whatsapp" size={14} />Ligar pelo número</span>
-      <select aria-label="Número de saída" value={state.lineId} onChange={(e) => send({ cmd: 'selectLine', lineId: e.target.value })}>
+      <select aria-label="Número de saída" value={state.lineId} onMouseDown={() => send({ cmd: 'refreshLines' })} onFocus={() => send({ cmd: 'refreshLines' })} onChange={(e) => send({ cmd: 'selectLine', lineId: e.target.value })}>
         <option value="">Automático (o que está livre há mais tempo)</option>
-        {state.lines.map((line) => <option key={line.id} value={line.id}>{[line.label, formatPhone(line.phone)].filter(Boolean).join(' · ')}</option>)}
+        {state.lines.map((line) => <option key={line.id} value={line.id}>{lineName(line)}{(line.waitUntil ?? 0) > now ? ` — pausa ${clock(line.waitUntil! - now)}` : ''}</option>)}
       </select></label>}
-    <button className="call" disabled={state.busy || digits.length < 10} aria-label="Ligar"><Icon name="phone" size={20} /><span>{state.busy ? 'Ligando…' : 'Ligar'}</span></button>
+    {paused.map((line) => <div key={line.id} className={`line-pause${line.id === state.lineId ? ' chosen' : ''}`} role="status">
+      <Icon name="alert" size={15} />
+      <span><strong>{lineName(line)}</strong>{line.quarantine ? ' está em quarentena por sinais de bloqueio do WhatsApp.' : ' está em pausa de proteção do WhatsApp.'} Libera em</span>
+      <b className="pause-clock">{clock(line.waitUntil! - now)}</b>
+    </div>)}
+    <button className="call" disabled={state.busy || digits.length < 10 || Boolean(blockedFor)} aria-label="Ligar"><Icon name="phone" size={20} /><span>{state.busy ? 'Ligando…' : blockedFor ? `Aguarde ${clock(blockedFor)}` : 'Ligar'}</span></button>
   </form>;
 }
 
