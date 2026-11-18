@@ -30,6 +30,7 @@ export function ProvisioningWizard({ tenantId, currentUserId, prefill, onJobCrea
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState('');
   const [numberTouched, setNumberTouched] = useState(false);
+  const [resetApp, setResetApp] = useState(false);
   const [claiming, setClaiming] = useState(false);
   const [claimError, setClaimError] = useState('');
   const [phoneActionError, setPhoneActionError] = useState('');
@@ -114,7 +115,7 @@ export function ProvisioningWizard({ tenantId, currentUserId, prefill, onJobCrea
     if (!selectedNode || !selectedPhone || numberError) return;
     setSubmitting(true); setSubmitError('');
     try {
-      const job = await createJob(tenantId, { egressNode: selectedNode.node, geelarkPhoneId: selectedPhone.id, app, countryCode: digitsOnly(countryCode), number: digitsOnly(number) });
+      const job = await createJob(tenantId, { egressNode: selectedNode.node, geelarkPhoneId: selectedPhone.id, app, countryCode: digitsOnly(countryCode), number: digitsOnly(number), ...(resetApp ? { resetApp: true } : {}) });
       onJobCreated(job);
     } catch (error) {
       const code = apiErrorCode(error);
@@ -172,6 +173,10 @@ export function ProvisioningWizard({ tenantId, currentUserId, prefill, onJobCrea
         </div>
         {digitsOnly(number) && !numberError && <p className="form-hint">O WhatsApp vai enviar o SMS para <strong>{formatPhoneParts(countryCode, number)}</strong>.</p>}
         {numberTouched && numberError && <p className="provisioning-field-error" role="alert">{numberError}</p>}
+        <label className="check-card provisioning-check">
+          <input type="checkbox" checked={resetApp} onChange={(event) => setResetApp(event.target.checked)} />
+          <span className="pick-copy"><strong>Apagar o {appLabels[app]} que já está neste telefone</strong><small>Use quando o phone já tem outro número com conta ativa: essa conta sai deste phone. Um cadastro antigo pela metade é limpo sozinho, sem marcar isto.</small></span>
+        </label>
         <p className="form-hint"><Icon name="clock" size={14} /> O phone é desligado sozinho ao terminar, falhar ou cancelar (também se você fechar esta página): o GeeLark cobra cada minuto ligado.</p>
         <div className="provisioning-summary">
           <span>Rede: <strong>{selectedNode?.label ?? '—'}</strong></span>

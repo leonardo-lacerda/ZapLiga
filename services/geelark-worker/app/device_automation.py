@@ -46,6 +46,16 @@ def android_major(system_ver: Any) -> int | None:
     return int(m.group()) if m else None
 
 
+# Pacotes que podem ficar na frente do WhatsApp durante o cadastro sem ser "o app fechou":
+# permissões, seletor de número do Google, instalador e diálogos do sistema.
+FOREGROUND_ALLOWED = frozenset({
+    "android", "com.android.systemui", "com.google.android.gms",
+    "com.android.permissioncontroller", "com.google.android.permissioncontroller",
+    "com.android.packageinstaller", "com.google.android.packageinstaller",
+})
+MAX_RELAUNCHES = 3
+
+
 class GeeLarkAutomation:
     def __init__(self, api: GeeLarkAPI, spec: JobSpec, ctx: JobContext):
         self.api = api
@@ -245,7 +255,7 @@ class GeeLarkAutomation:
         """Detecta a tela em loop e age até chegar em uma das `targets`."""
         handlers = {**self._common_actions(), **(actions or {})}
         deadline = time.monotonic() + timeout
-        last, repeats, unknown_since = None, 0, None
+        last, repeats, unknown_since, relaunches = None, 0, None, 0
         while True:
             self.ctx.check()
             screen = wa.detect_screen(self.d, self.app)
@@ -254,6 +264,18 @@ class GeeLarkAutomation:
             now = time.monotonic()
             if now >= deadline:
                 raise JobError("unknown_screen", f"O fluxo não chegou em '{what}' a tempo (última tela: {screen.value}).")
+
+            # O app não está na frente (tela inicial do Android): abriu e fechou, ou nem abriu
+            # (comum logo depois de instalar). Abre de novo em vez de esperar a tela certa.
+            if screen == Screen.UNKNOWN and self._app_left():
+                relaunches += 1
+                if relaunches > MAX_RELAUNCHES:
+                    raise JobError("unknown_screen", f"O {self.app.label} não fica aberto (fechou {MAX_RELAUNCHES} vezes).")
+                log.info("[%s] %s não está na frente; abrindo de novo (%s)", self.spec.job_id, self.app.label, relaunches)
+                self.d.app_start(self.app.package, wait=True)
+                self._pause(2, 4)
+                unknown_since = None
+                continue
 
             if screen in (Screen.UNKNOWN, Screen.INITIALIZING):
                 # Às vezes é só uma transição: espera um pouco antes de desistir.
@@ -276,23 +298,46 @@ class GeeLarkAutomation:
             handler()
             self._pause(1.5, 3)
 
+    def _app_left(self) -> bool:
+        """True quando outro app (não um diálogo do sistema) está na frente do WhatsApp."""
+        try:
+            package = str((self.d.app_current() or {}).get("package") or "")
+        except Exception:
+            return False
+        return bool(package) and package != self.app.package and package not in FOREGROUND_ALLOWED
+
     # ------------------------------------------------------------- registro
+    def _clear_app(self, why: str) -> None:
+        """Apaga os dados do app (como reinstalar do zero): termos, permissões e número de novo."""
+        out = self._shell(["pm", "clear", self.app.package], timeout=60).strip()
+        if "success" not in out.lower():
+            raise JobError("internal", f"Não consegui limpar o {self.app.label} ({out[:80] or 'sem resposta'}).")
+        log.info("[%s] dados do %s apagados (%s)", self.spec.job_id, self.app.label, why)
+
     def open_app(self) -> None:
         self.ctx.check()
+        if self.spec.reset_app:
+            self._clear_app("pedido no cadastro")
         self.d.app_start(self.app.package, wait=True)
         self._pause(2, 4)
+        cleared = self.spec.reset_app
 
         def already_registered() -> None:
             raise JobError(
                 "unknown_screen",
-                f"O {self.app.label} já está registrado neste phone. Use outro phone ou apague os dados do app.",
+                f"O {self.app.label} já tem uma conta ativa neste phone. Para cadastrar outro número aqui, "
+                "marque \"Apagar o WhatsApp que já está neste telefone\" e tente de novo.",
             )
 
         def mid_registration() -> None:
-            raise JobError(
-                "unknown_screen",
-                f"O {self.app.label} está no meio de outro cadastro. Apague os dados do app e tente de novo.",
-            )
+            # Cadastro anterior pela metade (outro número esperando código): não há conta a perder.
+            nonlocal cleared
+            if cleared:
+                raise JobError("unknown_screen", f"O {self.app.label} voltou para um cadastro antigo mesmo depois de limpo.")
+            self._clear_app("cadastro anterior pela metade")
+            cleared = True
+            self.d.app_start(self.app.package, wait=True)
+            self._pause(2, 4)
 
         self._drive({Screen.PHONE_ENTRY}, {Screen.CHATS: already_registered, Screen.VERIFY_CODE: mid_registration},
                     what="digitar número")
@@ -354,6 +399,26 @@ class GeeLarkAutomation:
         if wa.detect_screen(self.d, self.app) == Screen.VERIFY_CODE:
             return SmsResult(False, "O WhatsApp não aceitou o código. Confira o SMS e digite de novo.")
         raise JobError("unknown_screen", "O WhatsApp não saiu da verificação do código.")
+
+    def request_code(self, method: str) -> str:
+        label = "uma ligação com o código" if method == "voice" else "um novo SMS"
+        pattern = wa.CALL_ME_TEXT if method == "voice" else wa.RESEND_SMS_TEXT
+        target = self.d(textMatches=pattern)
+        if not target.exists and self._click({"textMatches": wa.DIDNT_RECEIVE_TEXT}, timeout=2):
+            self._pause(1, 2)  # abre as opções de reenvio
+            target = self.d(textMatches=pattern)
+        if not target.exists:
+            return (f"O WhatsApp não mostrou a opção de pedir {label} agora. "
+                    "Veja a tela do phone: pode haver um relógio contando ou o código foi para outro aparelho.")
+        text = (target.get_text() or "").strip()
+        if wa.COUNTDOWN.search(text) or not target.info.get("enabled", True):
+            return f"Ainda não dá para pedir {label}: o WhatsApp mostra \"{text}\". Tente quando o relógio zerar."
+        target.click()
+        self._pause(1, 2)
+        # Algumas versões confirmam o pedido numa janela ("OK" / "Ligar").
+        self._click({"resourceId": "android:id/button1"}, {"textMatches": wa.CONFIRM_TEXT}, timeout=2)
+        log.info("[%s] código pedido de novo (%s) a pedido do usuário", self.spec.job_id, method)
+        return f"Pedimos {label}. Aguarde e digite o código quando chegar."
 
     def _choose_category(self) -> None:
         pattern = wa.CATEGORY_OTHER

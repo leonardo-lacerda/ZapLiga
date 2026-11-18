@@ -32,10 +32,14 @@ export type CreateWorkerJob = {
   /** Empty with `probeProxy`: the worker then expects the IP the probe saw. */
   expectedEgressIps: string[];
   powerOffWhenDone: boolean;
+  /** Clear the app's data before opening it, even with an active account (operator's choice). */
+  resetApp?: boolean;
 };
 
 export type WorkerJobInput =
   | { type: 'sms'; code: string }
+  | { type: 'resend_sms' }
+  | { type: 'call_me' }
   | { type: 'profile'; name: string; photoBase64?: string; photoMime?: 'image/jpeg' | 'image/png' }
   | { type: 'link' }
   | { type: 'finish' }
@@ -155,6 +159,17 @@ export class GeelarkWorkerClient {
   }
 
   async cancelJob(jobId: string) { return this.json<WorkerJob>(`/jobs/${encodeURIComponent(jobId)}/cancel`, { method: 'POST', timeoutMs: 30_000 }); }
+
+  /** PNG of the phone screen right now (short cache in the worker), or `null` when the job has no live phone. */
+  async liveScreen(jobId: string) {
+    try {
+      const response = await this.request(`/jobs/${encodeURIComponent(jobId)}/screen`, { timeoutMs: 20_000 });
+      return Buffer.from(await response.arrayBuffer());
+    } catch (error) {
+      if (error instanceof GeelarkWorkerError && error.getStatus() === HttpStatus.NOT_FOUND) return null;
+      throw error;
+    }
+  }
 
   /** PNG bytes of the last phone screen, or `null` when the worker has none. */
   async screenshot(jobId: string) {

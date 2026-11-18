@@ -53,6 +53,19 @@ export const submitLinkDecision = (tenantId: string, jobId: string, connect: boo
 export const cancelJob = (tenantId: string, jobId: string): Promise<Job> =>
   json(`${jobPath(tenantId, jobId)}/cancel`, { method: 'POST' });
 
+/** "Reenviar SMS" (sms) ou "Receber por ligação" (voice), só enquanto o cadastro espera o SMS. */
+export const requestNewCode = (tenantId: string, jobId: string, method: 'sms' | 'voice'): Promise<Job> =>
+  json(`${jobPath(tenantId, jobId)}/resend`, { method: 'POST', body: JSON.stringify({ method }) });
+
+/** Tela do phone agora (image/png), enquanto o job roda. */
+export const fetchLiveScreen = async (tenantId: string, jobId: string, signal?: AbortSignal): Promise<Blob> => {
+  const path = `${jobPath(tenantId, jobId)}/screen`;
+  let response = await apiFetch(path, { signal });
+  if (response.status === 401 && await refreshAccessToken()) response = await apiFetch(path, { signal });
+  if (!response.ok) throw new ApiError(response.status, {});
+  return response.blob();
+};
+
 /** Print da tela do phone (image/png), buscado com a autenticação do app. */
 export const fetchJobScreenshot = async (tenantId: string, jobId: string, signal?: AbortSignal): Promise<Blob> => {
   const path = `${jobPath(tenantId, jobId)}/screenshot`;

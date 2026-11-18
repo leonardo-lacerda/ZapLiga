@@ -86,6 +86,8 @@ export type CreateJob = {
   countryCode?: string;
   number?: string;
   powerOffWhenDone?: boolean;
+  /** Apaga o WhatsApp que já está no phone antes de cadastrar (a conta dele sai do phone). */
+  resetApp?: boolean;
 };
 
 /** Android 10 fica de fora: o GeeLark não libera ADB nele. */

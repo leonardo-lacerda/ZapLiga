@@ -52,6 +52,8 @@ class JobSpec:
     probe_proxy: ProbeProxySpec | None = field(default=None, repr=False)
     # "register" = cadastro completo; "network_check" = só aplica a rede, liga e confere o IP.
     mode: str = "register"
+    # Apaga os dados do app antes de abrir, mesmo com uma conta ativa nele (escolha do usuário).
+    reset_app: bool = False
 
     @property
     def full_number(self) -> str:
@@ -118,6 +120,10 @@ class PhoneAutomation(Protocol):
 
     def submit_sms_code(self, code: str) -> SmsResult:
         """Digita o código. Aceito = chegou na tela de perfil (ou depois)."""
+
+    def request_code(self, method: str) -> str:
+        """Na tela do código, pede outro por "sms" ou "voice" (ligação). Só a pedido do usuário:
+        pedir sozinho e repetidamente trava o número. Retorna a mensagem para `message`."""
 
     def save_profile(self, name: str, photo: bytes | None, photo_mime: str | None) -> str | None:
         """Preenche o perfil e vai até a lista de conversas. Retorna um aviso (ex.: foto não aplicada)."""

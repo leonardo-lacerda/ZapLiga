@@ -1392,6 +1392,9 @@ input, select { min-height: 35px; min-width: 0; padding: 8px 10px; border: 1px s
 .provisioning-result.is-success { border-color: #a6e7c4; background: var(--success-soft); color: #087443; }
 .provisioning-result.is-error { border-color: #f2b8b5; background: var(--error-soft); color: #b42318; }
 .provisioning-result .provisioning-detail { color: var(--text); font-size: 11px; }
+.provisioning-live-screen { margin-top: 12px; }
+.provisioning-live-placeholder { display: grid; place-items: center; width: 220px; height: 400px; padding: 16px; border: 1px dashed var(--border); border-radius: 12px; color: var(--subtle); font-size: 11px; text-align: center; }
+.provisioning-resend { display: grid; gap: 8px; margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--border); }
 .provisioning-screenshot { margin: 0; display: grid; gap: 6px; justify-items: start; }
 .provisioning-screenshot img { max-width: 260px; max-height: 520px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface); }
 .provisioning-screenshot figcaption { color: var(--muted); font-size: 10px; }

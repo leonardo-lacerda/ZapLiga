@@ -236,7 +236,7 @@ export class WhatsappProvisioningService implements OnModuleInit, OnModuleDestro
 
   // ---------------------------------------------------------------- jobs
 
-  async createJob(tenantId: string, actorUserId: string, input: { egressNode: string; geelarkPhoneId: string; mode?: JobMode; app?: 'whatsapp' | 'business'; countryCode?: string; number?: string; powerOffWhenDone?: boolean }) {
+  async createJob(tenantId: string, actorUserId: string, input: { egressNode: string; geelarkPhoneId: string; mode?: JobMode; app?: 'whatsapp' | 'business'; countryCode?: string; number?: string; powerOffWhenDone?: boolean; resetApp?: boolean }) {
     await this.entitlement.assertAction(tenantId, 'write', actorUserId);
     const mode: JobMode = input.mode === 'network_check' ? 'network_check' : 'register';
     const register = mode === 'register';
@@ -264,7 +264,7 @@ export class WhatsappProvisioningService implements OnModuleInit, OnModuleDestro
     let snapshot: WorkerJob;
     try {
       snapshot = await this.worker.createJob({
-        jobId: id, phoneId: phone.id, mode, ...(register ? { app: input.app, countryCode, number } : {}), proxy, probeProxy,
+        jobId: id, phoneId: phone.id, mode, ...(register ? { app: input.app, countryCode, number, resetApp: input.resetApp === true } : {}), proxy, probeProxy,
         // Empty: the worker probes the PC's IP through probeProxy and expects the phone to see the same.
         expectedEgressIps: [], powerOffWhenDone,
       });
@@ -274,7 +274,7 @@ export class WhatsappProvisioningService implements OnModuleInit, OnModuleDestro
       await this.db.query('DELETE FROM provisioning_jobs WHERE id = $1 AND tenant_id = $2', [id, tenantId]).catch(() => undefined);
       throw error;
     }
-    await this.audit.record({ actorUserId, tenantId, action: 'provisioning.started', entityType: 'provisioning_job', entityId: id, metadata: { mode, app, egressNode: pc.id, slot: pc.slot, geelarkPhoneId: phone.id } });
+    await this.audit.record({ actorUserId, tenantId, action: 'provisioning.started', entityType: 'provisioning_job', entityId: id, metadata: { mode, app, egressNode: pc.id, slot: pc.slot, geelarkPhoneId: phone.id, ...(register && input.resetApp === true ? { resetApp: true } : {}) } });
     return this.toJob(await this.applySnapshot(inserted, snapshot, actorUserId));
   }
 
@@ -298,6 +298,25 @@ export class WhatsappProvisioningService implements OnModuleInit, OnModuleDestro
     // No code in the audit trail: only the fact that one was sent.
     await this.audit.record({ actorUserId, tenantId, action: 'provisioning.sms_submitted', entityType: 'provisioning_job', entityId: row.id });
     return this.toJob(next);
+  }
+
+  /** "Reenviar SMS" / "Receber por ligação": only while waiting for the SMS, and only when the operator asks. */
+  async requestNewCode(tenantId: string, actorUserId: string, id: string, method: 'sms' | 'voice') {
+    await this.entitlement.assertAction(tenantId, 'write', actorUserId);
+    if (method !== 'sms' && method !== 'voice') throw new BadRequestException('Escolha SMS ou ligação');
+    const row = this.assertOpen(await this.findRow(tenantId, id));
+    if (row.awaiting !== 'sms') throw new ConflictException({ statusCode: 409, code: 'not_awaiting', message: 'Só dá para pedir outro código enquanto o cadastro espera o SMS.' });
+    const next = await this.withWorker(row, actorUserId, () => this.worker.sendInput(row.id, { type: method === 'voice' ? 'call_me' : 'resend_sms' }));
+    await this.audit.record({ actorUserId, tenantId, action: 'provisioning.code_requested', entityType: 'provisioning_job', entityId: row.id, metadata: { method } });
+    return this.toJob(next);
+  }
+
+  /** The phone screen right now, while the job is running (the operator watches the robot). */
+  async liveScreen(tenantId: string, id: string) {
+    const row = await this.findRow(tenantId, id);
+    const png = row.finished_at ? null : await this.worker.liveScreen(row.id);
+    if (!png) throw new NotFoundException('A tela do telefone não está disponível agora.');
+    return png;
   }
 
   async submitProfile(tenantId: string, actorUserId: string, id: string, rawName: string, photo?: UploadedPhoto) {

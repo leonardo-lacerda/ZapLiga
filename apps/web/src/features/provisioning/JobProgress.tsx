@@ -1,10 +1,11 @@
 import { useEffect, useState } from 'react';
 import { Badge, Button, Icon, Panel } from '../../components/ui';
 import { JobTimeline } from './JobTimeline';
+import { LiveScreen } from './LiveScreen';
 import { ProfileForm } from './ProfileForm';
 import { SmsCodeInput } from './SmsCodeInput';
 import { createObjectUrl, revokeObjectUrl } from './objectUrl';
-import { cancelJob, fetchJobScreenshot, submitLinkDecision, submitProfile, submitSmsCode } from './provisioning.api';
+import { cancelJob, fetchJobScreenshot, requestNewCode, submitLinkDecision, submitProfile, submitSmsCode } from './provisioning.api';
 import { appLabels, errorExplanation, formatPhone, isJobActive, isNetworkCheck, splitJobNumber, statusLabels, statusTone, stepLabel } from './provisioning.labels';
 import type { Job, WizardPrefill } from './provisioning.types';
 import { JOB_POLL_INTERVAL_MS, useProvisioningJob } from './useProvisioningJob';
@@ -71,6 +72,7 @@ export function JobProgress({ tenantId, jobId, pollIntervalMs = JOB_POLL_INTERVA
       <div className="provisioning-action">
         <JobAction job={job} tenantId={tenantId} run={run} onNewJob={onNewJob} onOpenNumbers={onOpenNumbers} />
       </div>
+      {active && <LiveScreen tenantId={tenantId} jobId={job.id} />}
 
       <div className="provisioning-inline-actions">
         {active && <Button variant="danger" icon="close" onClick={() => void cancel()} disabled={cancelling}>{cancelling ? 'Cancelando…' : network ? 'Cancelar teste' : 'Cancelar cadastro'}</Button>}
@@ -132,6 +134,7 @@ function JobAction({ job, tenantId, run, onNewJob, onOpenNumbers }: ActionProps)
         ? <div className="alert alert-warning" role="alert"><Icon name="alert" size={17} /><span>{job.message}</span></div>
         : <p className="form-hint">{job.message}</p>)}
       <SmsCodeInput onSubmit={(code) => run(() => submitSmsCode(tenantId, job.id, code))} />
+      <ResendCode job={job} tenantId={tenantId} run={run} />
     </div>;
   }
   if (job.status === 'waiting_input' && job.awaiting === 'profile') {
@@ -149,6 +152,22 @@ function JobAction({ job, tenantId, run, onNewJob, onOpenNumbers }: ActionProps)
     <div>
       <strong>{linking ? 'Conectando ao ZapLiga…' : `${stepLabel(job.step)}…`}</strong>
       <small>{job.message ?? (linking ? 'O robô está digitando o código de conexão no phone. Não precisa fazer nada.' : 'O robô está trabalhando. Esta tela atualiza sozinha.')}</small>
+    </div>
+  </div>;
+}
+
+/** O SMS não chegou: o robô aperta "Reenviar SMS" ou "Ligar para mim" quando o WhatsApp liberar. */
+function ResendCode({ job, tenantId, run }: { job: Job; tenantId: string; run: ActionProps['run'] }) {
+  const [busy, setBusy] = useState<'' | 'sms' | 'voice'>('');
+  const ask = async (method: 'sms' | 'voice') => {
+    setBusy(method);
+    try { await run(() => requestNewCode(tenantId, job.id, method)); } finally { setBusy(''); }
+  };
+  return <div className="provisioning-resend">
+    <span className="form-hint">Não chegou? Olhe a tela do phone abaixo: se o WhatsApp mandou o código para outro aparelho, ele avisa ali.</span>
+    <div className="provisioning-inline-actions">
+      <Button variant="secondary" icon="refresh" onClick={() => void ask('sms')} disabled={Boolean(busy)}>{busy === 'sms' ? 'Pedindo…' : 'Reenviar SMS'}</Button>
+      <Button variant="secondary" icon="phone" onClick={() => void ask('voice')} disabled={Boolean(busy)}>{busy === 'voice' ? 'Pedindo…' : 'Receber por ligação'}</Button>
     </div>
   </div>;
 }

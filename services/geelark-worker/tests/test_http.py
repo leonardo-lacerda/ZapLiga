@@ -151,6 +151,21 @@ def test_network_check_job_over_http(client, factory):
     assert resp.status_code == 400
 
 
+def test_live_screen_and_resend_over_http(client, factory):
+    body = job_body(jobId="live-1")
+    assert client.post("/jobs", headers=H, json=body).status_code == 201
+    wait_for(lambda: client.manager.get("live-1").awaiting == "sms")
+    resp = client.get("/jobs/live-1/screen", headers=H)
+    assert resp.status_code == 200 and resp.headers["content-type"] == "image/png"
+    assert resp.headers["cache-control"] == "no-store"
+    job = client.post("/jobs/live-1/input", headers=H, json={"type": "call_me"}).json()
+    assert job["awaiting"] in ("sms", None)
+    wait_for(lambda: client.manager.get("live-1").message == "pedido voice")
+    client.post("/jobs/live-1/cancel", headers=H)
+    wait_for(lambda: client.manager.get("live-1").finished.is_set())
+    assert client.get("/jobs/live-1/screen", headers=H).status_code == 404
+
+
 def test_stop_phone(client, geelark):
     assert client.post("/phones/p1/stop", headers=H).json() == {"ok": True}
     geelark.stop_phone.assert_called_once_with("p1")

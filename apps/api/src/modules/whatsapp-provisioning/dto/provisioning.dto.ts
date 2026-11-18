@@ -13,6 +13,8 @@ export class CreateProvisioningJobDto {
   @ValidateIf(isRegister) @IsString() @MaxLength(8) countryCode?: string;
   @ValidateIf(isRegister) @IsString() @MaxLength(32) number?: string;
   @IsOptional() @IsBoolean() powerOffWhenDone?: boolean;
+  // Wipe the WhatsApp already on the phone first (signs out the account that is there).
+  @IsOptional() @IsBoolean() resetApp?: boolean;
 }
 
 export const ANDROID_VERSIONS = ['Android 12', 'Android 13', 'Android 14', 'Android 15', 'Android 16', 'Android 11'] as const;
@@ -35,6 +37,10 @@ export class SubmitSmsCodeDto {
 export class SubmitProfileDto {
   // WhatsApp limits the profile name to 25 characters.
   @IsString() @MinLength(1) @MaxLength(25) name!: string;
+}
+
+export class RequestCodeDto {
+  @IsIn(['sms', 'voice']) method!: 'sms' | 'voice';
 }
 
 export class LinkDecisionDto {

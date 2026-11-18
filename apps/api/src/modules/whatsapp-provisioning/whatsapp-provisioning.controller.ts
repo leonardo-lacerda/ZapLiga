@@ -2,7 +2,7 @@ import { Body, Controller, Get, Header, HttpCode, Param, Post, Put, Query, Strea
 import { FileInterceptor } from '@nestjs/platform-express';
 import { AuthGuard, CurrentTenant, CurrentUser, Roles, RolesGuard, TenantMembershipGuard } from '../auth/auth.guards';
 import { FeatureFlagGuard, RequiresFeature } from '../feature-flags/feature-flags.guard';
-import { AssignEgressNodeDto, CreatePhoneDto, CreateProvisioningJobDto, LinkDecisionDto, SubmitProfileDto, SubmitSmsCodeDto } from './dto/provisioning.dto';
+import { AssignEgressNodeDto, CreatePhoneDto, CreateProvisioningJobDto, LinkDecisionDto, RequestCodeDto, SubmitProfileDto, SubmitSmsCodeDto } from './dto/provisioning.dto';
 import { MAX_PROFILE_PHOTO_BYTES, WhatsappProvisioningService } from './whatsapp-provisioning.service';
 
 /** WhatsApp registration on GeeLark cloud phones (internal; docs/provisioning-contract.md section 3). */
@@ -43,6 +43,16 @@ export class WhatsappProvisioningController {
   @Post('/jobs/:id/sms')
   @HttpCode(200)
   sms(@Param('id') id: string, @Body() body: SubmitSmsCodeDto, @CurrentTenant() tenantId: string, @CurrentUser() user: any) { return this.provisioning.submitSms(tenantId, user.id, id, body.code); }
+
+  @Post('/jobs/:id/resend')
+  @HttpCode(200)
+  resend(@Param('id') id: string, @Body() body: RequestCodeDto, @CurrentTenant() tenantId: string, @CurrentUser() user: any) { return this.provisioning.requestNewCode(tenantId, user.id, id, body.method); }
+
+  @Get('/jobs/:id/screen')
+  @Header('Cache-Control', 'no-store')
+  async screen(@Param('id') id: string, @CurrentTenant() tenantId: string) {
+    return new StreamableFile(await this.provisioning.liveScreen(tenantId, id), { type: 'image/png' });
+  }
 
   @Post('/jobs/:id/profile')
   @HttpCode(200)

@@ -48,6 +48,8 @@ class CreateWorkerJob(_Body):
     probeProxy: ProbeProxyIn | None = None
     expectedEgressIps: list[str] = Field(default_factory=list, max_length=32)
     powerOffWhenDone: bool = True
+    # Apagar o WhatsApp que já está no phone (desconecta a conta que estiver nele).
+    resetApp: bool = False
 
     @model_validator(mode="after")
     def register_needs_number(self) -> "CreateWorkerJob":
@@ -69,6 +71,7 @@ class CreateWorkerJob(_Body):
             proxy=ProxySpec(p.typeId, p.server, p.port, p.username, p.password),
             expected_egress_ips=tuple(ip.strip() for ip in self.expectedEgressIps if ip.strip()),
             power_off_when_done=self.powerOffWhenDone,
+            reset_app=self.resetApp,
             probe_proxy=(ProbeProxySpec(probe.server, probe.port, probe.username, probe.password)
                          if probe is not None else None),
         )
@@ -138,6 +141,14 @@ class ProfileInput(_Body):
         return data
 
 
+class ResendSmsInput(_Body):
+    type: Literal["resend_sms"]
+
+
+class CallMeInput(_Body):
+    type: Literal["call_me"]
+
+
 class LinkInput(_Body):
     type: Literal["link"]
 
@@ -160,6 +171,6 @@ class PairCodeInput(_Body):
 
 
 JobInput = Annotated[
-    Union[SmsInput, ProfileInput, LinkInput, FinishInput, PairCodeInput],
+    Union[SmsInput, ResendSmsInput, CallMeInput, ProfileInput, LinkInput, FinishInput, PairCodeInput],
     Field(discriminator="type"),
 ]

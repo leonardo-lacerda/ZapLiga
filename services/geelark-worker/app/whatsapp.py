@@ -72,6 +72,13 @@ class Screen(Enum):
 # ------------------------------------------------------------- textos (EN + pt-BR)
 SKIP_TEXT = r"(?i)^(not now|agora não|skip|pular|later|mais tarde|no,? thanks|não,? obrigad[oa])$"
 CONFIRM_TEXT = r"(?i)^(yes|sim|ok|confirm|confirmar|continue|continuar)$"
+# Tela do código: pedir de novo. Enquanto o relógio corre o texto vem com a contagem
+# ("Reenviar SMS em 0:45"); no WhatsApp novo as opções ficam atrás de "Não recebeu o código?".
+RESEND_SMS_TEXT = r"(?is)^(resend sms|reenviar( o)? sms|send sms again|enviar sms (de )?novamente)( .*)?$"
+CALL_ME_TEXT = r"(?is)^(call me|ligar para mim|me ligue|ligue-me|receber (uma )?liga[cç][aã]o)( .*)?$"
+DIDNT_RECEIVE_TEXT = r"(?is).*(didn.?t (get|receive) (the |a |your )?code|n[aã]o recebeu (o |um )?c[oó]digo).*"
+COUNTDOWN = re.compile(r"\d{1,2}:\d{2}")
+
 # Janela depois de digitar o número; o texto muda entre versões ("O número está certo?",
 # "Este número está correto?", "Is this the correct number?"...). O "Sim" pede o SMS.
 CONFIRM_NUMBER_TEXT = (

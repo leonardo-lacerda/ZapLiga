@@ -159,6 +159,7 @@ describe('ProvisioningWizard — passos 1 a 3', () => {
 
     await vi.waitFor(() => expect(onJobCreated).toHaveBeenCalled());
     expect(created).toEqual({ egressNode: 'a55241de-0000-4000-8000-000000000001', geelarkPhoneId: 'phone-2', app: 'business', countryCode: '55', number: '11987654321' });
+    expect(screen.getByRole('checkbox', { name: /Apagar o WhatsApp Business que já está neste telefone/ })).not.toBeChecked();
   });
 
   it('volta para a rede quando a API recusa porque o PC ficou offline', async () => {

@@ -56,6 +56,10 @@ class FakeAutomation:
         return self.egress
 
     def install_app(self): self._do("install_app")
+
+    def request_code(self, method):
+        self._do(f"request_code:{method}")
+        return f"pedido {method}"
     def open_app(self): self._do("open_app")
     def enter_number(self): self._do("enter_number")
 

@@ -106,6 +106,7 @@ const makeService = (options: { tailscaleConnected?: boolean; pcs?: Pc[] } = {})
     cancelJob: jest.fn().mockResolvedValue(workerJob({ status: 'cancelled', step: 'cancelled' })),
     stopPhone: jest.fn().mockResolvedValue({ ok: true }),
     screenshot: jest.fn(),
+    liveScreen: jest.fn(),
   };
   const pcs: Pc[] = options.pcs ?? [
     { id: PC_ID, name: 'PC da Ana', slot: 'edge-1', online: true },
@@ -269,7 +270,7 @@ describe('WhatsappProvisioningService — job creation', () => {
     expect(ctx.entitlement.assertAction).toHaveBeenCalledWith(TENANT, 'write', USER);
     expect(ctx.egress.pcExits).toHaveBeenCalledWith(PC_ID);
     expect(ctx.worker.createJob).toHaveBeenCalledWith({
-      jobId: job.id, phoneId: 'phone-1', mode: 'register', app: 'whatsapp', countryCode: '55', number: '11987654321',
+      jobId: job.id, phoneId: 'phone-1', mode: 'register', app: 'whatsapp', countryCode: '55', number: '11987654321', resetApp: false,
       proxy: { typeId: 1, server: '209.50.229.249', port: 1080, username: 'edge-1', password: 'gateway-secret' },
       probeProxy: { server: 'socks-gateway', port: 1080, username: 'edge-1', password: 'gateway-secret' },
       expectedEgressIps: [], powerOffWhenDone: true,
@@ -281,6 +282,13 @@ describe('WhatsappProvisioningService — job creation', () => {
     // The gateway password goes to the worker only, never to the job copy or the audit trail.
     expect(JSON.stringify([...ctx.db.jobs.values()])).not.toContain('gateway-secret');
     expect(JSON.stringify(ctx.audit.record.mock.calls)).not.toContain('gateway-secret');
+  });
+
+  it('passes "wipe the WhatsApp on this phone" to the worker and audits it', async () => {
+    const ctx = makeService();
+    await ctx.service.createJob(TENANT, USER, { ...createInput, resetApp: true });
+    expect(ctx.worker.createJob).toHaveBeenCalledWith(expect.objectContaining({ resetApp: true }));
+    expect(ctx.audit.record).toHaveBeenCalledWith(expect.objectContaining({ action: 'provisioning.started', metadata: expect.objectContaining({ resetApp: true }) }));
   });
 
   it('uses the configured public port and internal address', async () => {
@@ -409,6 +417,40 @@ describe('WhatsappProvisioningService — profile', () => {
     const big = Buffer.alloc(2 * 1024 * 1024 + 1, 0xff);
     await expect(ctx.service.submitProfile(TENANT, USER, id, 'Ana', { buffer: big, size: big.length })).rejects.toMatchObject({ status: 400 });
     expect(ctx.worker.sendInput).not.toHaveBeenCalled();
+  });
+});
+
+describe('WhatsappProvisioningService — SMS help (live screen, resend, call)', () => {
+  it('asks the worker for another code only while waiting for the SMS, and audits the method', async () => {
+    const ctx = makeService();
+    const id = await startJob(ctx);
+    ctx.worker.getJob.mockResolvedValueOnce(workerJob({ jobId: id, status: 'waiting_input', step: 'waiting_sms', awaiting: 'sms' }));
+    await ctx.service.getJob(TENANT, USER, id);
+    ctx.worker.sendInput.mockResolvedValue(workerJob({ jobId: id, status: 'waiting_input', step: 'waiting_sms', awaiting: 'sms', message: 'Pedimos uma ligação com o código.' }));
+
+    const job = await ctx.service.requestNewCode(TENANT, USER, id, 'voice');
+
+    expect(ctx.worker.sendInput).toHaveBeenCalledWith(id, { type: 'call_me' });
+    expect(job).toMatchObject({ awaiting: 'sms', message: 'Pedimos uma ligação com o código.' });
+    expect(ctx.audit.record).toHaveBeenCalledWith(expect.objectContaining({ action: 'provisioning.code_requested', metadata: { method: 'voice' } }));
+    await ctx.service.requestNewCode(TENANT, USER, id, 'sms');
+    expect(ctx.worker.sendInput).toHaveBeenLastCalledWith(id, { type: 'resend_sms' });
+  });
+
+  it('refuses another code outside the SMS wait', async () => {
+    const ctx = makeService();
+    const id = await startJob(ctx);
+    await expect(ctx.service.requestNewCode(TENANT, USER, id, 'sms')).rejects.toMatchObject({ status: 409 });
+    expect(ctx.worker.sendInput).not.toHaveBeenCalled();
+  });
+
+  it('serves the live screen while the job runs and 404 once it is over', async () => {
+    const ctx = makeService();
+    const id = await startJob(ctx);
+    ctx.worker.liveScreen.mockResolvedValue(Buffer.from([137, 80, 78, 71]));
+    expect(await ctx.service.liveScreen(TENANT, id)).toEqual(Buffer.from([137, 80, 78, 71]));
+    ctx.db.jobs.get(id).finished_at = new Date();
+    await expect(ctx.service.liveScreen(TENANT, id)).rejects.toMatchObject({ status: 404 });
   });
 });
 

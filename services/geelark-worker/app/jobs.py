@@ -40,7 +40,7 @@ HANDOFF_MAX_S = 600
 
 # awaiting -> tipos de JobInput aceitos
 ACCEPTED_INPUTS = {
-    "sms": {"sms"},
+    "sms": {"sms", "resend_sms", "call_me"},
     "profile": {"profile"},
     "link_decision": {"link", "finish"},
     "pair_code": {"pair_code"},
@@ -99,6 +99,10 @@ class Job:
         self.wake = threading.Event()
         self.pending_input: dict[str, Any] | None = None
         self.finished = threading.Event()  # thread terminou (phone desligado e liberado)
+        # Automação viva do job (para o print ao vivo); None antes de ligar e depois de terminar.
+        self.auto: PhoneAutomation | None = None
+        self.screen_lock = threading.Lock()
+        self.live_screen: tuple[float, bytes] | None = None
 
     @property
     def terminal(self) -> bool:
@@ -235,6 +239,27 @@ class JobManager:
             if i < excess or now - (job.finished_mono or now) > FINISHED_RETENTION_S:
                 self._jobs.pop(job.spec.job_id, None)
 
+    # ------------------------------------------------------ tela ao vivo
+    def live_screen(self, job_id: str, max_age_s: float = 2.0) -> bytes | None:
+        """Print da tela do phone agora (cache curto: a página consulta a cada poucos segundos)."""
+        with self._lock:
+            job = self._require(job_id)
+            auto = job.auto if not job.terminal else None
+        if auto is None:
+            return None
+        with job.screen_lock:
+            cached = job.live_screen
+            if cached and time.monotonic() - cached[0] < max_age_s:
+                return cached[1]
+            try:
+                png = auto.screenshot()
+            except Exception as exc:
+                log.info("[%s] sem print ao vivo (%s)", job_id, type(exc).__name__)
+                return cached[1] if cached else None
+            if png:
+                job.live_screen = (time.monotonic(), png)
+            return png
+
     # ---------------------------------------------------------- vigia
     def sweep_handed(self, now: float | None = None) -> list[str]:
         """Desliga os phones entregues à API ligados há mais de `handoff_max_s`.
@@ -338,6 +363,8 @@ class JobManager:
         outcome: tuple[str, str, str] | None = None  # (status, errorCode, message)
         try:
             auto = self._factory(spec, ctx)
+            with self._lock:
+                job.auto = auto
             self._flow(job, ctx, auto)
         except JobCancelled:
             outcome = ("cancelled", "cancelled", "Cadastro cancelado.")
@@ -359,6 +386,8 @@ class JobManager:
     def _cleanup(self, job: Job, auto: PhoneAutomation | None,
                  outcome: tuple[str, str, str] | None) -> None:
         spec = job.spec
+        with self._lock:
+            job.auto = None  # sem print ao vivo de um phone que vai desligar
         try:
             if outcome and outcome[0] == "failed" and auto is not None and not job.terminal:
                 self._capture(job, auto, outcome[1])
@@ -488,6 +517,9 @@ class JobManager:
         attempts = 0
         while True:
             inp = self._wait_input(job, ctx, "waiting_sms", "sms", message)
+            if inp["type"] in ("resend_sms", "call_me"):
+                message = auto.request_code("voice" if inp["type"] == "call_me" else "sms")
+                continue
             self._set_step(job, "verifying")
             result = auto.submit_sms_code(inp["code"])
             del inp

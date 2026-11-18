@@ -8,6 +8,14 @@ import { API, egressNode, historyOf, job, phone } from './provisioning.fixtures'
 import { ProvisioningPage } from './ProvisioningPage';
 import type { Job } from './provisioning.types';
 
+// A tela ao vivo e o quadro de telefones fazem polling em toda a página: respostas neutras por padrão.
+beforeEach(() => {
+  server.use(
+    http.get(`${API}/jobs/:id/screen`, () => new HttpResponse(null, { status: 404 })),
+    http.get(`${API}/phones`, () => HttpResponse.json({ items: [] })),
+  );
+});
+
 const POLL_MS = 15;
 
 const originalUrl = { create: URL.createObjectURL, revoke: URL.revokeObjectURL };
@@ -172,6 +180,33 @@ it('reabre um cadastro em andamento pela lista de cadastros recentes', async () 
   render(<ProvisioningPage tenantId="tenant-1" allowed onOpenNumbers={vi.fn()} pollIntervalMs={POLL_MS} />);
   await userEvent.click(await screen.findByRole('button', { name: /Acompanhar cadastro de \+55 11 98765-4321/ }));
   expect(await screen.findByLabelText('Código SMS')).toBeInTheDocument();
+});
+
+it('na espera do SMS mostra a tela do phone ao vivo e pede reenvio ou ligação', async () => {
+  const methods: string[] = [];
+  let screenCalls = 0;
+  let current = job({ status: 'waiting_input', step: 'waiting_sms', awaiting: 'sms', message: 'Digite o código recebido por SMS.', history: historyOf('queued', 'entering_number', 'waiting_sms') });
+  server.use(
+    http.get(`${API}/jobs/job-1`, () => HttpResponse.json(current)),
+    http.get(`${API}/jobs/job-1/screen`, () => { screenCalls += 1; return new HttpResponse(new Uint8Array([137, 80, 78, 71]), { headers: { 'content-type': 'image/png' } }); }),
+    http.post(`${API}/jobs/job-1/resend`, async ({ request }) => {
+      const { method } = await request.json() as { method: string };
+      methods.push(method);
+      current = job({ ...current, message: method === 'voice' ? 'Pedimos uma ligação com o código. Aguarde e digite o código quando chegar.' : 'Pedimos um novo SMS. Aguarde e digite o código quando chegar.' });
+      return HttpResponse.json(current);
+    }),
+  );
+  render(<JobProgress tenantId="tenant-1" jobId="job-1" pollIntervalMs={POLL_MS} onBack={vi.fn()} onNewJob={vi.fn()} onOpenNumbers={vi.fn()} />);
+
+  expect(await screen.findByText(/Tela do phone ao vivo/)).toBeInTheDocument();
+  await vi.waitFor(() => expect(screenCalls).toBeGreaterThan(0));
+  await userEvent.click(screen.getByRole('button', { name: 'Receber por ligação' }));
+  expect(await screen.findByText(/Pedimos uma ligação com o código/)).toBeInTheDocument();
+  await userEvent.click(screen.getByRole('button', { name: 'Reenviar SMS' }));
+  expect(await screen.findByText(/Pedimos um novo SMS/)).toBeInTheDocument();
+  expect(methods).toEqual(['voice', 'sms']);
+  // O campo do código continua disponível.
+  expect(screen.getByLabelText('Código SMS')).toBeInTheDocument();
 });
 
 it('teste de internet: mostra o telefone, o IP conferido e leva ao cadastro nesse telefone', async () => {

@@ -193,6 +193,13 @@ def create_app(
     def cancel_job(job_id: str) -> dict:
         return manager.snapshot(manager.cancel(job_id))
 
+    @app.get("/jobs/{job_id}/screen", dependencies=auth)
+    def live_screen(job_id: str) -> Response:
+        png = manager.live_screen(job_id)
+        if not png:
+            raise ApiError(404, "not_found", "Sem tela ao vivo: o job ainda não conectou ao phone ou já terminou.")
+        return Response(content=png, media_type="image/png", headers={"Cache-Control": "no-store"})
+
     @app.get("/jobs/{job_id}/screenshot", dependencies=auth)
     def screenshot(job_id: str) -> Response:
         job = _job_or_404(job_id)

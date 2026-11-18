@@ -73,6 +73,45 @@ def test_happy_path_sms_profile_link_pair_code(manager, factory):
     assert manager.known_apps("phone-1") == {"whatsapp": True, "business": False}
 
 
+def test_resend_and_call_while_waiting_sms(manager, factory):
+    manager.create(make_spec())
+    awaiting(manager, "job-1", "sms")
+    manager.submit_input("job-1", {"type": "resend_sms"})
+    wait_for(lambda: manager.get("job-1").message == "pedido sms" and manager.get("job-1").awaiting == "sms")
+    manager.submit_input("job-1", {"type": "call_me"})
+    wait_for(lambda: manager.get("job-1").message == "pedido voice" and manager.get("job-1").awaiting == "sms")
+    calls = factory.instances["job-1"].calls
+    assert calls[-2:] == ["request_code:sms", "request_code:voice"]
+    # O código continua aceito depois dos pedidos.
+    manager.submit_input("job-1", {"type": "sms", "code": "123456"})
+    awaiting(manager, "job-1", "profile")
+    manager.cancel("job-1")
+
+
+def test_resend_is_refused_outside_the_sms_wait(manager):
+    manager.create(make_spec())
+    awaiting(manager, "job-1", "sms")
+    manager.submit_input("job-1", {"type": "sms", "code": "123456"})
+    awaiting(manager, "job-1", "profile")
+    with pytest.raises(ApiError) as exc:
+        manager.submit_input("job-1", {"type": "resend_sms"})
+    assert exc.value.code == "not_awaiting"
+    manager.cancel("job-1")
+
+
+def test_live_screen_while_running_and_none_after():
+    factory = FakeFactory()
+    manager = JobManager(factory, input_timeout_s=5, job_timeout_s=10)
+    manager.create(make_spec())
+    awaiting(manager, "job-1", "sms")
+    first = manager.live_screen("job-1")
+    assert first == PNG
+    assert manager.live_screen("job-1") == first  # cache curto
+    manager.cancel("job-1")
+    finished(manager, "job-1")
+    assert manager.live_screen("job-1") is None
+
+
 def run_to_handoff(manager):
     manager.create(make_spec())
     for awaited, inp in (("sms", {"type": "sms", "code": "123456"}),

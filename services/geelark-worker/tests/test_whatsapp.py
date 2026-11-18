@@ -39,6 +39,9 @@ def java_matches(pattern: str, text: str) -> bool:
     (wa.MORE_OPTIONS["descriptionMatches"], ["More options", "Mais opções"]),
     (wa.BANNED_TEXT, ["This account is not allowed to use WhatsApp.", "Esta conta não pode usar o WhatsApp."]),
     (wa.WAIT_LIMIT_TEXT, ["Please wait 2 hours", "Tente novamente em 5 horas"]),
+    (wa.RESEND_SMS_TEXT, ["Reenviar SMS", "Reenviar SMS em 0:45", "Resend SMS", "Resend SMS in 1:02"]),
+    (wa.CALL_ME_TEXT, ["Ligar para mim", "Ligar para mim em 1:00", "Call me", "Receber ligação"]),
+    (wa.DIDNT_RECEIVE_TEXT, ["Não recebeu o código?", "Didn't receive code?", "Didn’t get the code?"]),
     (wa.CONFIRM_NUMBER_TEXT, ["O número está certo?", "Este número está correto?", "Is this the correct number?",
                               "Is this the right phone number?", "Is your phone number correct?",
                               "Confirme o número de telefone"]),
@@ -211,6 +214,80 @@ def test_permission_dialog_maps_to_internal_with_clear_message():
             pytest.raises(JobError) as exc:
         auto._handle_permission()
     assert exc.value.code == "internal" and exc.value.message == PERMISSION_TODO_MESSAGE
+
+
+def test_drive_reopens_the_app_when_the_home_screen_is_in_front():
+    auto = make_auto(mock.Mock())
+    auto.d = mock.Mock()
+    auto.d.app_current.side_effect = [{"package": "com.android.launcher3"}, {"package": "com.whatsapp"}]
+    auto._pause = lambda *a: None
+    screens = iter([Screen.UNKNOWN, Screen.PHONE_ENTRY])
+    with mock.patch.object(wa, "detect_screen", side_effect=lambda *a: next(screens)):
+        assert auto._drive({Screen.PHONE_ENTRY}, what="digitar número") == Screen.PHONE_ENTRY
+    auto.d.app_start.assert_called_once_with("com.whatsapp", wait=True)
+
+
+def test_drive_gives_up_when_the_app_keeps_closing():
+    auto = make_auto(mock.Mock())
+    auto.d = mock.Mock()
+    auto.d.app_current.return_value = {"package": "com.android.launcher3"}
+    auto._pause = lambda *a: None
+    with mock.patch.object(wa, "detect_screen", return_value=Screen.UNKNOWN), pytest.raises(JobError) as exc:
+        auto._drive({Screen.PHONE_ENTRY}, what="digitar número")
+    assert "não fica aberto" in exc.value.message
+    assert auto.d.app_start.call_count == 3
+
+
+def test_drive_waits_on_system_dialogs_instead_of_reopening():
+    auto = make_auto(mock.Mock())
+    auto.d = mock.Mock()
+    auto.d.app_current.return_value = {"package": "com.google.android.gms"}
+    auto._pause = lambda *a: None
+    screens = iter([Screen.UNKNOWN, Screen.PHONE_ENTRY])
+    with mock.patch.object(wa, "detect_screen", side_effect=lambda *a: next(screens)):
+        auto._drive({Screen.PHONE_ENTRY}, what="digitar número")
+    auto.d.app_start.assert_not_called()
+
+
+def make_open_app(reset_app=False, pm_out="Success"):
+    auto = make_auto(mock.Mock())
+    auto.spec = make_spec(reset_app=reset_app)
+    auto.d = mock.Mock()
+    auto.d.app_current.return_value = {"package": "com.whatsapp"}
+    auto._pause = lambda *a: None
+    shell = []
+    auto._shell = lambda cmd, timeout=30: (shell.append(cmd), pm_out)[1]
+    return auto, shell
+
+
+def test_open_app_clears_a_half_done_registration_and_goes_on():
+    auto, shell = make_open_app()
+    screens = iter([Screen.VERIFY_CODE, Screen.EULA, Screen.PHONE_ENTRY])
+    with mock.patch.object(wa, "detect_screen", side_effect=lambda *a: next(screens)),             mock.patch.object(auto, "_common_actions", return_value={Screen.EULA: lambda: None}):
+        auto.open_app()
+    assert shell == [["pm", "clear", "com.whatsapp"]]
+    assert auto.d.app_start.call_count == 2
+
+
+def test_open_app_never_wipes_an_active_account_on_its_own():
+    auto, shell = make_open_app()
+    with mock.patch.object(wa, "detect_screen", return_value=Screen.CHATS), pytest.raises(JobError) as exc:
+        auto.open_app()
+    assert shell == [] and "Apagar o WhatsApp que já está neste telefone" in exc.value.message
+
+
+def test_open_app_wipes_first_when_the_user_asked():
+    auto, shell = make_open_app(reset_app=True)
+    with mock.patch.object(wa, "detect_screen", return_value=Screen.PHONE_ENTRY):
+        auto.open_app()
+    assert shell == [["pm", "clear", "com.whatsapp"]]
+
+
+def test_clear_app_failure_is_reported():
+    auto, _ = make_open_app(reset_app=True, pm_out="Failed")
+    with pytest.raises(JobError) as exc:
+        auto.open_app()
+    assert "Não consegui limpar" in exc.value.message
 
 
 def test_connect_adb_rejects_android_10():
