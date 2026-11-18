@@ -215,6 +215,19 @@ describe('WhatsappProvisioningService — phones created from ZapLiga', () => {
     expect(JSON.stringify(ctx.audit.record.mock.calls)).not.toContain('gateway-secret');
   });
 
+  it('powers a phone off from ZapLiga and audits it', async () => {
+    const ctx = makeService();
+    ctx.worker.listPhones.mockResolvedValue([{ id: 'phone-1', name: 'Phone 2', status: 'on', android: 'Android 12', proxy: null, apps: { whatsapp: true, business: false }, busyJobId: 'job-7' }]);
+
+    const phone = await ctx.service.powerOffPhone(TENANT, USER, 'phone-1');
+
+    expect(phone).toMatchObject({ id: 'phone-1', status: 'off', busyJobId: null });
+    expect(ctx.entitlement.assertAction).toHaveBeenCalledWith(TENANT, 'write', USER);
+    expect(ctx.worker.stopPhone).toHaveBeenCalledWith('phone-1');
+    expect(ctx.audit.record).toHaveBeenCalledWith(expect.objectContaining({ action: 'provisioning.phone_stopped', entityId: 'phone-1', metadata: { previousStatus: 'on', cancelledJob: 'job-7' } }));
+    await expect(ctx.service.powerOffPhone(TENANT, USER, 'phone-x')).rejects.toMatchObject({ status: 404 });
+  });
+
   it('refuses an offline PC, an empty name or Android 10 before calling GeeLark', async () => {
     const ctx = makeService();
     (ctx.worker as any).createPhone = jest.fn();

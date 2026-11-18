@@ -208,6 +208,20 @@ export class WhatsappProvisioningService implements OnModuleInit, OnModuleDestro
     return phone;
   }
 
+  /**
+   * Powers a phone off from ZapLiga (GeeLark bills every minute it is on). If a
+   * registration is running on it, the worker cancels it first; the job copy
+   * catches up on the next GET or sweep.
+   */
+  async powerOffPhone(tenantId: string, actorUserId: string, phoneId: string) {
+    await this.entitlement.assertAction(tenantId, 'write', actorUserId);
+    const phone = (await this.worker.listPhones()).find((item) => item.id === phoneId);
+    if (!phone) throw new NotFoundException({ statusCode: 404, code: 'phone_not_found', message: 'Telefone não encontrado no GeeLark.' });
+    await this.worker.stopPhone(phone.id);
+    await this.audit.record({ actorUserId, tenantId, action: 'provisioning.phone_stopped', entityType: 'geelark_phone', entityId: phone.id, metadata: { previousStatus: phone.status, cancelledJob: phone.busyJobId ?? null } });
+    return { ...phone, status: 'off' as const, busyJobId: null };
+  }
+
   /** The PC's slot is resolved now (it may change later) and must be going out through the PC right now. */
   private async onlineEgress(rawNode: string) {
     const socks = egressSocksConfig();

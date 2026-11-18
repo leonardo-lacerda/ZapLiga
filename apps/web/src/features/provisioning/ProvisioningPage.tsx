@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { Badge, Button, EmptyState, Panel } from '../../components/ui';
 import { JobProgress } from './JobProgress';
+import { PhonesPanel } from './PhonesPanel';
 import { ProvisioningWizard } from './ProvisioningWizard';
 import { RecentJobs } from './RecentJobs';
 import type { WizardPrefill } from './provisioning.types';
@@ -40,5 +41,6 @@ export function ProvisioningPage({ tenantId, currentUserId, allowed, onOpenNumbe
         <ProvisioningWizard key={view.key} tenantId={tenantId} currentUserId={currentUserId} prefill={view.prefill} onJobCreated={(job) => setView({ kind: 'job', jobId: job.id })} />
         <RecentJobs tenantId={tenantId} onOpen={(jobId) => setView({ kind: 'job', jobId })} />
       </>}
+    <PhonesPanel tenantId={tenantId} />
   </div>;
 }

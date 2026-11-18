@@ -30,6 +30,10 @@ export class WhatsappProvisioningController {
   @Post('/jobs')
   create(@Body() body: CreateProvisioningJobDto, @CurrentTenant() tenantId: string, @CurrentUser() user: any) { return this.provisioning.createJob(tenantId, user.id, body); }
 
+  @Post('/phones/:id/stop')
+  @HttpCode(200)
+  stopPhone(@Param('id') id: string, @CurrentTenant() tenantId: string, @CurrentUser() user: any) { return this.provisioning.powerOffPhone(tenantId, user.id, id); }
+
   @Get('/jobs')
   list(@Query('limit') limit: string | undefined, @CurrentTenant() tenantId: string) { return this.provisioning.listJobs(tenantId, Number(limit)); }
 

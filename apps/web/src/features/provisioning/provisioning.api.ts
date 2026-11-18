@@ -22,6 +22,10 @@ export const fetchPhones = async (tenantId: string): Promise<Phone[]> => {
 export const createPhone = (tenantId: string, input: CreatePhone): Promise<Phone> =>
   json(`${base(tenantId)}/phones`, { method: 'POST', body: JSON.stringify(input) });
 
+/** Desliga o phone no GeeLark; se houver um cadastro nele, o worker cancela antes. */
+export const stopPhone = (tenantId: string, phoneId: string): Promise<Phone> =>
+  json(`${base(tenantId)}/phones/${encodeURIComponent(phoneId)}/stop`, { method: 'POST' });
+
 export const createJob = (tenantId: string, input: CreateJob): Promise<Job> =>
   json(`${base(tenantId)}/jobs`, { method: 'POST', body: JSON.stringify(input) });
 
