@@ -42,7 +42,9 @@ export type ProvisioningJobRow = {
 export type EgressNode = { node: string; label: string; pcName: string; online: boolean; publicIps: string[]; userId: string | null; userName: string | null; isMine: boolean };
 type EgressPc = { id: string; name: string; slot: string; online: boolean };
 type FinishOutcome = { status: 'failed' | 'cancelled' | 'done'; errorCode: string | null; message: string; linked?: boolean };
-const LINKED_MESSAGE = 'Número cadastrado e conectado ao ZapLiga.';
+/** A freshly registered account stays out of the dialer this long (docs/estudo-bloqueio-numero-geelark.md). */
+const WARMUP_HOURS = 72;
+const LINKED_MESSAGE = `Número cadastrado e conectado ao ZapLiga pelo PC do cadastro. Ele fica ${WARMUP_HOURS} h em aquecimento, sem ligar: use-o como uma pessoa usaria (mensagens, status, contatos).`;
 type Assignment = { user_id: string | null; user_name: string | null };
 type UploadedPhoto = { buffer: Buffer; size: number; mimetype?: string };
 
@@ -542,15 +544,22 @@ export class WhatsappProvisioningService implements OnModuleInit, OnModuleDestro
       current = await this.applySnapshot(current, snapshot, actorUserId);
     }
 
+    // The device links from the job's PC, never from the VPS: its first login is what WhatsApp
+    // judges a brand-new account by (docs/estudo-bloqueio-numero-geelark.md). The slot is read
+    // again, since it may have changed since the job started.
+    const [pc] = await this.egress.pcExits(current.egress_node);
+    if (!pc?.online) return this.failLink(current, actorUserId, 'O PC do cadastro não está online. O vínculo só é feito pelo PC, para o WhatsApp não ver o IP do servidor: ligue o PC e refaça o vínculo.');
+
     let sessionId: string;
     try {
       if (current.number_id) {
-        const existing = (await this.db.query('SELECT id, waxum_session_id FROM whatsapp_numbers WHERE id = $1 AND tenant_id = $2', [current.number_id, current.tenant_id])).rows[0];
+        const existing = (await this.db.query('SELECT id, waxum_session_id, waxum_node FROM whatsapp_numbers WHERE id = $1 AND tenant_id = $2', [current.number_id, current.tenant_id])).rows[0];
         if (!existing) throw new NotFoundException('A linha criada para este cadastro não existe mais');
+        if (existing.waxum_node !== pc.slot) throw new ConflictException('a linha deste cadastro está em outra saída; remova-a em Números e refaça o cadastro');
         sessionId = existing.waxum_session_id;
       } else {
         const phone = registeredPhone(current);
-        const line = await this.numbers.create(current.tenant_id, actorUserId, { label: current.phone_name?.trim() || phone, phone });
+        const line = await this.numbers.create(current.tenant_id, actorUserId, { label: current.phone_name?.trim() || phone, phone }, pc.slot);
         sessionId = line.waxum_session_id;
         const updated = (await this.db.query('UPDATE provisioning_jobs SET number_id = $3, updated_at = now() WHERE id = $1 AND tenant_id = $2 RETURNING *', [current.id, current.tenant_id, line.id])).rows[0] as ProvisioningJobRow | undefined;
         current = updated ?? { ...current, number_id: line.id };
@@ -604,15 +613,15 @@ export class WhatsappProvisioningService implements OnModuleInit, OnModuleDestro
       try {
         const status = normalizeWaxumStatus(await this.waxum.getStatus(line.waxum_session_id));
         if (status.connected) {
-          await this.db.query("UPDATE whatsapp_numbers SET status = 'connected', phone = COALESCE($3, phone) WHERE id = $1 AND tenant_id = $2", [line.id, row.tenant_id, status.phone]);
-          // api-a and api-b both poll: only the one that settles the job moves the line and powers the phone off.
+          // A brand-new account that dials right away is what WhatsApp locks: the line warms up
+          // first, out of every dial path, through the same quarantine as a line showing block signs.
+          await this.db.query("UPDATE whatsapp_numbers SET status = 'connected', phone = COALESCE($3, phone), flagged_until = now() + make_interval(hours => $4) WHERE id = $1 AND tenant_id = $2", [line.id, row.tenant_id, status.phone, WARMUP_HOURS]);
+          // api-a and api-b both poll: only the one that settles the job powers the phone off.
           const next = await this.tryFinish(row, { status: 'done', errorCode: null, message: LINKED_MESSAGE, linked: true });
           if (!next) return this.findRow(row.tenant_id, row.id);
           await this.auditOnce(next, 'provisioning.linked', actorUserId, { numberId: line.id });
-          const message = await this.moveLineToJobPc(next, line.id, actorUserId);
           await this.powerOffAfterLink(row);
-          const updated = await this.db.query('UPDATE provisioning_jobs SET message = $3, updated_at = now() WHERE id = $1 AND tenant_id = $2 RETURNING *', [row.id, row.tenant_id, message]);
-          return (updated.rows[0] as ProvisioningJobRow | undefined) ?? { ...next, message };
+          return next;
         }
       } catch (error) {
         this.logger.warn(`Waxum status unavailable while linking job ${row.id}: ${String((error as Error)?.message ?? error).slice(0, 200)}`);
@@ -624,30 +633,6 @@ export class WhatsappProvisioningService implements OnModuleInit, OnModuleDestro
     await this.auditTransitions(row, next, actorUserId);
     await this.powerOffAfterLink(row);
     return next;
-  }
-
-  /**
-   * The line goes out through the same PC the phone used to register, so WhatsApp
-   * keeps seeing one IP for the number (contract section 3). Best effort: with the
-   * PC offline, without a slot or on any error the line stays on the VPS, the job
-   * stays `done` and the returned message says so.
-   */
-  private async moveLineToJobPc(job: ProvisioningJobRow, numberId: string, actorUserId: string | null) {
-    let pcName = 'usado no cadastro';
-    try {
-      // The slot is read again: it may have changed since the job started.
-      const [pc] = await this.egress.pcExits(job.egress_node);
-      if (!pc) return `${LINKED_MESSAGE} Atenção: o PC usado no cadastro não tem mais vaga de saída; a linha ficou saindo pela VPS.`;
-      pcName = pc.name;
-      if (!pc.online) return `${LINKED_MESSAGE} Atenção: o PC ${pc.name} está offline; a linha ficou saindo pela VPS.`;
-      const moved = await this.numbers.moveToWaxumNode(job.tenant_id, actorUserId, numberId, pc.slot);
-      return moved?.status === 'connected' || moved?.status == null
-        ? `${LINKED_MESSAGE} A linha sai pelo PC ${pc.name}, o mesmo do cadastro.`
-        : `${LINKED_MESSAGE} A linha foi levada para o PC ${pc.name} e ainda está reconectando.`;
-    } catch (error) {
-      this.logger.warn(`Line ${numberId} of job ${job.id} not moved to its PC: ${String((error as Error)?.message ?? error).slice(0, 200)}`);
-      return `${LINKED_MESSAGE} Atenção: não foi possível levar a linha para o PC ${pcName} (${errorMessage(error)}); ela ficou saindo pela VPS.`;
-    }
   }
 
   /**

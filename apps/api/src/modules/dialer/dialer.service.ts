@@ -763,7 +763,7 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
     if (!number) throw new DialRefusedError('line_not_found', 'Linha não encontrada');
     if (!CONNECTED_LINE_STATUSES.includes(String(number.status).toLowerCase())) throw new DialRefusedError('line_disconnected', 'A linha escolhida não está conectada');
     const secondsUntil = (value: unknown) => Math.max(1, Math.ceil((new Date(String(value)).getTime() - Date.now()) / 1000));
-    if (number.flagged_until && new Date(number.flagged_until).getTime() > Date.now()) throw new DialRefusedError('line_quarantined', 'A linha está em quarentena por sinais de bloqueio do WhatsApp', secondsUntil(number.flagged_until));
+    if (number.flagged_until && new Date(number.flagged_until).getTime() > Date.now()) throw new DialRefusedError('line_quarantined', 'A linha está em quarentena (aquecimento de número novo ou sinais de bloqueio do WhatsApp)', secondsUntil(number.flagged_until));
     if (lineIsProtected(number.last_call_ended_at)) throw new DialRefusedError('line_protected', 'A linha está temporariamente protegida pelo limite de chamadas do WhatsApp', secondsUntil(number.last_call_ended_at));
     if (Number(number.active_calls ?? 0) >= Math.max(1, Number(number.max_concurrent_calls ?? 1))) throw new DialRefusedError('line_busy', 'A linha já está em uma ligação');
     if (number.phone && isSelfCallNumber(number.phone, phone)) throw new DialRefusedError('self_call', 'O número de destino é a própria linha de saída');

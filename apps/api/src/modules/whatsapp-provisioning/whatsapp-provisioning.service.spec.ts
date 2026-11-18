@@ -77,11 +77,11 @@ const makeDb = () => {
       return { rows: [{ ...row }] };
     }
     if (text.startsWith('DELETE FROM provisioning_jobs')) { jobs.delete(params[0]); return { rows: [] }; }
-    if (text.startsWith('SELECT id, waxum_session_id FROM whatsapp_numbers')) {
+    if (text.startsWith('SELECT id, waxum_session_id')) {
       const row = numbers.get(params[0]);
       return { rows: row && row.tenant_id === params[1] ? [row] : [] };
     }
-    if (text.startsWith('UPDATE whatsapp_numbers')) { const row = numbers.get(params[0]); if (row) row.status = 'connected'; return { rows: [] }; }
+    if (text.startsWith('UPDATE whatsapp_numbers')) { const row = numbers.get(params[0]); if (row) Object.assign(row, { status: 'connected', warmup_hours: params[3] }); return { rows: [] }; }
     if (text.startsWith('SELECT n.node_name')) {
       return { rows: [...assignments.entries()].filter(([key]) => key.startsWith(`${params[0]}|`)).map(([key, userId]) => ({ node_name: key.split('|')[1], user_id: userId, user_name: users.get(userId) ?? null })) };
     }
@@ -119,13 +119,12 @@ const makeService = (options: { tailscaleConnected?: boolean; pcs?: Pc[] } = {})
     pcExits: jest.fn(async (id?: string) => pcs.filter((pc) => !id || pc.id === id).map((pc) => ({ ...pc }))),
   };
   const numbers = {
-    create: jest.fn(async (tenantId: string) => {
-      const line = { id: 'number-1', tenant_id: tenantId, waxum_session_id: 'session-1' };
+    create: jest.fn(async (tenantId: string, _actor: string | null, _body: unknown, node: string) => {
+      const line = { id: 'number-1', tenant_id: tenantId, waxum_session_id: 'session-1', waxum_node: node };
       db.numbers.set(line.id, line);
       return line;
     }),
     pairCode: jest.fn().mockResolvedValue({ code: PAIR_CODE, timeout_seconds: 60 }),
-    moveToWaxumNode: jest.fn(async (_tenantId: string, _actor: string | null, id: string, node: string) => ({ id, waxum_node: node, status: 'connected' })),
   };
   const waxum = {
     reconnect: jest.fn().mockResolvedValue({}),
@@ -526,7 +525,8 @@ describe('WhatsappProvisioningService — link to ZapLiga', () => {
     const afterLink = await ctx.service.decideLink(TENANT, USER, id, true);
 
     expect(ctx.worker.sendInput).toHaveBeenNthCalledWith(1, id, { type: 'link' });
-    expect(ctx.numbers.create).toHaveBeenCalledWith(TENANT, USER, { label: 'Phone 2', phone: '5511987654321' });
+    // The line is born on the job PC's Waxum: the device's first login already leaves through the PC.
+    expect(ctx.numbers.create).toHaveBeenCalledWith(TENANT, USER, { label: 'Phone 2', phone: '5511987654321' }, 'edge-1');
     expect(ctx.numbers.pairCode).toHaveBeenCalledWith(TENANT, USER, 'number-1', '5511987654321');
     expect(ctx.worker.sendInput).toHaveBeenNthCalledWith(2, id, { type: 'pair_code', code: PAIR_CODE });
     expect(afterLink).toMatchObject({ step: 'entering_pair_code', numberId: 'number-1', linked: false });
@@ -536,90 +536,56 @@ describe('WhatsappProvisioningService — link to ZapLiga', () => {
     ctx.worker.getJob.mockResolvedValue(workerJob({ jobId: id, status: 'done', step: 'done' }));
     const linking = await ctx.service.getJob(TENANT, USER, id);
     expect(linking).toMatchObject({ status: 'running', step: 'linking', linked: false, finishedAt: null });
-    // The primary phone must stay online until Waxum confirms the pairing; the line stays put meanwhile.
+    // The primary phone must stay online until Waxum confirms the pairing.
     expect(ctx.worker.stopPhone).not.toHaveBeenCalled();
-    expect(ctx.numbers.moveToWaxumNode).not.toHaveBeenCalled();
 
     connect(ctx);
     ctx.worker.getJob.mockClear();
     const linked = await ctx.service.getJob(TENANT, USER, id);
     expect(ctx.worker.getJob).not.toHaveBeenCalled();
     expect(linked).toMatchObject({ status: 'done', step: 'done', linked: true, numberId: 'number-1' });
-    expect(linked.message).toBe('Número cadastrado e conectado ao ZapLiga. A linha sai pelo PC PC da Ana, o mesmo do cadastro.');
-    expect(ctx.db.numbers.get('number-1').status).toBe('connected');
+    expect(linked.message).toContain('pelo PC do cadastro');
+    expect(linked.message).toContain('72 h em aquecimento');
+    expect(ctx.db.numbers.get('number-1')).toMatchObject({ status: 'connected', warmup_hours: 72 });
     expect(actions(ctx.audit)).toContain('provisioning.linked');
-    // Then the line goes out through the job's PC, and the API powers the phone off (powerOffWhenDone defaults to true).
-    expect(ctx.numbers.moveToWaxumNode).toHaveBeenCalledWith(TENANT, USER, 'number-1', 'edge-1');
+    // Then the API powers the phone off (powerOffWhenDone defaults to true).
     expect(ctx.worker.stopPhone).toHaveBeenCalledWith('phone-1');
-    expect(ctx.numbers.moveToWaxumNode.mock.invocationCallOrder[0]).toBeLessThan(ctx.worker.stopPhone.mock.invocationCallOrder[0]);
 
     // The pairing code is never stored or audited by this module.
     expect(JSON.stringify(ctx.db.query.mock.calls)).not.toContain(PAIR_CODE);
     expect(JSON.stringify(ctx.audit.record.mock.calls)).not.toContain(PAIR_CODE);
 
-    // Later polls (the other API instance included) neither move nor power off again.
+    // Later polls (the other API instance included) do not power off again.
     await ctx.service.getJob(TENANT, USER, id);
-    expect(ctx.numbers.moveToWaxumNode).toHaveBeenCalledTimes(1);
     expect(ctx.worker.stopPhone).toHaveBeenCalledTimes(1);
   });
 
-  it('moves the line to the slot the PC holds when the link settles, not the one at creation', async () => {
+  it('creates the line on the slot the PC holds when linking, not the one at creation', async () => {
     const ctx = makeService();
-    const id = await linkingJob(ctx);
+    const id = await registeredJob(ctx);
     ctx.pcs[0].slot = 'edge-4';
-    connect(ctx);
+    ctx.worker.sendInput.mockResolvedValue(workerJob({ jobId: id, status: 'waiting_input', step: 'waiting_pair_code', awaiting: 'pair_code' }));
 
-    await ctx.service.getJob(TENANT, USER, id);
+    await ctx.service.decideLink(TENANT, USER, id, true);
 
     expect(ctx.egress.pcExits).toHaveBeenLastCalledWith(PC_ID);
-    expect(ctx.numbers.moveToWaxumNode).toHaveBeenCalledWith(TENANT, USER, 'number-1', 'edge-4');
+    expect(ctx.numbers.create).toHaveBeenCalledWith(TENANT, USER, expect.anything(), 'edge-4');
   });
 
-  it('keeps the job done and warns when moving the line to the PC fails', async () => {
-    const ctx = makeService();
-    const id = await linkingJob(ctx);
-    ctx.numbers.moveToWaxumNode.mockRejectedValue(new BadRequestException('O PC dessa saída não está online. Confira em Admin → Saídas de internet.'));
-    connect(ctx);
+  it('refuses to link through the VPS when the PC is offline or lost its slot', async () => {
+    for (const lose of [(pcs: Pc[]) => { pcs[0].online = false; }, (pcs: Pc[]) => { pcs.splice(0, 1); }]) {
+      const ctx = makeService();
+      const id = await registeredJob(ctx);
+      lose(ctx.pcs);
+      ctx.worker.sendInput.mockResolvedValue(workerJob({ jobId: id, status: 'waiting_input', step: 'waiting_pair_code', awaiting: 'pair_code' }));
 
-    const job = await ctx.service.getJob(TENANT, USER, id);
+      const job = await ctx.service.decideLink(TENANT, USER, id, true);
 
-    expect(job).toMatchObject({ status: 'done', step: 'done', linked: true, errorCode: null });
-    expect(job.message).toContain('não foi possível levar a linha para o PC PC da Ana');
-    expect(job.message).toContain('ficou saindo pela VPS');
-    expect(ctx.worker.stopPhone).toHaveBeenCalledWith('phone-1');
-    expect(actions(ctx.audit)).toContain('provisioning.linked');
-    expect(actions(ctx.audit)).not.toContain('provisioning.failed');
-  });
-
-  it('skips the move with a warning when the PC is offline or lost its slot', async () => {
-    const offline = makeService();
-    const offlineId = await linkingJob(offline);
-    offline.pcs[0].online = false;
-    connect(offline);
-    const offlineJob = await offline.service.getJob(TENANT, USER, offlineId);
-    expect(offlineJob).toMatchObject({ status: 'done', linked: true });
-    expect(offlineJob.message).toContain('o PC PC da Ana está offline');
-    expect(offline.numbers.moveToWaxumNode).not.toHaveBeenCalled();
-
-    const gone = makeService();
-    const goneId = await linkingJob(gone);
-    gone.pcs.splice(0, 1);
-    connect(gone);
-    const goneJob = await gone.service.getJob(TENANT, USER, goneId);
-    expect(goneJob).toMatchObject({ status: 'done', linked: true });
-    expect(goneJob.message).toContain('não tem mais vaga de saída');
-    expect(gone.numbers.moveToWaxumNode).not.toHaveBeenCalled();
-  });
-
-  it('says so when the moved line is still reconnecting on the PC', async () => {
-    const ctx = makeService();
-    const id = await linkingJob(ctx);
-    ctx.numbers.moveToWaxumNode.mockResolvedValue({ id: 'number-1', waxum_node: 'edge-1', status: 'connecting' });
-    connect(ctx);
-
-    const job = await ctx.service.getJob(TENANT, USER, id);
-
-    expect(job.message).toContain('ainda está reconectando');
+      expect(job).toMatchObject({ status: 'failed', errorCode: 'pair_failed', linked: false });
+      expect(job.message).toContain('O PC do cadastro não está online');
+      expect(ctx.numbers.create).not.toHaveBeenCalled();
+      expect(ctx.numbers.pairCode).not.toHaveBeenCalled();
+    }
   });
 
   it('retries the pair code once after /connect when Waxum answers 503 for a new session', async () => {
@@ -652,7 +618,7 @@ describe('WhatsappProvisioningService — link to ZapLiga', () => {
     expect(ctx.worker.sendInput).not.toHaveBeenCalledWith(id, expect.objectContaining({ type: 'pair_code' }));
   });
 
-  it('fails with link_timeout after 120 s in linking and keeps the line on the VPS', async () => {
+  it('fails with link_timeout after 120 s in linking and keeps the line', async () => {
     const ctx = makeService();
     const id = await linkingJob(ctx);
 
@@ -663,7 +629,6 @@ describe('WhatsappProvisioningService — link to ZapLiga', () => {
     expect(ctx.db.numbers.has('number-1')).toBe(true);
     expect(ctx.audit.record).toHaveBeenCalledWith(expect.objectContaining({ action: 'provisioning.failed', metadata: expect.objectContaining({ errorCode: 'link_timeout' }) }));
     expect(ctx.worker.stopPhone).toHaveBeenCalledWith('phone-1');
-    expect(ctx.numbers.moveToWaxumNode).not.toHaveBeenCalled();
   });
 
   it('powers the phone off after linking even when an old client asks to keep it on', async () => {
@@ -675,7 +640,6 @@ describe('WhatsappProvisioningService — link to ZapLiga', () => {
     const job = await ctx.service.getJob(TENANT, USER, id);
 
     expect(job).toMatchObject({ status: 'done', linked: true });
-    expect(ctx.numbers.moveToWaxumNode).toHaveBeenCalled();
     expect(ctx.worker.stopPhone).toHaveBeenCalledWith('phone-1');
   });
 
@@ -732,7 +696,6 @@ describe('WhatsappProvisioningService — link to ZapLiga', () => {
     expect(ctx.worker.sendInput).toHaveBeenCalledWith(id, { type: 'finish' });
     expect(job).toMatchObject({ status: 'done', step: 'done', linked: false, numberId: null });
     expect(ctx.numbers.create).not.toHaveBeenCalled();
-    expect(ctx.numbers.moveToWaxumNode).not.toHaveBeenCalled();
   });
 
   it('refuses a second concurrent link request', async () => {

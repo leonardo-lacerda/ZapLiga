@@ -67,8 +67,10 @@ Como o cadastro usa isso (detalhes no [contrato, seção 4](provisioning-contrac
    **não abre o WhatsApp**.
 4. **Se o PC cair no meio:** o proxy recusa novas conexões e o job falha, em vez de seguir pela
    VPS.
-5. **Depois de conectada,** a linha vai para a vaga do mesmo PC (`moveToWaxumNode`), mantendo o
-   IP do cadastro.
+5. **O vínculo nasce no PC:** a linha é criada e pareada direto na vaga do mesmo PC, então o
+   WhatsApp vê só o IP do cadastro, já no primeiro login. Com o PC offline, o vínculo é recusado.
+   Conectada, a linha fica 72 h em aquecimento, fora do discador
+   ([estudo](estudo-bloqueio-numero-geelark.md)).
 
 ### Máquina de estados do job
 

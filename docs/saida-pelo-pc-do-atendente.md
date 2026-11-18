@@ -25,10 +25,12 @@ serve de porta de saída para a internet. Tudo é configurado em
    instala a Tailscale, liga o PC como saída, mantém a Tailscale rodando com o
    Windows bloqueado e desliga a suspensão. Guarde o comando só com quem
    instala: ele coloca qualquer PC na rede.
-3. **Por número:** leia o QR na VPS, como sempre. Com a distribuição automática
-   ligada, a plataforma leva o número para o PC online com menos números (até
-   o limite por PC). Também dá para escolher a saída à mão em Empresas →
-   Detalhes → Números. Em nenhum dos casos é preciso ler o QR de novo.
+3. **Por número:** conecte o número em Números (QR ou código). Com a
+   distribuição automática ligada, a linha já nasce no PC online com menos
+   números (até o limite por PC), então o WhatsApp nunca a vê saindo pela VPS;
+   sem PC livre, ela nasce na VPS e a distribuição a leva depois. Também dá
+   para escolher a saída à mão em Empresas → Detalhes → Números. Em nenhum dos
+   casos é preciso ler o QR de novo.
 
 ## Distribuição automática
 

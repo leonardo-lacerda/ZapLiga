@@ -202,10 +202,12 @@ Regras da API:
   repassa `{type:'pair_code', code}` ao worker. Depois os `GET` acompanham a sessão Waxum até
   `connected` → `linked=true`, `step=done`; após 120 s → `failed` / `link_timeout` (a linha
   criada continua, para tentar pelo QR).
-- Conectada a linha, a API a leva para a **mesma vaga do PC usado no cadastro**
-  (`NumbersService.moveToWaxumNode(tenantId, userId, numberId, slot)`), para o número manter o
-  mesmo IP. É melhor esforço: se o PC estiver offline ou a troca falhar, a linha fica na VPS, o
-  job continua `done` e a `message` avisa.
+- A linha é criada e pareada direto na **vaga do PC usado no cadastro**
+  (`NumbersService.create(..., slot)`), para o WhatsApp ver só o IP do PC desde o primeiro login.
+  Com o PC offline ou sem vaga na hora do vínculo, o vínculo falha com `pair_failed` em vez de
+  usar a VPS.
+- Conectada a linha, ela fica 72 h em aquecimento (`flagged_until`), fora de todo o discador; o
+  "Destravar" em Admin libera antes ([estudo](estudo-bloqueio-numero-geelark.md)).
 - `connect=false` manda `{type:'finish'}`.
 
 ## 4. Túnel (IP de saída)

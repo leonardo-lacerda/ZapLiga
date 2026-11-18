@@ -127,7 +127,7 @@ export function AdminEgressPanel() {
       {notices}
     </Panel>
     {pool && <Panel>
-      <SectionHeader title="Distribuição automática" description="Leia o QR do número na VPS. A plataforma leva o número para o PC online com menos números e tira os números de um PC que fica fora, sem pedir QR de novo." />
+      <SectionHeader title="Distribuição automática" description="Conecte o número em Números: ele já nasce no PC online com menos números. A plataforma também leva para um PC os números que estão na VPS e tira os números de um PC que fica fora, sem pedir QR de novo." />
       <form className="form-row" onSubmit={savePool}>
         <label className="admin-inline-checkbox"><input type="checkbox" checked={Boolean(pool.poolEnabled)} onChange={(event) => setPool({ ...pool, poolEnabled: event.target.checked })} /> Distribuir sozinho</label>
         <label>Números por PC <input type="number" min={1} max={50} value={pool.maxNumbersPerPc} onChange={(event) => setPool({ ...pool, maxNumbersPerPc: event.target.value })} aria-label="Números por PC" /></label>

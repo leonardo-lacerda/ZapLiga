@@ -35,14 +35,20 @@ export class NumbersService {
     void this.crmEvents?.recordLine(tenantId, numberId, eventType).catch((error) => this.logger.warn(`CRM event ${eventType} not recorded for line ${numberId}: ${String((error as Error)?.message ?? error).slice(0, 200)}`));
   }
 
-  async create(tenantId: string, actorUserId: string | null, body: CreateNumberInput) {
+  /**
+   * The line is born on the Waxum that will hold it, so WhatsApp sees the device's very first
+   * login from that exit (docs/estudo-bloqueio-numero-geelark.md). `node` pins it (registration
+   * on a chosen PC); otherwise the PC the distribution would pick, else the VPS.
+   */
+  async create(tenantId: string, actorUserId: string | null, body: CreateNumberInput, node?: string) {
     await this.entitlement.assertAction(tenantId, 'write', actorUserId ?? undefined);
     const label = String(body.label ?? '').trim();
     if (!label) throw new BadRequestException('label é obrigatório');
     let createdSessionId: string | undefined;
     let persisted = false;
     try {
-      const session = await this.createWaxumSession(label, MAIN_WAXUM_NODE);
+      const waxumNode = node ?? await this.pickPcSlot() ?? MAIN_WAXUM_NODE;
+      const session = await this.createWaxumSession(label, waxumNode);
       createdSessionId = session.id;
       // A new line's cooldown defaults to the tenant's own "Proteção entre
       // chamadas" (Configurações do discador) instead of a hardcoded value,
@@ -52,7 +58,7 @@ export class NumbersService {
       const result = await this.db.transaction(async (client) => {
         // Keep the advisory lock, count and INSERT on one transaction.
         await this.planLimits.assertCanAddNumbers(tenantId, client, 1);
-        return client.query(`INSERT INTO whatsapp_numbers (id,tenant_id,label,phone,waxum_session_id,max_concurrent_calls,cooldown_seconds,max_calls_per_window,call_window_seconds) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING *`, [randomUUID(), tenantId, label, digits(body.phone) || null, session.id, Number(body.maxConcurrentCalls ?? 1), Number(body.cooldownSeconds ?? defaultCooldownSeconds), Number(body.maxCallsPerWindow ?? 3), Number(body.callWindowSeconds ?? 180)]);
+        return client.query(`INSERT INTO whatsapp_numbers (id,tenant_id,label,phone,waxum_session_id,max_concurrent_calls,cooldown_seconds,max_calls_per_window,call_window_seconds,waxum_node) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING *`, [randomUUID(), tenantId, label, digits(body.phone) || null, session.id, Number(body.maxConcurrentCalls ?? 1), Number(body.cooldownSeconds ?? defaultCooldownSeconds), Number(body.maxCallsPerWindow ?? 3), Number(body.callWindowSeconds ?? 180), waxumNode]);
       });
       persisted = true;
       await this.audit.record({ actorUserId, tenantId, action: 'number.created', entityType: 'whatsapp_number', entityId: result.rows[0].id });
@@ -221,6 +227,20 @@ export class NumbersService {
     const session = await this.createWaxumSession(number.label, number.waxum_node);
     const result = await this.db.query(`UPDATE whatsapp_numbers SET waxum_session_id = $1, status = 'disconnected' WHERE id = $2 AND tenant_id = $3 RETURNING *`, [session.id, number.id, number.tenant_id]);
     return result.rows[0];
+  }
+
+  /**
+   * The PC slot a new line goes to, by the egress pool's own rule (EgressPoolService): with
+   * the distribution on, the online PC with the fewest lines below "Números por PC".
+   */
+  private async pickPcSlot(): Promise<string | undefined> {
+    const result = await this.db.query(`
+      SELECT p.slot FROM egress_pcs p CROSS JOIN egress_settings s
+      CROSS JOIN LATERAL (SELECT count(*)::int AS lines FROM whatsapp_numbers n WHERE n.waxum_node = p.slot AND n.status <> 'removed' AND n.phone IS NOT NULL) l
+      WHERE s.pool_enabled AND p.slot IS NOT NULL AND p.route = 'pc' AND p.route_reported_at > now() - interval '1 minute' AND l.lines < s.max_numbers_per_pc
+      ORDER BY l.lines, p.created_at LIMIT 1
+    `);
+    return result.rows[0]?.slot as string | undefined;
   }
 
   /**
