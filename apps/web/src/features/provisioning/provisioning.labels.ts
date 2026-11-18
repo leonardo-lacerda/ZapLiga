@@ -71,6 +71,7 @@ export const errorExplanations: Record<string, { title: string; hint: string }> 
   unknown_screen: { title: 'Apareceu uma tela que o robô não conhece', hint: 'O WhatsApp mostrou uma tela inesperada. Veja o print abaixo; pode ser preciso ajustar o robô.' },
   number_banned: { title: 'O WhatsApp recusou este número', hint: 'O número parece estar banido ou bloqueado para cadastro. Use outro número.' },
   sms_rejected: { title: 'O WhatsApp não aceitou o código SMS', hint: 'O código foi recusado várias vezes ou expirou. Peça um novo SMS e tente de novo.' },
+  wait_limit: { title: 'O WhatsApp pediu para esperar', hint: 'Muitas tentativas seguidas neste número. Espere o tempo que o WhatsApp mostrou e tente de novo.' },
   timeout: { title: 'O cadastro demorou demais', hint: 'Uma etapa passou do tempo limite (ou ninguém respondeu a tempo). Tente de novo.' },
   pair_failed: { title: 'Não foi possível gerar o código de conexão', hint: 'O número foi registrado, mas a conexão por código falhou. Conecte pelo QR Code em Números.' },
   link_timeout: { title: 'A conexão com o ZapLiga não terminou a tempo', hint: 'O número foi registrado e a linha foi criada em Números. Conecte por lá usando o QR Code.' },

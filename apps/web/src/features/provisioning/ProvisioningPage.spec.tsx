@@ -305,3 +305,17 @@ it('não mostra o assistente sem permissão', () => {
   expect(screen.getByText('Cadastro de WhatsApp não disponível')).toBeInTheDocument();
   expect(screen.queryByRole('button', { name: 'Continuar' })).not.toBeInTheDocument();
 });
+
+it('quando o WhatsApp pede para esperar, deixa o phone com o operador em vez de falhar', async () => {
+  const current = job({ status: 'waiting_input', step: 'waiting_manual', awaiting: 'manual', message: 'O WhatsApp pediu para esperar antes de tentar de novo. Tela: "Tente novamente em 5 minutos." Você está com o controle.', history: historyOf('queued', 'entering_number', 'waiting_manual') });
+  URL.createObjectURL = vi.fn(() => 'blob:live-1');
+  URL.revokeObjectURL = vi.fn();
+  server.use(
+    http.get(`${API}/jobs/job-1`, () => HttpResponse.json(current)),
+    http.get(`${API}/jobs/job-1/screen`, () => new HttpResponse(new Uint8Array([137, 80, 78, 71]), { headers: { 'content-type': 'image/png' } })),
+  );
+  render(<JobProgress tenantId="tenant-1" jobId="job-1" pollIntervalMs={POLL_MS} onBack={vi.fn()} onNewJob={vi.fn()} onOpenNumbers={vi.fn()} />);
+  expect(await screen.findByRole('heading', { name: 'O WhatsApp pediu para esperar: o phone está com você' })).toBeInTheDocument();
+  expect(await screen.findByRole('button', { name: /Tocar na tela do phone/ })).toBeInTheDocument();
+  expect(screen.getByRole('button', { name: 'Devolver ao robô' })).toBeEnabled();
+});

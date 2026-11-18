@@ -290,8 +290,9 @@ class GeeLarkAutomation:
         w = self.app.wid
         return {
             Screen.BANNED: lambda: self._fail_with_text("number_banned", wa.BANNED_TEXT, "O WhatsApp bloqueou este número."),
+            # Não é o código errado: é o WhatsApp pedindo um tempo. O operador decide se espera.
             Screen.WAIT_LIMIT: lambda: self._fail_with_text(
-                "sms_rejected", wa.WAIT_LIMIT_TEXT, "O WhatsApp pediu para esperar antes de tentar de novo."),
+                "wait_limit", wa.WAIT_LIMIT_TEXT, "O WhatsApp pediu para esperar antes de tentar de novo."),
             Screen.NO_INTERNET: lambda: self._fail_with_text(
                 "no_internet", wa.NO_INTERNET_TEXT, "O WhatsApp não conseguiu se conectar (sem internet pelo proxy)."),
             Screen.PERMISSION: self._handle_permission,

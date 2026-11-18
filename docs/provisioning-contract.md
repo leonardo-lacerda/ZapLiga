@@ -41,7 +41,7 @@ Erros: `status=failed`, `errorCode` (abaixo), `message` em português para o usu
 `hasScreenshot=true` quando houver print da tela do phone.
 
 `errorCode`: `egress_offline`, `egress_mismatch`, `no_internet`, `phone_start_failed`,
-`adb_failed`, `install_failed`, `unknown_screen`, `number_banned`, `sms_rejected`,
+`adb_failed`, `install_failed`, `unknown_screen`, `number_banned`, `sms_rejected`, `wait_limit`,
 `timeout`, `pair_failed`, `link_timeout`, `worker_lost`, `cancelled`, `internal`.
 
 Ao terminar (`done`, `failed`, `cancelled`), o worker desliga o phone se `powerOffWhenDone`

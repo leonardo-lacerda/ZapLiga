@@ -57,10 +57,15 @@ AWAITING_LABEL = {
 # pela tela ao vivo. Limite por etapa para não ficar num vai e volta sem fim.
 MAX_MANUAL_HELPS = 3
 # Erros de uma etapa do app que o operador pode destravar mexendo no phone.
-HELP_CODES = frozenset({"unknown_screen", "manual_takeover", "pair_failed"})
+# wait_limit: "tente novamente em N minutos". Em vez de desligar o phone e perder o cadastro,
+# o operador fica com o controle e decide se espera (phone ligado cobra por minuto) ou cancela.
+HELP_CODES = frozenset({"unknown_screen", "manual_takeover", "pair_failed", "wait_limit"})
 TAKEOVER_MESSAGE = "Você assumiu o controle do phone."
 MANUAL_HINT = ('Mexa no phone pela tela ao vivo (clique nela) até passar desta tela e clique em '
                '"Devolver ao robô". Se não der, cancele o cadastro.')
+WAIT_LIMIT_HINT = ('Você está com o controle. Toque em OK na tela ao vivo, espere o tempo pedido '
+                   '(o phone continua ligado e cobrando por minuto) e clique em "Devolver ao robô": '
+                   'ele digita o número de novo. Ou cancele e tente mais tarde.')
 
 
 def _now_iso() -> str:
@@ -498,7 +503,8 @@ class JobManager:
         if not taken:
             self._save_debug_xml(job, auto)  # para ensinar a tela nova ao robô depois
         log.info("[%s] %s em %s; esperando o operador", job.spec.job_id, exc.code, step)
-        self._wait_input(job, ctx, "waiting_manual", "manual", f"{exc.message} {MANUAL_HINT}")
+        hint = WAIT_LIMIT_HINT if exc.code == "wait_limit" else MANUAL_HINT
+        self._wait_input(job, ctx, "waiting_manual", "manual", f"{exc.message} {hint}")
         self._set_step(job, step)
 
     def take_over(self, job_id: str) -> Job:
@@ -611,7 +617,14 @@ class JobManager:
         while True:
             inp = self._wait_input(job, ctx, "waiting_sms", "sms", message)
             if inp["type"] in ("resend_sms", "call_me"):
-                message = auto.request_code("voice" if inp["type"] == "call_me" else "sms")
+                try:
+                    message = auto.request_code("voice" if inp["type"] == "call_me" else "sms")
+                except JobError as exc:
+                    if exc.code not in HELP_CODES:
+                        raise
+                    # Ex.: "tente em 5 minutos" ao pedir outro SMS: o operador assume e volta aqui.
+                    self._ask_help(job, ctx, auto, "waiting_sms", exc)
+                    message = None
                 continue
             self._set_step(job, "verifying")
             try:

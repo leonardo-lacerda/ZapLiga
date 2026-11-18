@@ -17,7 +17,7 @@ export type JobStep =
 
 export type JobErrorCode =
   | 'egress_offline' | 'egress_mismatch' | 'no_internet' | 'phone_start_failed' | 'adb_failed'
-  | 'install_failed' | 'unknown_screen' | 'number_banned' | 'sms_rejected' | 'timeout'
+  | 'install_failed' | 'unknown_screen' | 'number_banned' | 'sms_rejected' | 'wait_limit' | 'timeout'
   | 'pair_failed' | 'link_timeout' | 'worker_lost' | 'cancelled' | 'internal';
 
 /** PC de atendente usado como saída (docs/provisioning-contract.md, seção 4). */

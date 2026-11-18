@@ -192,9 +192,14 @@ function ManualHelp({ job, tenantId, run }: { job: Job; tenantId: string; run: A
     setBusy(true);
     try { await run(() => resumeRobot(tenantId, job.id)); } finally { setBusy(false); }
   };
-  const taken = (job.message ?? '').startsWith('Você assumiu o controle');
+  const message = job.message ?? '';
+  const taken = message.startsWith('Você assumiu o controle');
+  const waitLimit = message.startsWith('O WhatsApp pediu para esperar');
+  const title = taken ? 'Você está no controle do phone'
+    : waitLimit ? 'O WhatsApp pediu para esperar: o phone está com você'
+    : 'O robô parou numa tela que não conhece';
   return <div className="provisioning-input-card">
-    <h3>{taken ? 'Você está no controle do phone' : 'O robô parou numa tela que não conhece'}</h3>
+    <h3>{title}</h3>
     <p>Clique na tela do phone abaixo para tocar nela, como num celular, até passar desta tela. Depois devolva o phone ao robô: ele continua de onde estiver.</p>
     {job.message && <p className="provisioning-detail">{job.message}</p>}
     <div className="provisioning-inline-actions">

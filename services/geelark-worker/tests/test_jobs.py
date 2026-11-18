@@ -641,3 +641,47 @@ def test_no_probe_when_expected_ips_are_given():
     awaiting(manager, "job-1", "sms")
     assert probe.calls == []
     manager.cancel("job-1")
+
+
+def test_wait_limit_hands_the_phone_to_the_operator_instead_of_failing():
+    """"Tente novamente em 5 minutos" ao digitar o número: o phone fica com o operador."""
+    wait = JobError("wait_limit", 'O WhatsApp pediu para esperar antes de tentar de novo. Tela: "Tente novamente em 5 minutos."')
+
+    class Factory(FakeFactory):
+        def __call__(self, spec, ctx):
+            auto = super().__call__(spec, ctx)
+            left = {"n": 1}
+            original = auto.enter_number
+
+            def enter_number():
+                if left["n"]:
+                    left["n"] -= 1
+                    auto.calls.append("enter_number")
+                    raise wait
+                return original()
+            auto.enter_number = enter_number
+            return auto
+
+    factory = Factory()
+    manager = JobManager(factory, input_timeout_s=5, job_timeout_s=10)
+    manager.create(make_spec())
+    awaiting(manager, "job-1", "manual")
+    job = manager.get("job-1")
+    assert job.status == "waiting_input" and "Tente novamente em 5 minutos" in job.message
+    assert "espere o tempo pedido" in job.message and "power_off" not in factory.instances["job-1"].calls
+    manager.submit_input("job-1", {"type": "resume"})
+    awaiting(manager, "job-1", "sms")
+    assert factory.instances["job-1"].calls.count("enter_number") == 2
+    manager.cancel("job-1")
+
+
+def test_wait_limit_when_asking_for_a_new_code_also_waits_for_the_operator():
+    factory = FakeFactory(fail={"request_code:sms": JobError("wait_limit", "O WhatsApp pediu para esperar antes de tentar de novo.")})
+    manager = JobManager(factory, input_timeout_s=5, job_timeout_s=10)
+    manager.create(make_spec())
+    awaiting(manager, "job-1", "sms")
+    manager.submit_input("job-1", {"type": "resend_sms"})
+    awaiting(manager, "job-1", "manual")
+    manager.submit_input("job-1", {"type": "resume"})
+    awaiting(manager, "job-1", "sms")
+    manager.cancel("job-1")
