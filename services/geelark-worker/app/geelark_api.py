@@ -186,6 +186,29 @@ class GeeLarkAPI:
             raise GeeLarkError(int(detail.get("code", -1)), str(detail.get("msg", "")), "", path)
         return detail
 
+    def rename_phone(self, phone_id: str, name: str) -> None:
+        self.call("/open/v1/phone/detail/update", {"id": phone_id, "name": name})
+
+    def delete_phone(self, phone_id: str) -> None:
+        """Apaga o cloud phone (precisa estar desligado: 43009). A chamada pode voltar code 0
+        com a falha em failDetails, então confere o resultado deste id."""
+        path = "/open/v1/phone/delete"
+        data = self.call(path, {"ids": [phone_id]}) or {}
+        for item in data.get("failDetails") or []:
+            if str(item.get("id")) == phone_id:
+                raise GeeLarkError(int(item.get("code", -1)), str(item.get("msg", "")), "", path)
+
+    def new_device(self, phone_id: str) -> None:
+        """"Aparelho novo" (one-click new machine): outra marca, modelo e número de SIM.
+
+        Mantém o idioma e o tipo de rede (dados móveis); a região segue o proxy (o PC).
+        O GeeLark testa o proxy (45004) e limita quantos aparelhos novos saem por dia (44004).
+        """
+        self.call("/open/v2/phone/newOne", {
+            "id": phone_id, "changeBrandModel": True, "keepNetType": True,
+            "keepLanguage": True, "keepRegion": False, "keepPhoneNumber": False,
+        })
+
     def update_proxy(self, phone_id: str, type_id: int, server: str, port: int, username: str, password: str) -> None:
         """Troca o proxy do phone. O phone precisa estar DESLIGADO.
 

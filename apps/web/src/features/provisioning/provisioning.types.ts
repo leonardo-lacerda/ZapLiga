@@ -3,7 +3,8 @@
 export type ProvisioningApp = 'whatsapp' | 'business';
 
 /** register = cadastro completo; network_check = só liga o phone e confere a internet (IP do PC). */
-export type JobMode = 'register' | 'network_check';
+/** control = "Abrir o telefone": liga saindo pelo PC e fica com o operador na tela ao vivo. */
+export type JobMode = 'register' | 'network_check' | 'control';
 
 export type JobStatus = 'running' | 'waiting_input' | 'done' | 'failed' | 'cancelled';
 
@@ -13,7 +14,8 @@ export type JobStep =
   | 'queued' | 'checking_tunnel' | 'setting_network' | 'starting_phone' | 'connecting_adb' | 'checking_network'
   | 'installing_app' | 'opening_app' | 'entering_number' | 'waiting_sms' | 'waiting_manual' | 'rescue_offer' | 'verifying'
   | 'waiting_profile' | 'saving_profile' | 'registered' | 'creating_line' | 'opening_link_screen'
-  | 'waiting_pair_code' | 'entering_pair_code' | 'linking' | 'network_ok' | 'done' | 'failed' | 'cancelled';
+  | 'waiting_pair_code' | 'entering_pair_code' | 'linking' | 'network_ok' | 'controlling' | 'control_ended'
+  | 'done' | 'failed' | 'cancelled';
 
 export type JobErrorCode =
   | 'egress_offline' | 'egress_mismatch' | 'no_internet' | 'phone_start_failed' | 'adb_failed'

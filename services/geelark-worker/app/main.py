@@ -6,6 +6,7 @@ Rodar: `uvicorn app.main:create_app --factory --host 0.0.0.0 --port 8080`
 from __future__ import annotations
 
 import hmac
+import time
 import logging
 
 from fastapi import Depends, FastAPI, Header, Request
@@ -19,7 +20,7 @@ from .errors import ApiError
 from .geelark_api import PHONE_OFF, PROXY_CHECK_FAILED, GeeLarkAPI, GeeLarkError
 from .jobs import JobManager
 from .phones import to_phone
-from .schemas import CreatePhone, CreateWorkerJob, JobInput, ManualAction, ProfileInput
+from .schemas import CreatePhone, CreateWorkerJob, JobInput, ManualAction, ProfileInput, RenamePhone
 
 log = logging.getLogger("geelark_worker")
 
@@ -158,6 +159,72 @@ def create_app(
             except GeeLarkError:
                 pass
             raise ApiError(502, "geelark_error", f"O GeeLark não desligou o phone ({exc.code}).") from None
+        return {"ok": True}
+
+    # Erros do GeeLark nas ações de um phone, em português.
+    phone_errors = {
+        42001: (404, "phone_not_found", "Telefone não encontrado no GeeLark."),
+        43005: (409, "geelark_busy", "O GeeLark está fazendo outra tarefa neste telefone. Tente de novo em 1 minuto."),
+        43006: (409, "geelark_busy", "Alguém está usando este telefone pelo GeeLark agora. Feche lá e tente de novo."),
+        43009: (409, "phone_on", "O telefone ainda está ligado. Desligue e tente de novo."),
+        43015: (409, "not_supported", "Este telefone não aceita gerar um aparelho novo."),
+        44004: (409, "daily_limit", "O GeeLark chegou ao limite de aparelhos novos por hoje. Tente amanhã."),
+        PROXY_CHECK_FAILED: (409, "egress_offline", "O GeeLark testou a internet pelo PC deste telefone e ela não "
+                             "respondeu. Ligue o PC (ou teste a internet do telefone) e tente de novo."),
+    }
+
+    def phone_error(exc: GeeLarkError, what: str) -> ApiError:
+        if exc.code in phone_errors:
+            return ApiError(*phone_errors[exc.code])
+        log.warning("GeeLark falhou ao %s: %s", what, exc)
+        return ApiError(502, "geelark_error", f"O GeeLark não conseguiu {what} ({exc.code}).")
+
+    def idle_and_off(phone_id: str, what: str) -> None:
+        """Apagar e gerar aparelho novo exigem o phone parado e sem cadastro nele."""
+        if manager.busy_job_for(phone_id):
+            raise ApiError(409, "phone_busy", f"Este telefone está num cadastro ou sessão agora. Encerre antes de {what}.")
+        try:
+            if geelark.phone_status(phone_id) == PHONE_OFF:
+                return
+            geelark.stop_phone(phone_id)
+            deadline = time.monotonic() + 90
+            while time.monotonic() < deadline:
+                time.sleep(3)
+                if geelark.phone_status(phone_id) == PHONE_OFF:
+                    return
+        except GeeLarkError as exc:
+            raise phone_error(exc, "desligar o telefone") from None
+        raise ApiError(409, "phone_on", "O telefone não desligou a tempo. Tente de novo em 1 minuto.")
+
+    @app.post("/phones/{phone_id}/rename", dependencies=auth)
+    def rename_phone(phone_id: str, body: RenamePhone) -> dict:
+        try:
+            geelark.rename_phone(phone_id, body.name)
+        except GeeLarkError as exc:
+            raise phone_error(exc, "renomear o telefone") from None
+        log.info("phone %s renomeado", phone_id)
+        return {"ok": True, "name": body.name}
+
+    @app.post("/phones/{phone_id}/new-device", dependencies=auth)
+    def new_device(phone_id: str) -> dict:
+        idle_and_off(phone_id, "gerar um aparelho novo")
+        try:
+            geelark.new_device(phone_id)
+        except GeeLarkError as exc:
+            raise phone_error(exc, "gerar o aparelho novo") from None
+        manager.forget_phone(phone_id)
+        log.info("phone %s com aparelho novo", phone_id)
+        return {"ok": True}
+
+    @app.delete("/phones/{phone_id}", dependencies=auth)
+    def delete_phone(phone_id: str) -> dict:
+        idle_and_off(phone_id, "apagar")
+        try:
+            geelark.delete_phone(phone_id)
+        except GeeLarkError as exc:
+            raise phone_error(exc, "apagar o telefone") from None
+        manager.forget_phone(phone_id)
+        log.info("phone %s apagado", phone_id)
         return {"ok": True}
 
     @app.post("/jobs", dependencies=auth, status_code=201)

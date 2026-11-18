@@ -1,13 +1,14 @@
 import { IsBoolean, IsIn, IsNumber, IsOptional, IsString, Matches, Max, MaxLength, Min, MinLength, ValidateIf } from 'class-validator';
 
-const isRegister = (object: { mode?: string }) => object.mode !== 'network_check';
+const isRegister = (object: { mode?: string }) => !object.mode || object.mode === 'register';
 
 export class CreateProvisioningJobDto {
   // Id of the attendant PC (egress_pcs.id) the phone goes out through.
   @IsString() @MinLength(1) @MaxLength(64) egressNode!: string;
   @IsString() @MinLength(1) @MaxLength(120) geelarkPhoneId!: string;
   // network_check: only applies the PC's proxy, starts the phone, checks its IP and powers it off.
-  @IsOptional() @IsIn(['register', 'network_check']) mode?: 'register' | 'network_check';
+  // control ("Abrir o phone"): same, then leaves it with the operator on the live screen.
+  @IsOptional() @IsIn(['register', 'network_check', 'control']) mode?: 'register' | 'network_check' | 'control';
   @ValidateIf(isRegister) @IsIn(['whatsapp', 'business']) app?: 'whatsapp' | 'business';
   // Digits are validated (and separators stripped) by the service, which answers 400 in Portuguese.
   @ValidateIf(isRegister) @IsString() @MaxLength(8) countryCode?: string;
@@ -26,6 +27,10 @@ export class CreatePhoneDto {
   @IsIn(ANDROID_VERSIONS) androidVersion!: AndroidVersion;
   // The PC (egress_pcs.id) the new phone goes out through from its first boot.
   @IsString() @MinLength(1) @MaxLength(64) egressNode!: string;
+}
+
+export class RenamePhoneDto {
+  @IsString() @MinLength(1) @MaxLength(60) name!: string;
 }
 
 export class SubmitSmsCodeDto {

@@ -109,6 +109,9 @@ const makeService = (options: { tailscaleConnected?: boolean; pcs?: Pc[] } = {})
     liveScreen: jest.fn(),
     manualAction: jest.fn().mockResolvedValue({ ok: true }),
     takeOver: jest.fn(),
+    renamePhone: jest.fn().mockResolvedValue({ ok: true }),
+    newDevice: jest.fn().mockResolvedValue({ ok: true }),
+    deletePhone: jest.fn().mockResolvedValue({ ok: true }),
   };
   const pcs: Pc[] = options.pcs ?? [
     { id: PC_ID, name: 'PC da Ana', slot: 'edge-1', online: true },
@@ -740,5 +743,43 @@ describe('whatsapp_provisioning migration', () => {
     expect(existsSync(join(dir, '067_whatsapp_provisioning.sql'))).toBe(true);
     expect(files.filter((file) => file.startsWith('067_'))).toEqual(['067_whatsapp_provisioning.sql']);
     expect(files.filter((file) => file.includes('whatsapp_provisioning'))).toEqual(['067_whatsapp_provisioning.sql']);
+  });
+});
+
+
+describe('WhatsappProvisioningService phone management', () => {
+  it('renames a phone and audits from/to', async () => {
+    const ctx = makeService();
+    const phone = await ctx.service.renamePhone(TENANT, USER, 'phone-1', '  WhatsApp 4  ');
+    expect(phone.name).toBe('WhatsApp 4');
+    expect(ctx.worker.renamePhone).toHaveBeenCalledWith('phone-1', 'WhatsApp 4');
+    expect(ctx.audit.record).toHaveBeenCalledWith(expect.objectContaining({ action: 'provisioning.phone_renamed', metadata: { from: 'Phone 2', to: 'WhatsApp 4' } }));
+    await expect(ctx.service.renamePhone(TENANT, USER, 'phone-1', '   ')).rejects.toMatchObject({ response: { code: 'invalid_name' } });
+  });
+
+  it('gives a phone a new device and forgets which apps it had', async () => {
+    const ctx = makeService();
+    const phone = await ctx.service.newDevice(TENANT, USER, 'phone-1');
+    expect(ctx.worker.newDevice).toHaveBeenCalledWith('phone-1');
+    expect(phone).toMatchObject({ status: 'off', apps: { whatsapp: null, business: null } });
+    expect(ctx.audit.record).toHaveBeenCalledWith(expect.objectContaining({ action: 'provisioning.phone_new_device' }));
+  });
+
+  it('deletes a phone and refuses an unknown one', async () => {
+    const ctx = makeService();
+    expect(await ctx.service.deletePhone(TENANT, USER, 'phone-1')).toEqual({ ok: true });
+    expect(ctx.worker.deletePhone).toHaveBeenCalledWith('phone-1');
+    expect(ctx.audit.record).toHaveBeenCalledWith(expect.objectContaining({ action: 'provisioning.phone_deleted' }));
+    await expect(ctx.service.deletePhone(TENANT, USER, 'nope')).rejects.toMatchObject({ response: { code: 'phone_not_found' } });
+    expect(ctx.worker.deletePhone).toHaveBeenCalledTimes(1);
+  });
+
+  it('starts a control session with no app or number', async () => {
+    const ctx = makeService();
+    await ctx.service.createJob(TENANT, USER, { egressNode: PC_ID, geelarkPhoneId: 'phone-1', mode: 'control' });
+    expect(ctx.worker.createJob).toHaveBeenCalledWith(expect.objectContaining({ mode: 'control' }));
+    const sent = ctx.worker.createJob.mock.calls[0][0];
+    expect(sent.app).toBeUndefined();
+    expect(sent.number).toBeUndefined();
   });
 });

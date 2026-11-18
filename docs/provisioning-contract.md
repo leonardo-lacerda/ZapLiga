@@ -63,6 +63,9 @@ Base: `GEELARK_WORKER_URL` (ex.: `http://geelark-worker:8080`). Toda rota exige 
 | `GET /phones` | — | `{ "items": [Phone] }` |
 | `POST /phones` | `CreateWorkerPhone` | `201 Phone` · `409 egress_offline` (o GeeLark testou o proxy e ele não respondeu) · `502 geelark_error` |
 | `POST /phones/{phoneId}/stop` | — | `{ "ok": true }` |
+| `POST /phones/{phoneId}/rename` | `{ name }` (1–60) | `{ ok, name }` · `404 phone_not_found` |
+| `POST /phones/{phoneId}/new-device` | — | `{ ok }` ("aparelho novo": `/open/v2/phone/newOne`, outra marca/modelo/SIM; mantém idioma e tipo de rede, região segue o proxy; desliga antes) · `409 phone_busy` (job nele) · `409 daily_limit` (44004) · `409 egress_offline` (45004) · `409 not_supported` (43015) · `409 geelark_busy` (43005/43006) |
+| `DELETE /phones/{phoneId}` | — | `{ ok }` (desliga antes; confere `failDetails`) · `409 phone_busy` · `409 phone_on` |
 | `POST /jobs` | `CreateWorkerJob` | `201 WorkerJob` · `409 phone_busy` · `429 worker_full` |
 | `GET /jobs/{jobId}` | — | `WorkerJob` · `404 not_found` (ex.: worker reiniciou) |
 | `POST /jobs/{jobId}/input` | `JobInput` | `WorkerJob` · `409 not_awaiting` |
@@ -94,7 +97,11 @@ type CreateWorkerJob = {
   phoneId: string;
   // network_check: setting_network → starting_phone → connecting_adb → checking_network e termina
   // `done` / step `network_ok` (ou `egress_mismatch`), sempre desligando o phone. Sem app nem número.
-  mode?: 'register' | 'network_check'; // padrão register
+  // control ("Abrir o telefone"): igual ao network_check até conferir o IP; depois fica em
+  // `waiting_input`, step `controlling`, `awaiting=manual`: o operador usa a tela ao vivo e o
+  // `/manual`. `{type:'resume'}` encerra (`done`, step `control_ended`) e o phone desliga. Sem toque
+  // por 10 min ou com 30 min no total, encerra sozinho do mesmo jeito.
+  mode?: 'register' | 'network_check' | 'control'; // padrão register
   app?: 'whatsapp' | 'business';       // obrigatório no register
   countryCode?: string;       // só dígitos, ex.: "55" (register)
   number?: string;            // só dígitos, sem o país (register)
@@ -144,6 +151,9 @@ passa por `entitlement.assertAction(tenantId, 'write', userId)`.
 | `PUT egress/{node}` | `{ userId: string \| null }` | `EgressNode` (liga o nó a uma pessoa) |
 | `GET phones` | — | `{ items: Phone[] }` (repasse do worker) |
 | `POST phones` | `{ name, androidVersion, egressNode }` | `201 Phone` (criado já saindo pelo PC `egressNode`) · `409 egress_offline` |
+| `POST phones/{id}/rename` | `{ name }` | `Phone` (auditado `provisioning.phone_renamed`) |
+| `POST phones/{id}/new-device` | — | `Phone` desligado, `apps` desconhecidos (auditado `provisioning.phone_new_device`) |
+| `DELETE phones/{id}` | — | `{ ok }` (auditado `provisioning.phone_deleted`) |
 | `POST jobs` | `CreateJob` | `201 Job` |
 | `GET jobs` | `?limit=20` | `{ items: Job[] }` (mais recentes primeiro) |
 | `GET jobs/{id}` | — | `Job` |
@@ -171,7 +181,7 @@ type EgressNode = {
 
 type CreateJob = {
   egressNode: string; geelarkPhoneId: string;
-  mode?: 'register' | 'network_check';  // network_check = "Testar internet" (sempre desliga no fim)
+  mode?: 'register' | 'network_check' | 'control';  // network_check = "Testar internet"; control = "Abrir" (os dois sempre desligam no fim)
   app?: 'whatsapp' | 'business'; countryCode?: string; number?: string; // obrigatórios no register
   powerOffWhenDone?: boolean; // padrão true
 };

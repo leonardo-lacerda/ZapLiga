@@ -765,3 +765,41 @@ def test_sms_rejected_too_many_times_offers_the_phone_before_failing():
     manager.submit_input("job-1", {"type": "resume"})
     awaiting(manager, "job-1", "sms")  # volta a esperar um código novo
     manager.cancel("job-1")
+
+
+
+# --------------------------------------------------------------------------- "Abrir o phone"
+def control_spec():
+    from dataclasses import replace
+    return replace(make_spec(), mode="control", app="", country_code="", number="")
+
+
+def test_control_session_waits_for_the_operator_and_powers_off_when_done():
+    factory = FakeFactory()
+    manager = JobManager(factory, input_timeout_s=5, job_timeout_s=10)
+    manager.create(control_spec())
+    awaiting(manager, "job-1", "manual")
+    job = manager.get("job-1")
+    assert (job.status, job.step) == ("waiting_input", "controlling")
+    assert "203.0.113.7" in job.message and "Desligar o phone" in job.message
+    manager.manual_action("job-1", {"type": "tap", "x": 0.5, "y": 0.5})
+    calls = factory.instances["job-1"].calls
+    assert "open_app" not in calls and "manual:tap" in calls
+    manager.submit_input("job-1", {"type": "resume"})
+    job = finished(manager, "job-1")
+    assert (job.status, job.step) == ("done", "control_ended")
+    assert "power_off" in factory.instances["job-1"].calls
+
+
+def test_control_session_ends_after_inactivity_but_touches_keep_it_open():
+    factory = FakeFactory()
+    manager = JobManager(factory, input_timeout_s=0.6, job_timeout_s=10)
+    manager.create(control_spec())
+    awaiting(manager, "job-1", "manual")
+    for _ in range(3):  # 1,2 s mexendo: passa do prazo de 0,6 s sem encerrar
+        time.sleep(0.4)
+        manager.manual_action("job-1", {"type": "key", "key": "home"})
+    assert not manager.get("job-1").terminal
+    job = finished(manager, "job-1")
+    assert (job.status, job.step) == ("done", "control_ended") and "por tempo" in job.message
+    assert "power_off" in factory.instances["job-1"].calls

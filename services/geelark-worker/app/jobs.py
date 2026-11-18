@@ -63,6 +63,10 @@ HELP_CODES = frozenset({"unknown_screen", "manual_takeover", "pair_failed", "wai
 TAKEOVER_MESSAGE = "Você assumiu o controle do phone."
 # Contagem depois de um erro: phone ainda ligado, esperando o operador assumir.
 RESCUE_STEP = "rescue_offer"
+# "Abrir o phone": o operador usa o phone pela tela ao vivo; nunca mais que isso ligado.
+CONTROL_TIMEOUT_S = 1800.0
+CONTROL_MESSAGE = ("Phone ligado, saindo pelo IP {ip}. Mexa nele pela tela ao vivo. Quando terminar, clique em "
+                   "\"Desligar o phone\" para parar a cobrança. Sem nenhum toque por 10 min, ele desliga sozinho.")
 MANUAL_HINT = ('Mexa no phone pela tela ao vivo (clique nela) até passar desta tela e clique em '
                '"Devolver ao robô". Se não der, cancele o cadastro.')
 WAIT_LIMIT_HINT = ('Você está com o controle. Toque em OK na tela ao vivo, espere o tempo pedido '
@@ -116,6 +120,7 @@ class Job:
         self.cancel_event = threading.Event()
         self.takeover = threading.Event()  # "Assumir o controle": o robô para na próxima tela
         self.rescue_claimed = False  # o operador assumiu durante a contagem depois de um erro
+        self.last_activity = 0.0  # último toque do operador: adia o fim da espera por ele
         self.wake = threading.Event()
         self.pending_input: dict[str, Any] | None = None
         self.finished = threading.Event()  # thread terminou (phone desligado e liberado)
@@ -160,6 +165,7 @@ class JobManager:
         stop_phone: Callable[[str], None] | None = None,
         handoff_max_s: float = HANDOFF_MAX_S,
         rescue_window_s: float = 0,
+        control_timeout_s: float = CONTROL_TIMEOUT_S,
     ):
         self._factory = factory
         self._stop_phone = stop_phone
@@ -172,6 +178,7 @@ class JobManager:
         # Depois de um erro numa etapa do app, o phone fica ligado este tempo para o operador
         # assumir. 0 = desliga na hora (padrão dos testes; produção usa 59 s via Settings).
         self.rescue_window_s = rescue_window_s
+        self.control_timeout_s = control_timeout_s  # teto de uma sessão "Abrir o phone"
         self._debug_dir = debug_dir
         self._lock = threading.RLock()
         self._jobs: dict[str, Job] = {}
@@ -290,6 +297,8 @@ class JobManager:
         with self._lock:
             job = self._require(job_id)
             auto = job.auto if job.status == "waiting_input" else None
+            if auto is not None:
+                job.last_activity = time.monotonic()
             if auto is not None and job.step == RESCUE_STEP:
                 self._claim_rescue_locked(job)
         if auto is None:
@@ -390,7 +399,9 @@ class JobManager:
                     inp, job.pending_input = job.pending_input, None
                     return inp
                 job.wake.clear()
-            remaining = min(input_deadline, ctx.deadline) - time.monotonic()
+            # Mexendo no phone, o operador ainda está aqui: o prazo recomeça a cada toque.
+            deadline = max(input_deadline, job.last_activity + self.input_timeout_s)
+            remaining = min(deadline, ctx.deadline) - time.monotonic()
             if remaining <= 0:
                 if time.monotonic() >= ctx.deadline:
                     ctx.check()  # timeout do job inteiro
@@ -401,8 +412,9 @@ class JobManager:
     # ----------------------------------------------------------------- fluxo
     def _run(self, job: Job) -> None:
         spec = job.spec
-        minutes = max(1, round(self.job_timeout_s / 60))
-        ctx = JobContext(job.cancel_event, job.started_mono + self.job_timeout_s,
+        limit = self.control_timeout_s if spec.mode == "control" else self.job_timeout_s
+        minutes = max(1, round(limit / 60))
+        ctx = JobContext(job.cancel_event, job.started_mono + limit,
                          f"O cadastro passou de {minutes} min e foi interrompido.", takeover=job.takeover)
         auto: PhoneAutomation | None = None
         outcome: tuple[str, str, str] | None = None  # (status, errorCode, message)
@@ -567,6 +579,23 @@ class JobManager:
         self._set_step(job, step)
         return True
 
+    def _control_session(self, job: Job, ctx: JobContext, ip: str) -> None:
+        """"Abrir o phone": rede conferida, o phone fica com o operador até ele encerrar
+        (`resume`), parar de mexer por `input_timeout_s` ou passar de `control_timeout_s`.
+        Em todos os casos termina `done` e o _cleanup desliga o phone."""
+        try:
+            self._wait_input(job, ctx, "controlling", "manual", CONTROL_MESSAGE.format(ip=ip))
+        except JobTimedOut:
+            self._finish(job, "done", None, "Sessão encerrada por tempo; o phone foi desligado.", step="control_ended")
+            return
+        self._finish(job, "done", None, "Sessão encerrada; o phone foi desligado.", step="control_ended")
+
+    def forget_phone(self, phone_id: str) -> None:
+        """Phone apagado ou com aparelho novo: os apps que o worker conhecia não valem mais."""
+        with self._lock:
+            self._apps.pop(phone_id, None)
+            self._handed.pop(phone_id, None)
+
     def take_over(self, job_id: str) -> Job:
         """"Assumir o controle": o robô para na próxima tela que olhar e espera o operador."""
         with self._lock:
@@ -654,6 +683,10 @@ class JobManager:
                 f"({', '.join(expected_ips)}). O WhatsApp não foi aberto.",
             )
         ctx.check()
+
+        if spec.mode == "control":
+            self._control_session(job, ctx, ip)
+            return
 
         if spec.mode == "network_check":
             # Só a rede: com o IP conferido, termina aqui e o _cleanup desliga o phone.

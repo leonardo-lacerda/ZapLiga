@@ -1351,10 +1351,11 @@ input, select { min-height: 35px; min-width: 0; padding: 8px 10px; border: 1px s
 @media (max-width: 640px) { .provisioning-new-phone-fields { grid-template-columns: 1fr; } }
 .provisioning-phones-summary { margin: 4px 0 10px; }
 .provisioning-phones-list { display: grid; gap: 8px; margin: 0; padding: 0; list-style: none; }
-.provisioning-phones-list li { display: grid; grid-template-columns: minmax(0, 1fr) auto 104px; align-items: center; gap: 12px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 9px; }
+.provisioning-phones-list li { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 8px 12px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 9px; }
+.provisioning-phone-actions { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 6px; }
+.provisioning-phones-pc { margin: 0 0 10px; max-width: 360px; }
 .provisioning-phones-list li > div { display: grid; gap: 2px; min-width: 0; }
 .provisioning-phones-list small { color: var(--subtle); overflow-wrap: anywhere; }
-@media (max-width: 640px) { .provisioning-phones-list li { grid-template-columns: minmax(0, 1fr) auto; } .provisioning-phones-spacer { display: none; } }
 .provisioning-claim { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
 .provisioning-claim .form-hint { flex: 1 1 260px; margin: 0; }
 .provisioning-claim .alert { flex-basis: 100%; }

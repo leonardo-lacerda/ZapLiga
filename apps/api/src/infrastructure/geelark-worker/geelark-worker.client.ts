@@ -17,7 +17,7 @@ export type WorkerProxy = { typeId: 1 | 2 | 3; server: string; port: number; use
 /** Internal address of the same proxy: the worker asks it for the egress IP before starting the phone. */
 export type WorkerProbeProxy = { server: string; port: number; username: string; password: string };
 
-export type WorkerJobMode = 'register' | 'network_check';
+export type WorkerJobMode = 'register' | 'network_check' | 'control';
 
 export type CreateWorkerJob = {
   jobId: string;
@@ -82,6 +82,8 @@ const messageFor = (status: number, code: string, workerMessage: string | null) 
   if ((code === 'robot_busy' || code === 'device_error') && workerMessage) return workerMessage;
   // The worker's own Portuguese text says what GeeLark refused (proxy check, balance...).
   if ((code === 'egress_offline' || code === 'geelark_error') && workerMessage) return workerMessage;
+  // Phone actions (rename, new device, delete): the worker says what GeeLark refused.
+  if (['geelark_busy', 'phone_on', 'daily_limit', 'not_supported'].includes(code) && workerMessage) return workerMessage;
   if (status === 404) return 'Cadastro ou telefone não encontrado no cadastrador.';
   if (status === 401 || status === 403) return 'O cadastrador recusou a autenticação da API. Verifique GEELARK_WORKER_TOKEN.';
   if (status === 400 || status === 422) return workerMessage ? `Dados recusados pelo cadastrador: ${workerMessage}` : 'Dados recusados pelo cadastrador.';
@@ -150,6 +152,13 @@ export class GeelarkWorkerClient {
   async createPhone(phone: CreateWorkerPhone) { return this.json<WorkerPhone>('/phones', { method: 'POST', body: phone, timeoutMs: 60_000 }); }
 
   async stopPhone(phoneId: string) { return this.json<{ ok: boolean }>(`/phones/${encodeURIComponent(phoneId)}/stop`, { method: 'POST', timeoutMs: 30_000 }); }
+
+  async renamePhone(phoneId: string, name: string) { return this.json<{ ok: boolean; name: string }>(`/phones/${encodeURIComponent(phoneId)}/rename`, { method: 'POST', body: { name }, timeoutMs: 30_000 }); }
+
+  /** "Aparelho novo": the worker powers the phone off first (up to 90 s), then GeeLark resets its identity. */
+  async newDevice(phoneId: string) { return this.json<{ ok: boolean }>(`/phones/${encodeURIComponent(phoneId)}/new-device`, { method: 'POST', timeoutMs: 150_000 }); }
+
+  async deletePhone(phoneId: string) { return this.json<{ ok: boolean }>(`/phones/${encodeURIComponent(phoneId)}`, { method: 'DELETE', timeoutMs: 150_000 }); }
 
   async createJob(job: CreateWorkerJob) { return this.json<WorkerJob>('/jobs', { method: 'POST', body: job, timeoutMs: 30_000 }); }
 

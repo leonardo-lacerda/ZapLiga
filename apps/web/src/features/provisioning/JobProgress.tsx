@@ -6,7 +6,7 @@ import { ProfileForm } from './ProfileForm';
 import { SmsCodeInput } from './SmsCodeInput';
 import { createObjectUrl, revokeObjectUrl } from './objectUrl';
 import { cancelJob, fetchJobScreenshot, requestNewCode, resumeRobot, submitLinkDecision, submitProfile, submitSmsCode, takeOverJob } from './provisioning.api';
-import { appLabels, errorExplanation, formatPhone, isJobActive, isNetworkCheck, splitJobNumber, statusLabels, statusTone, stepLabel } from './provisioning.labels';
+import { appLabels, errorExplanation, formatPhone, isControl, isJobActive, isNetworkCheck, splitJobNumber, statusLabels, statusTone, stepLabel } from './provisioning.labels';
 import type { Job, WizardPrefill } from './provisioning.types';
 import { JOB_POLL_INTERVAL_MS, useProvisioningJob } from './useProvisioningJob';
 
@@ -58,8 +58,11 @@ export function JobProgress({ tenantId, jobId, pollIntervalMs = JOB_POLL_INTERVA
 
   const active = isJobActive(job);
   const network = isNetworkCheck(job);
+  const control = isControl(job);
+  // Na sessão "Abrir", quem desliga é o botão do cartão; aqui só antes de o phone ficar pronto.
+  const controlReady = control && job.step === 'controlling';
   // Com o robô andando: o operador pede o controle; o robô para na próxima tela do WhatsApp.
-  const canTakeOver = active && !network && job.status === 'running' && !linkingSteps.has(job.step);
+  const canTakeOver = active && !network && !control && job.status === 'running' && !linkingSteps.has(job.step);
   const pausing = canTakeOver && (job.message ?? '').startsWith('Pausando o robô');
   const takeOver = async () => {
     setTakingOver(true);
@@ -69,9 +72,9 @@ export function JobProgress({ tenantId, jobId, pollIntervalMs = JOB_POLL_INTERVA
     <Panel className="provisioning-progress">
       <div className="detail-heading">
         <div>
-          <span className="eyebrow">{network ? 'TESTE DE INTERNET' : `CADASTRO ${(job.app && appLabels[job.app]?.toUpperCase()) ?? ''}`}</span>
-          <h2>{network ? (job.phoneName ?? job.geelarkPhoneId) : formatPhone(job.number)}</h2>
-          <p>{network ? 'Telefone' : `Phone ${job.phoneName ?? job.geelarkPhoneId}`} · saída pelo PC do atendente{job.egressIp ? ` (IP ${job.egressIp})` : ''}</p>
+          <span className="eyebrow">{network ? 'TESTE DE INTERNET' : control ? 'TELEFONE' : `CADASTRO ${(job.app && appLabels[job.app]?.toUpperCase()) ?? ''}`}</span>
+          <h2>{network || control ? (job.phoneName ?? job.geelarkPhoneId) : formatPhone(job.number)}</h2>
+          <p>{network || control ? 'Telefone' : `Phone ${job.phoneName ?? job.geelarkPhoneId}`} · saída pelo PC do atendente{job.egressIp ? ` (IP ${job.egressIp})` : ''}</p>
         </div>
         <Badge tone={statusTone[job.status] ?? 'neutral'}>{statusLabels[job.status] ?? job.status}</Badge>
       </div>
@@ -89,8 +92,8 @@ export function JobProgress({ tenantId, jobId, pollIntervalMs = JOB_POLL_INTERVA
       {active && <LiveScreen tenantId={tenantId} jobId={job.id} controllable={job.status === 'waiting_input'} />}
 
       <div className="provisioning-inline-actions">
-        {active && <Button variant="danger" icon="close" onClick={() => void cancel()} disabled={cancelling}>{cancelling ? 'Cancelando…' : network ? 'Cancelar teste' : 'Cancelar cadastro'}</Button>}
-        <Button variant="ghost" onClick={onBack}>{active ? (network ? 'Voltar (o teste continua)' : 'Voltar (o cadastro continua)') : 'Voltar'}</Button>
+        {active && !controlReady && <Button variant="danger" icon="close" onClick={() => void cancel()} disabled={cancelling}>{cancelling ? 'Cancelando…' : network ? 'Cancelar teste' : control ? 'Cancelar e desligar' : 'Cancelar cadastro'}</Button>}
+        <Button variant="ghost" onClick={onBack}>{active ? (network ? 'Voltar (o teste continua)' : control ? 'Voltar (o telefone continua ligado)' : 'Voltar (o cadastro continua)') : 'Voltar'}</Button>
       </div>
     </Panel>
     <Panel className="provisioning-timeline-panel">
@@ -119,6 +122,13 @@ function JobAction({ job, tenantId, run, onNewJob, onOpenNumbers }: ActionProps)
       </div>
     </div>;
   }
+  if (isControl(job) && (job.status === 'done' || job.status === 'cancelled')) {
+    return <div className="provisioning-result" role="status">
+      <h3>Sessão encerrada</h3>
+      <p>{job.status === 'done' && job.message ? job.message : 'O telefone foi desligado e parou de cobrar.'}</p>
+    </div>;
+  }
+  if (job.status === 'waiting_input' && job.step === 'controlling') return <ControlSession job={job} tenantId={tenantId} run={run} />;
   if (job.status === 'done') {
     return <div className="provisioning-result is-success" role="status">
       <Icon name="check" size={20} />
@@ -169,6 +179,24 @@ function JobAction({ job, tenantId, run, onNewJob, onOpenNumbers }: ActionProps)
       <strong>{linking ? 'Conectando ao ZapLiga…' : `${stepLabel(job.step)}…`}</strong>
       <small>{job.message ?? (linking ? 'O robô está digitando o código de conexão no phone. Não precisa fazer nada.' : 'O robô está trabalhando. Esta tela atualiza sozinha.')}</small>
     </div>
+  </div>;
+}
+
+/** "Abrir o telefone": ligado, saindo pelo PC, com o operador mexendo pela tela ao vivo. */
+function ControlSession({ job, tenantId, run }: { job: Job; tenantId: string; run: ActionProps['run'] }) {
+  const [busy, setBusy] = useState(false);
+  const end = async () => {
+    setBusy(true);
+    try { await run(() => resumeRobot(tenantId, job.id)); } finally { setBusy(false); }
+  };
+  return <div className="provisioning-input-card">
+    <h3>Telefone aberto: está com você</h3>
+    <p>Clique na tela abaixo para tocar, use os botões para voltar, ir para o início e digitar. Ninguém mais mexe nele enquanto isso.</p>
+    {job.message && <p className="provisioning-detail">{job.message}</p>}
+    <div className="provisioning-inline-actions">
+      <Button variant="danger" icon="close" onClick={() => void end()} disabled={busy}>{busy ? 'Desligando…' : 'Desligar o phone'}</Button>
+    </div>
+    <p className="form-hint">Ligado, ele cobra por minuto. Sem nenhum toque por 10 minutos (ou depois de 30 minutos no total), desliga sozinho.</p>
   </div>;
 }
 

@@ -344,3 +344,27 @@ it('depois de um erro mostra a contagem para assumir o phone antes de desligar',
   expect(await screen.findByRole('heading', { name: 'Você está no controle do phone' })).toBeInTheDocument();
   expect(screen.queryByRole('timer')).not.toBeInTheDocument();
 });
+
+
+it('sessão "Abrir": telefone com o operador e botão de desligar', async () => {
+  let current = job({ mode: 'control', app: null, number: null, phoneName: 'WhatsApp 3', status: 'waiting_input', step: 'controlling', awaiting: 'manual',
+    egressIp: '131.255.254.90', message: 'Phone ligado, saindo pelo IP 131.255.254.90.', history: historyOf('queued', 'checking_network', 'controlling') });
+  URL.createObjectURL = vi.fn(() => 'blob:live-1');
+  URL.revokeObjectURL = vi.fn();
+  server.use(
+    http.get(`${API}/jobs/job-1`, () => HttpResponse.json(current)),
+    http.get(`${API}/jobs/job-1/screen`, () => new HttpResponse(new Uint8Array([137, 80, 78, 71]), { headers: { 'content-type': 'image/png' } })),
+    http.post(`${API}/jobs/job-1/resume`, () => {
+      current = job({ ...current, status: 'done', step: 'control_ended', awaiting: null, message: 'Sessão encerrada; o phone foi desligado.' });
+      return HttpResponse.json(current);
+    }),
+  );
+  render(<JobProgress tenantId="tenant-1" jobId="job-1" pollIntervalMs={POLL_MS} onBack={vi.fn()} onNewJob={vi.fn()} onOpenNumbers={vi.fn()} />);
+  expect(await screen.findByRole('heading', { name: 'Telefone aberto: está com você' })).toBeInTheDocument();
+  expect(screen.getByRole('heading', { name: 'WhatsApp 3' })).toBeInTheDocument();
+  expect(await screen.findByRole('button', { name: /Tocar na tela do phone/ })).toBeInTheDocument();
+  expect(screen.queryByRole('button', { name: /Assumir o controle|Cancelar/ })).not.toBeInTheDocument();
+  await userEvent.click(screen.getByRole('button', { name: 'Desligar o phone' }));
+  expect(await screen.findByRole('heading', { name: 'Sessão encerrada' })).toBeInTheDocument();
+  expect(screen.getByText('Sessão encerrada; o phone foi desligado.')).toBeInTheDocument();
+});

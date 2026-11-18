@@ -41,6 +41,6 @@ export function ProvisioningPage({ tenantId, currentUserId, allowed, onOpenNumbe
         <ProvisioningWizard key={view.key} tenantId={tenantId} currentUserId={currentUserId} prefill={view.prefill} onJobCreated={(job) => setView({ kind: 'job', jobId: job.id })} />
         <RecentJobs tenantId={tenantId} onOpen={(jobId) => setView({ kind: 'job', jobId })} />
       </>}
-    <PhonesPanel tenantId={tenantId} />
+    <PhonesPanel tenantId={tenantId} onOpenJob={(jobId) => setView({ kind: 'job', jobId })} />
   </div>;
 }

@@ -14,7 +14,7 @@ import { egressSocksConfig, socksProxiesFor } from './egress-socks';
 
 export const MAX_PROFILE_PHOTO_BYTES = 2 * 1024 * 1024;
 
-type JobMode = 'register' | 'network_check';
+type JobMode = 'register' | 'network_check' | 'control';
 
 // Every minute one API instance settles the open jobs nobody is watching (tab closed):
 // the link result, a worker that lost the job, and above all powering the phone off.
@@ -224,6 +224,43 @@ export class WhatsappProvisioningService implements OnModuleInit, OnModuleDestro
     return { ...phone, status: 'off' as const, busyJobId: null };
   }
 
+  async renamePhone(tenantId: string, actorUserId: string, phoneId: string, rawName: string) {
+    await this.entitlement.assertAction(tenantId, 'write', actorUserId);
+    const name = String(rawName ?? '').trim();
+    if (!name || name.length > 60) throw new BadRequestException({ statusCode: 400, code: 'invalid_name', message: 'Dê um nome ao telefone (até 60 caracteres).' });
+    const phone = await this.findPhone(phoneId);
+    await this.worker.renamePhone(phone.id, name);
+    await this.audit.record({ actorUserId, tenantId, action: 'provisioning.phone_renamed', entityType: 'geelark_phone', entityId: phone.id, metadata: { from: phone.name, to: name } });
+    return { ...phone, name };
+  }
+
+  /**
+   * "Aparelho novo": GeeLark gives the phone another brand, model and SIM number (the
+   * WhatsApp on it is gone). The worker powers it off first and refuses while a job uses it.
+   */
+  async newDevice(tenantId: string, actorUserId: string, phoneId: string) {
+    await this.entitlement.assertAction(tenantId, 'write', actorUserId);
+    const phone = await this.findPhone(phoneId);
+    await this.worker.newDevice(phone.id);
+    await this.audit.record({ actorUserId, tenantId, action: 'provisioning.phone_new_device', entityType: 'geelark_phone', entityId: phone.id, metadata: { name: phone.name } });
+    return { ...phone, status: 'off' as const, busyJobId: null, apps: { whatsapp: null, business: null } };
+  }
+
+  /** Deletes the cloud phone in GeeLark (powered off first). The WhatsApp on it loses its main device. */
+  async deletePhone(tenantId: string, actorUserId: string, phoneId: string) {
+    await this.entitlement.assertAction(tenantId, 'write', actorUserId);
+    const phone = await this.findPhone(phoneId);
+    await this.worker.deletePhone(phone.id);
+    await this.audit.record({ actorUserId, tenantId, action: 'provisioning.phone_deleted', entityType: 'geelark_phone', entityId: phone.id, metadata: { name: phone.name, android: phone.android } });
+    return { ok: true };
+  }
+
+  private async findPhone(phoneId: string) {
+    const phone = (await this.worker.listPhones()).find((item) => item.id === String(phoneId ?? ''));
+    if (!phone) throw new NotFoundException({ statusCode: 404, code: 'phone_not_found', message: 'Telefone não encontrado no GeeLark.' });
+    return phone;
+  }
+
   /** The PC's slot is resolved now (it may change later) and must be going out through the PC right now. */
   private async onlineEgress(rawNode: string) {
     const socks = egressSocksConfig();
@@ -240,7 +277,7 @@ export class WhatsappProvisioningService implements OnModuleInit, OnModuleDestro
 
   async createJob(tenantId: string, actorUserId: string, input: { egressNode: string; geelarkPhoneId: string; mode?: JobMode; app?: 'whatsapp' | 'business'; countryCode?: string; number?: string; powerOffWhenDone?: boolean; resetApp?: boolean }) {
     await this.entitlement.assertAction(tenantId, 'write', actorUserId);
-    const mode: JobMode = input.mode === 'network_check' ? 'network_check' : 'register';
+    const mode: JobMode = input.mode === 'network_check' || input.mode === 'control' ? input.mode : 'register';
     const register = mode === 'register';
     const countryCode = cleanDigits(input.countryCode);
     const number = cleanDigits(input.number);

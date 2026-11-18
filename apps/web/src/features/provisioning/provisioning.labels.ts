@@ -13,6 +13,8 @@ export const stepLabels: Record<string, string> = {
   waiting_sms: 'Aguardando o código SMS',
   waiting_manual: 'Esperando você mexer no phone',
   rescue_offer: 'Erro: esperando você assumir o phone',
+  controlling: 'Com você na tela ao vivo',
+  control_ended: 'Sessão encerrada',
   verifying: 'Verificando o código',
   waiting_profile: 'Aguardando nome e foto',
   saving_profile: 'Salvando o perfil',
@@ -31,9 +33,11 @@ export const stepLabels: Record<string, string> = {
 export const stepLabel = (step: string | null | undefined) => (step ? stepLabels[step] ?? step : '—');
 
 export const isNetworkCheck = (job: Pick<Job, 'mode'>) => job.mode === 'network_check';
+export const isControl = (job: Pick<Job, 'mode'>) => job.mode === 'control';
 
 /** Título do job nas listas: o número do cadastro, ou "Teste de internet". */
-export const jobTitle = (job: Pick<Job, 'mode' | 'number'>) => (isNetworkCheck(job) ? 'Teste de internet' : formatPhone(job.number));
+export const jobTitle = (job: Pick<Job, 'mode' | 'number'>) =>
+  (isNetworkCheck(job) ? 'Teste de internet' : isControl(job) ? 'Telefone aberto' : formatPhone(job.number));
 
 export const statusLabels: Record<JobStatus, string> = {
   running: 'Em andamento',

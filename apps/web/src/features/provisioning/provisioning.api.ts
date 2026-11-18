@@ -26,6 +26,18 @@ export const createPhone = (tenantId: string, input: CreatePhone): Promise<Phone
 export const stopPhone = (tenantId: string, phoneId: string): Promise<Phone> =>
   json(`${base(tenantId)}/phones/${encodeURIComponent(phoneId)}/stop`, { method: 'POST' });
 
+const phonePath = (tenantId: string, phoneId: string) => `${base(tenantId)}/phones/${encodeURIComponent(phoneId)}`;
+
+export const renamePhone = (tenantId: string, phoneId: string, name: string): Promise<Phone> =>
+  json(`${phonePath(tenantId, phoneId)}/rename`, { method: 'POST', body: JSON.stringify({ name }) });
+
+/** "Aparelho novo": outra marca, modelo e número do SIM (o WhatsApp do telefone é apagado). */
+export const newDevicePhone = (tenantId: string, phoneId: string): Promise<Phone> =>
+  json(`${phonePath(tenantId, phoneId)}/new-device`, { method: 'POST' });
+
+export const deletePhone = (tenantId: string, phoneId: string): Promise<{ ok: boolean }> =>
+  json(phonePath(tenantId, phoneId), { method: 'DELETE' });
+
 export const createJob = (tenantId: string, input: CreateJob): Promise<Job> =>
   json(`${base(tenantId)}/jobs`, { method: 'POST', body: JSON.stringify(input) });
 

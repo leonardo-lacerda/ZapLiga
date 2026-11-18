@@ -323,3 +323,58 @@ def test_probe_proxy_validation_never_echoes_password(client):
                                                                       "password": "probe-pw-xyz"}))
     assert resp.status_code == 400 and resp.json()["error"] == "invalid_request"
     assert "probe-pw-xyz" not in resp.text
+
+
+
+# --------------------------------------------------------------------------- ações no phone
+def _geelark_error(code):
+    from app.geelark_api import GeeLarkError
+    return GeeLarkError(code, "x", "", "/open/v1/phone/x")
+
+
+def test_rename_phone(client, geelark):
+    resp = client.post("/phones/p2/rename", headers=H, json={"name": "  WhatsApp 4  "})
+    assert resp.json() == {"ok": True, "name": "WhatsApp 4"}
+    geelark.rename_phone.assert_called_once_with("p2", "WhatsApp 4")
+    assert client.post("/phones/p2/rename", headers=H, json={"name": "   "}).status_code == 400
+    geelark.rename_phone.side_effect = _geelark_error(42001)
+    resp = client.post("/phones/p2/rename", headers=H, json={"name": "Outro"})
+    assert (resp.status_code, resp.json()["error"]) == (404, "phone_not_found")
+
+
+def test_new_device_on_an_off_phone_forgets_its_apps(client, geelark):
+    geelark.phone_status.return_value = 2
+    client.manager._apps["p2"] = {"whatsapp": True, "business": False}
+    assert client.post("/phones/p2/new-device", headers=H).json() == {"ok": True}
+    geelark.new_device.assert_called_once_with("p2")
+    geelark.stop_phone.assert_not_called()
+    assert client.manager.known_apps("p2") is None
+
+
+@pytest.mark.parametrize("code,status,error", [(44004, 409, "daily_limit"), (45004, 409, "egress_offline"),
+                                               (43015, 409, "not_supported"), (12345, 502, "geelark_error")])
+def test_new_device_errors(client, geelark, code, status, error):
+    geelark.phone_status.return_value = 2
+    geelark.new_device.side_effect = _geelark_error(code)
+    resp = client.post("/phones/p2/new-device", headers=H)
+    assert (resp.status_code, resp.json()["error"]) == (status, error)
+
+
+def test_delete_stops_a_running_phone_first(client, geelark, monkeypatch):
+    import app.main as main_module
+    monkeypatch.setattr(main_module.time, "sleep", lambda s: None)
+    geelark.phone_status.side_effect = [0, 0, 2]
+    assert client.delete("/phones/p1", headers=H).json() == {"ok": True}
+    geelark.stop_phone.assert_called_once_with("p1")
+    geelark.delete_phone.assert_called_once_with("p1")
+
+
+def test_phone_actions_refuse_a_phone_in_use(client, geelark):
+    resp = client.post("/jobs", headers=H, json=job_body())
+    job_id = resp.json()["jobId"]
+    wait_for(lambda: client.get(f"/jobs/{job_id}", headers=H).json()["awaiting"] == "sms")
+    for method, path in (("delete", "/phones/p1"), ("post", "/phones/p1/new-device")):
+        resp = getattr(client, method)(path, headers=H)
+        assert (resp.status_code, resp.json()["error"]) == (409, "phone_busy")
+    geelark.delete_phone.assert_not_called()
+    geelark.new_device.assert_not_called()

@@ -1,8 +1,8 @@
-import { Body, Controller, Get, Header, HttpCode, Param, Post, Put, Query, StreamableFile, UploadedFile, UseGuards, UseInterceptors } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Header, HttpCode, Param, Post, Put, Query, StreamableFile, UploadedFile, UseGuards, UseInterceptors } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { AuthGuard, CurrentTenant, CurrentUser, Roles, RolesGuard, TenantMembershipGuard } from '../auth/auth.guards';
 import { FeatureFlagGuard, RequiresFeature } from '../feature-flags/feature-flags.guard';
-import { AssignEgressNodeDto, CreatePhoneDto, CreateProvisioningJobDto, LinkDecisionDto, ManualActionDto, RequestCodeDto, SubmitProfileDto, SubmitSmsCodeDto } from './dto/provisioning.dto';
+import { AssignEgressNodeDto, CreatePhoneDto, CreateProvisioningJobDto, LinkDecisionDto, ManualActionDto, RenamePhoneDto, RequestCodeDto, SubmitProfileDto, SubmitSmsCodeDto } from './dto/provisioning.dto';
 import { MAX_PROFILE_PHOTO_BYTES, WhatsappProvisioningService } from './whatsapp-provisioning.service';
 
 /** WhatsApp registration on GeeLark cloud phones (internal; docs/provisioning-contract.md section 3). */
@@ -33,6 +33,17 @@ export class WhatsappProvisioningController {
   @Post('/phones/:id/stop')
   @HttpCode(200)
   stopPhone(@Param('id') id: string, @CurrentTenant() tenantId: string, @CurrentUser() user: any) { return this.provisioning.powerOffPhone(tenantId, user.id, id); }
+
+  @Post('/phones/:id/rename')
+  @HttpCode(200)
+  renamePhone(@Param('id') id: string, @Body() body: RenamePhoneDto, @CurrentTenant() tenantId: string, @CurrentUser() user: any) { return this.provisioning.renamePhone(tenantId, user.id, id, body.name); }
+
+  @Post('/phones/:id/new-device')
+  @HttpCode(200)
+  newDevice(@Param('id') id: string, @CurrentTenant() tenantId: string, @CurrentUser() user: any) { return this.provisioning.newDevice(tenantId, user.id, id); }
+
+  @Delete('/phones/:id')
+  deletePhone(@Param('id') id: string, @CurrentTenant() tenantId: string, @CurrentUser() user: any) { return this.provisioning.deletePhone(tenantId, user.id, id); }
 
   @Get('/jobs')
   list(@Query('limit') limit: string | undefined, @CurrentTenant() tenantId: string) { return this.provisioning.listJobs(tenantId, Number(limit)); }

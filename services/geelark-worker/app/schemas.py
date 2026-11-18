@@ -40,7 +40,8 @@ class CreateWorkerJob(_Body):
     jobId: str = Field(min_length=1, max_length=64, pattern=r"^[A-Za-z0-9_-]+$")
     phoneId: str = Field(min_length=1, max_length=64)
     # network_check: só aplica a rede, liga o phone, confere o IP e desliga (sem app nem número).
-    mode: Literal["register", "network_check"] = "register"
+    # control: igual, mas deixa o phone ligado com o operador (tela ao vivo) até ele encerrar.
+    mode: Literal["register", "network_check", "control"] = "register"
     app: Literal["whatsapp", "business"] | None = None
     countryCode: str | None = Field(default=None, pattern=r"^[1-9]\d{0,3}$")
     number: str | None = Field(default=None, pattern=r"^\d{4,15}$")
@@ -75,6 +76,18 @@ class CreateWorkerJob(_Body):
             probe_proxy=(ProbeProxySpec(probe.server, probe.port, probe.username, probe.password)
                          if probe is not None else None),
         )
+
+
+class RenamePhone(_Body):
+    name: str = Field(min_length=1, max_length=60)
+
+    @field_validator("name")
+    @classmethod
+    def clean_name(cls, v: str) -> str:
+        v = v.strip()
+        if not v:
+            raise ValueError("o nome é obrigatório")
+        return v
 
 
 class CreatePhone(_Body):

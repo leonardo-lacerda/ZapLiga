@@ -29,7 +29,7 @@ export function RecentJobs({ tenantId, onOpen }: { tenantId: string; onOpen: (jo
           <small>{stepLabel(job.step)}</small>
         </div>
         <Badge tone={statusTone[job.status] ?? 'neutral'}>{statusLabels[job.status] ?? job.status}</Badge>
-        <Button variant={isJobActive(job) ? 'secondary' : 'ghost'} onClick={() => onOpen(job.id)} aria-label={`${isJobActive(job) ? 'Acompanhar' : 'Abrir'} ${job.mode === 'network_check' ? `teste de internet de ${job.phoneName ?? job.geelarkPhoneId}` : `cadastro de ${jobTitle(job)}`}`}>{isJobActive(job) ? 'Acompanhar' : 'Abrir'}</Button>
+        <Button variant={isJobActive(job) ? 'secondary' : 'ghost'} onClick={() => onOpen(job.id)} aria-label={`${isJobActive(job) ? 'Acompanhar' : 'Abrir'} ${job.mode === 'network_check' ? `teste de internet de ${job.phoneName ?? job.geelarkPhoneId}` : job.mode === 'control' ? `sessão de ${job.phoneName ?? job.geelarkPhoneId}` : `cadastro de ${jobTitle(job)}`}`}>{isJobActive(job) ? 'Acompanhar' : 'Abrir'}</Button>
       </li>)}
     </ul>}
   </Panel>;
