@@ -13,11 +13,12 @@ import { IntegrationKeyGuard } from './crm-integration.guard';
 import { IntegrationAgentsService } from './integration-agents.service';
 import { IntegrationApiController } from './integration-api.controller';
 import { IntegrationCallsService } from './integration-calls.service';
+import { IntegrationWhatsappCheckService } from './integration-whatsapp-check.service';
 
 @Module({
   imports: [AuditModule, BillingModule, CallRecordingsModule, ContactComplianceModule, CrmEventsModule, DialerModule, NumbersModule, UsersModule],
   controllers: [CrmIntegrationsController, IntegrationApiController],
-  providers: [CrmIntegrationsService, IntegrationAgentsService, IntegrationCallsService, IntegrationKeyGuard],
+  providers: [CrmIntegrationsService, IntegrationAgentsService, IntegrationCallsService, IntegrationKeyGuard, IntegrationWhatsappCheckService],
   exports: [CrmIntegrationsService],
 })
 export class CrmIntegrationsModule {}

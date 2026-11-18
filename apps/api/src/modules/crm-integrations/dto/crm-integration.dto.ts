@@ -1,4 +1,4 @@
-import { ArrayMaxSize, IsArray, IsEmail, IsIn, IsInt, IsObject, IsOptional, IsString, Max, MaxLength, Min, MinLength } from 'class-validator';
+import { Allow, ArrayMaxSize, IsArray, IsEmail, IsIn, IsInt, IsObject, IsOptional, IsString, Max, MaxLength, Min, MinLength } from 'class-validator';
 
 export class CreateCrmIntegrationDto {
   @IsString() @MinLength(2) @MaxLength(80) name!: string;
@@ -49,4 +49,9 @@ export class IntegrationUpdateNumberDto {
   @IsOptional() @IsInt() @Min(0) @Max(3600) cooldownSeconds?: number;
   @IsOptional() @IsInt() @Min(1) @Max(20) maxCallsPerWindow?: number;
   @IsOptional() @IsInt() @Min(60) @Max(3600) callWindowSeconds?: number;
+}
+
+// Validated by the service so a bad phone answers 422 `invalid_phone`, not a generic 400.
+export class WhatsappCheckDto {
+  @Allow() phone?: unknown;
 }

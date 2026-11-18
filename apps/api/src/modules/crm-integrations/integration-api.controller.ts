@@ -1,10 +1,11 @@
 import { Body, Controller, Delete, Get, HttpCode, HttpStatus, Param, Patch, Post, Query, UseGuards } from '@nestjs/common';
 import { NumbersService } from '../numbers/numbers.service';
-import { CreateDialIntentDto, EnsureAgentDto, HandshakeDto, IntegrationCreateNumberDto, IntegrationSuppressionDto, IntegrationUpdateNumberDto, IntegrationWrapUpDto } from './dto/crm-integration.dto';
+import { CreateDialIntentDto, EnsureAgentDto, HandshakeDto, IntegrationCreateNumberDto, IntegrationSuppressionDto, IntegrationUpdateNumberDto, IntegrationWrapUpDto, WhatsappCheckDto } from './dto/crm-integration.dto';
 import { CurrentIntegration, IntegrationKeyGuard, RequiresScope } from './crm-integration.guard';
 import { CrmIntegration, CrmIntegrationsService } from './crm-integrations.service';
 import { IntegrationAgentsService } from './integration-agents.service';
 import { IntegrationCallsService } from './integration-calls.service';
+import { IntegrationWhatsappCheckService } from './integration-whatsapp-check.service';
 
 /**
  * Server-to-server API for CRM integrations (contract v1). Authenticated by the integration key;
@@ -13,7 +14,7 @@ import { IntegrationCallsService } from './integration-calls.service';
 @Controller('/api/v1/integrations')
 @UseGuards(IntegrationKeyGuard)
 export class IntegrationApiController {
-  constructor(private readonly integrations: CrmIntegrationsService, private readonly agents: IntegrationAgentsService, private readonly calls: IntegrationCallsService, private readonly numbers: NumbersService) {}
+  constructor(private readonly integrations: CrmIntegrationsService, private readonly agents: IntegrationAgentsService, private readonly calls: IntegrationCallsService, private readonly numbers: NumbersService, private readonly whatsappCheck: IntegrationWhatsappCheckService) {}
 
   @Get('/me')
   me(@CurrentIntegration() integration: CrmIntegration) { return this.integrations.me(integration); }
@@ -65,6 +66,12 @@ export class IntegrationApiController {
   @Delete('/numbers/:id')
   @RequiresScope('numbers:write')
   removeLine(@CurrentIntegration() integration: CrmIntegration, @Param('id') id: string) { return this.numbers.remove(integration.tenant_id, null, id); }
+
+  /** Whether a phone has WhatsApp, asked through one of the tenant's lines (cached, rate limited). */
+  @Post('/whatsapp-check')
+  @HttpCode(HttpStatus.OK)
+  @RequiresScope('numbers:read')
+  whatsappCheckPhone(@CurrentIntegration() integration: CrmIntegration, @Body() body: WhatsappCheckDto) { return this.whatsappCheck.check(integration, body?.phone); }
 
   @Get('/agents')
   @RequiresScope('agents')

@@ -30,8 +30,12 @@ const server = http.createServer(async (request, response) => {
   if (request.method === 'POST' && suffix === '/connect') return json(response, 200, { status: 'connected' });
   if (request.method === 'POST' && suffix === '/disconnect') return json(response, 200, { status: 'disconnected' });
   if (request.method === 'POST' && suffix === '/contacts/check') {
-    const body = await readBody(request); const phone = String(body.phones?.[0] ?? '').replace(/\D/g, '');
-    return json(response, 200, { results: [{ phone, jid: `${phone}@s.whatsapp.net`, is_registered: true }] });
+    // Test convention: a number ending in 404 has no WhatsApp; one ending in 503 makes Waxum fail.
+    const body = await readBody(request);
+    const phones = (Array.isArray(body.phones) ? body.phones : []).map((item) => String(item).replace(/\D/g, ''));
+    if (!phones.length) return json(response, 400, { error: 'phones is required' });
+    if (phones.some((phone) => phone.endsWith('503'))) return json(response, 503, { error: 'not_connected' });
+    return json(response, 200, { results: phones.map((phone) => ({ phone, jid: `${phone}@s.whatsapp.net`, is_registered: !phone.endsWith('404') })) });
   }
   if (request.method === 'GET' && suffix.includes('/contacts/') && suffix.endsWith('/lid')) {
     const jid = decodeURIComponent(suffix.slice('/contacts/'.length, -'/lid'.length));

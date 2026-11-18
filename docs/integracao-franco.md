@@ -59,6 +59,7 @@ Erros de discagem retornam `409` com `{code, message, retry_after_seconds}`.
 | `POST /numbers/:id/reconnect` | `numbers:write` | — |
 | `PATCH /numbers/:id/settings` | `numbers:write` | `{label?, cooldownSeconds?, maxCallsPerWindow?, callWindowSeconds?}` |
 | `DELETE /numbers/:id` | `numbers:write` | Arquiva a linha (recusa se estiver em ligação) |
+| `POST /whatsapp-check` | `numbers:read` | `{phone}` (E.164, com ou sem `+`) → `{phone, on_whatsapp, jid}` |
 | `GET /agents` | `agents` | Vínculos com estado da estação |
 | `POST /agents/ensure` | `agents` | `{externalUserId, email, name}` → `{sdr_id, user_id, operator_kind, provisioned, external_user_id}` |
 | `DELETE /agents/:sdrId/link` | `agents` | Desvincula; libera o assento se a integração o criou |
@@ -82,6 +83,20 @@ Detalhes por rota:
   - `retornar` exige `callbackAt` futuro.
   - `nao_ligar_novamente` suprime o número.
   - Se a pausa já foi liberada, responde `409` com `code: wrap_up_closed`.
+- **`POST /whatsapp-check`** pergunta a uma linha de WhatsApp Web do tenant se o telefone tem WhatsApp (serve para separar "sem WhatsApp" de "bloqueou a empresa" no erro 131026 da Cloud API).
+  - Só os dígitos vão ao Waxum. `phone` na resposta é esse número só com dígitos; `jid` vem `null` quando `on_whatsapp` é `false`.
+  - A linha usada é uma conectada do tenant, de preferência fora de ligação e fora de quarentena. Se ela falhar, tenta mais uma.
+  - `on_whatsapp: false` só sai quando o Waxum respondeu que o número não está registrado. Falha ou timeout nunca viram "não".
+  - Cache de 24 h por telefone, compartilhado entre tenants (`CRM_WHATSAPP_CHECK_CACHE_SECONDS`). Só respostas reais entram no cache.
+  - Limite próprio: 10 consultas ao Waxum por minuto por tenant (`CRM_WHATSAPP_CHECK_PER_MINUTE`); respostas do cache não contam. Consultar em volume faz a linha ser banida, então use só para o caso do 131026.
+
+  | Situação | Resposta |
+  |---|---|
+  | Verificado | `200` com `{phone, on_whatsapp, jid}` |
+  | Telefone inválido | `422` com `code: invalid_phone` |
+  | Nenhuma linha conectada no tenant | `409` com `code: no_connected_number` |
+  | Limite de consultas excedido | `429` com `code: rate_limited` e `retry_after_seconds` |
+  | Waxum falhou ou deu timeout | `502` com `code: check_failed` (tente depois; não é "sem WhatsApp") |
 - **Suprimir não tem rota de remoção, de propósito:** retirar um "não ligar" é decisão humana no painel do ZapLiga.
 
 ### Códigos de recusa da discagem
