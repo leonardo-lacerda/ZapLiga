@@ -13,12 +13,12 @@
 #   docker save zapliga-waxum:<tag> | gzip | ssh root@<vps> 'gunzip | docker load'
 #
 # Usage:
-#   infra/waxum/build.sh [tag]            # default tag: 0.12.6-multirelay-v4-opus
+#   infra/waxum/build.sh [tag]            # default tag: 0.12.6-multirelay-v3
 #   WORKDIR=/some/dir infra/waxum/build.sh # keep the assembled source around
 #
 set -euo pipefail
 
-TAG="${1:-0.12.6-multirelay-v4-opus}"
+TAG="${1:-0.12.6-multirelay-v3}"
 IMAGE="zapliga-waxum:${TAG}"
 
 # Pinned upstream sources. Bumping either means regenerating the patches:
@@ -33,7 +33,7 @@ PATCHES="${HERE}/patches"
 WORKDIR="${WORKDIR:-$(mktemp -d -t zapliga-waxum-build-XXXXXX)}"
 SRC="${WORKDIR}/waxum"
 
-for f in whatsapp-rust-zapliga.patch whatsapp-rust-call-codec.patch waxum-zapliga.patch waxum-call-codec.patch; do
+for f in whatsapp-rust-zapliga.patch waxum-zapliga.patch; do
   [ -s "${PATCHES}/${f}" ] || { echo "patch ausente: ${PATCHES}/${f}" >&2; exit 1; }
 done
 command -v docker >/dev/null || { echo "docker nao encontrado" >&2; exit 1; }
@@ -63,15 +63,8 @@ echo "==> Applying patches"
 # docker-entrypoint.sh ships with CRLF, and a CRLF shebang makes the container
 # crash-loop with "exec: /app/docker-entrypoint.sh: not found".
 (cd "${SRC}/whatsapp-rust" && patch -p1 --binary --forward < "${PATCHES}/whatsapp-rust-zapliga.patch")
-(cd "${SRC}/whatsapp-rust" && patch -p1 --forward < "${PATCHES}/whatsapp-rust-call-codec.patch")
-# waxum-zapliga.patch was cut from a Windows (CRLF) checkout; a Linux checkout is
-# LF, so give the files it touches CRLF first or every hunk is rejected.
-for f in Cargo.lock Cargo.toml Dockerfile docker-entrypoint.sh src/handlers/mex.rs; do
-  sed -i 's/\r*$/\r/' "${SRC}/${f}"
-done
 (cd "${SRC}" && patch -p1 --binary --forward < "${PATCHES}/waxum-zapliga.patch")
-sed -i 's/\r$//' "${SRC}/docker-entrypoint.sh" "${SRC}/Dockerfile"
-(cd "${SRC}" && patch -p1 --forward < "${PATCHES}/waxum-call-codec.patch")
+sed -i 's/\r$//' "${SRC}/docker-entrypoint.sh"
 head -c 12 "${SRC}/docker-entrypoint.sh" | grep -q '#!/bin/sh' || { echo "docker-entrypoint.sh invalido apos patch" >&2; exit 1; }
 
 echo "==> Sanity: the multi-relay fix must be present"

@@ -13,8 +13,6 @@ está em [`docs/postmortem-audio-unidirecional.md`](../../docs/postmortem-audio-
 |---|---|
 | `build.sh` | Reconstrói a imagem do zero numa máquina limpa: baixa os upstreams pinados, aplica os patches, corrige CRLF e roda `docker build`. |
 | `patches/whatsapp-rust-zapliga.patch` | Nossas mudanças sobre `oxidezap/whatsapp-rust @ 9be10573` (main de 2026-09-01). |
-| `patches/whatsapp-rust-call-codec.patch` | `WA_CALL_AUDIO_CODEC` (`mlow`/`opus`): o formato que a ligação oferece ao celular. |
-| `patches/waxum-call-codec.patch` | Valida `WA_CALL_AUDIO_CODEC` no entrypoint, fixa o nightly de 2026-09-09 e limita o build a 6 jobs. |
 | `patches/waxum-zapliga.patch` | Nossas mudanças sobre `imtaqin/waxum v0.12.5` (`Cargo.toml` com `[patch]` apontando para `./whatsapp-rust`, `Cargo.lock`, `Dockerfile`, `docker-entrypoint.sh` em LF, compat em `src/handlers/mex.rs`). |
 | `entrypoint-guard.sh`, `healthcheck.sh` | Montados no container pelo compose (espera NATS; healthcheck exige a conexão Rust no NATS). |
 
@@ -39,8 +37,8 @@ está em [`docs/postmortem-audio-unidirecional.md`](../../docs/postmortem-audio-
 
 ```bash
 # na sua maquina (nunca na VPS):
-infra/waxum/build.sh 0.12.6-multirelay-v4-opus
-docker save zapliga-waxum:0.12.6-multirelay-v4-opus | gzip \
+infra/waxum/build.sh 0.12.6-multirelay-v3
+docker save zapliga-waxum:0.12.6-multirelay-v3 | gzip \
   | ssh -i ~/.ssh/zapliga_actions root@209.50.229.249 'gunzip | docker load'
 ```
 
