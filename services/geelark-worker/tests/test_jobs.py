@@ -685,3 +685,83 @@ def test_wait_limit_when_asking_for_a_new_code_also_waits_for_the_operator():
     manager.submit_input("job-1", {"type": "resume"})
     awaiting(manager, "job-1", "sms")
     manager.cancel("job-1")
+
+
+def _failing_open_app(times=1):
+    """open_app falha com um erro que o robô não destrava (não é tela desconhecida)."""
+    class Factory(FakeFactory):
+        def __call__(self, spec, ctx):
+            auto = super().__call__(spec, ctx)
+            left = {"n": times}
+            original = auto.open_app
+
+            def open_app():
+                if left["n"]:
+                    left["n"] -= 1
+                    auto.calls.append("open_app")
+                    raise JobError("number_banned", "O WhatsApp bloqueou este número.")
+                return original()
+            auto.open_app = open_app
+            return auto
+    return Factory()
+
+
+def test_after_an_error_nobody_takes_over_so_the_phone_powers_off():
+    factory = _failing_open_app()
+    manager = JobManager(factory, input_timeout_s=5, job_timeout_s=10, rescue_window_s=0.3)
+    manager.create(make_spec())
+    wait_for(lambda: manager.get("job-1").step == "rescue_offer")
+    job = manager.get("job-1")
+    # Durante a contagem: phone ligado, erro visível, dá para assumir.
+    assert (job.status, job.awaiting, job.error_code) == ("waiting_input", "manual", "number_banned")
+    assert "power_off" not in factory.instances["job-1"].calls
+    job = finished(manager, "job-1")
+    assert (job.status, job.error_code) == ("failed", "number_banned")
+    assert "power_off" in factory.instances["job-1"].calls and job.screenshot is not None
+
+
+def test_after_an_error_take_over_keeps_the_phone_and_retries_the_step():
+    factory = _failing_open_app()
+    manager = JobManager(factory, input_timeout_s=5, job_timeout_s=10, rescue_window_s=5)
+    manager.create(make_spec())
+    wait_for(lambda: manager.get("job-1").step == "rescue_offer")
+    manager.take_over("job-1")
+    wait_for(lambda: manager.get("job-1").step == "waiting_manual")
+    job = manager.get("job-1")
+    assert job.step == "waiting_manual" and job.error_code is None
+    assert job.message.startswith("Você assumiu o controle do phone.") and "bloqueou" in job.message
+    manager.submit_input("job-1", {"type": "resume"})
+    awaiting(manager, "job-1", "sms")
+    calls = factory.instances["job-1"].calls
+    assert calls.count("open_app") == 2 and "power_off" not in calls
+    manager.cancel("job-1")
+
+
+def test_after_an_error_touching_the_live_screen_also_takes_over():
+    factory = _failing_open_app()
+    manager = JobManager(factory, input_timeout_s=5, job_timeout_s=10, rescue_window_s=5)
+    manager.create(make_spec())
+    wait_for(lambda: manager.get("job-1").step == "rescue_offer")
+    manager.manual_action("job-1", {"type": "tap", "x": 0.5, "y": 0.5})
+    wait_for(lambda: manager.get("job-1").step == "waiting_manual")
+    assert manager.get("job-1").awaiting == "manual"
+    manager.cancel("job-1")
+
+
+def test_sms_rejected_too_many_times_offers_the_phone_before_failing():
+    factory = FakeFactory(sms=[SmsResult(False, "x")] * 10)
+    manager = JobManager(factory, input_timeout_s=5, job_timeout_s=10, rescue_window_s=5)
+    manager.create(make_spec())
+    offered = lambda: manager.get("job-1").step == "rescue_offer"
+    while True:
+        wait_for(lambda: manager.get("job-1").awaiting == "sms" or offered())
+        if offered():
+            break
+        manager.submit_input("job-1", {"type": "sms", "code": "111111"})
+        wait_for(lambda: manager.get("job-1").awaiting is None or offered())
+    assert manager.get("job-1").error_code == "sms_rejected"
+    manager.take_over("job-1")
+    wait_for(lambda: manager.get("job-1").step == "waiting_manual")
+    manager.submit_input("job-1", {"type": "resume"})
+    awaiting(manager, "job-1", "sms")  # volta a esperar um código novo
+    manager.cancel("job-1")

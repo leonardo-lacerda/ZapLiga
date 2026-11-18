@@ -319,3 +319,28 @@ it('quando o WhatsApp pede para esperar, deixa o phone com o operador em vez de 
   expect(await screen.findByRole('button', { name: /Tocar na tela do phone/ })).toBeInTheDocument();
   expect(screen.getByRole('button', { name: 'Devolver ao robô' })).toBeEnabled();
 });
+
+it('depois de um erro mostra a contagem para assumir o phone antes de desligar', async () => {
+  const at = new Date(Date.now() - 10_000).toISOString();
+  let current = job({ status: 'waiting_input', step: 'rescue_offer', awaiting: 'manual', errorCode: 'number_banned', message: 'O WhatsApp bloqueou este número.', history: [...historyOf('queued', 'opening_app'), { step: 'rescue_offer', at, message: 'O WhatsApp bloqueou este número.' }] });
+  let claimed = 0;
+  URL.createObjectURL = vi.fn(() => 'blob:live-1');
+  URL.revokeObjectURL = vi.fn();
+  server.use(
+    http.get(`${API}/jobs/job-1`, () => HttpResponse.json(current)),
+    http.get(`${API}/jobs/job-1/screen`, () => new HttpResponse(new Uint8Array([137, 80, 78, 71]), { headers: { 'content-type': 'image/png' } })),
+    http.post(`${API}/jobs/job-1/takeover`, () => {
+      claimed += 1;
+      current = job({ ...current, step: 'waiting_manual', errorCode: null, message: 'Você assumiu o controle do phone. O robô tinha parado: O WhatsApp bloqueou este número.' });
+      return HttpResponse.json(current);
+    }),
+  );
+  render(<JobProgress tenantId="tenant-1" jobId="job-1" pollIntervalMs={POLL_MS} onBack={vi.fn()} onNewJob={vi.fn()} onOpenNumbers={vi.fn()} />);
+  expect(await screen.findByRole('heading', { name: 'O WhatsApp recusou este número' })).toBeInTheDocument();
+  const timer = screen.getByRole('timer');
+  expect(timer.textContent).toMatch(/^O phone desliga em (49|48|47) s$/);
+  await userEvent.click(screen.getByRole('button', { name: 'Assumir o controle do phone' }));
+  expect(claimed).toBe(1);
+  expect(await screen.findByRole('heading', { name: 'Você está no controle do phone' })).toBeInTheDocument();
+  expect(screen.queryByRole('timer')).not.toBeInTheDocument();
+});

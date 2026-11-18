@@ -20,6 +20,8 @@ type Props = {
 };
 
 const linkingSteps = new Set(['creating_line', 'opening_link_screen', 'waiting_pair_code', 'entering_pair_code', 'linking']);
+/** Depois de um erro o worker deixa o phone ligado este tempo (RESCUE_WINDOW no worker). */
+export const RESCUE_SECONDS = 59;
 const errorText = (error: unknown) => error instanceof Error ? error.message : String(error);
 
 const retryPrefill = (job: Job): WizardPrefill => {
@@ -157,6 +159,7 @@ function JobAction({ job, tenantId, run, onNewJob, onOpenNumbers }: ActionProps)
     </div>;
   }
   if (job.status === 'waiting_input' && job.awaiting === 'link_decision') return <LinkDecision job={job} tenantId={tenantId} run={run} />;
+  if (job.status === 'waiting_input' && job.step === 'rescue_offer') return <RescueOffer job={job} tenantId={tenantId} run={run} />;
   if (job.status === 'waiting_input' && job.awaiting === 'manual') return <ManualHelp job={job} tenantId={tenantId} run={run} />;
 
   const linking = job.awaiting === 'pair_code' || linkingSteps.has(job.step);
@@ -182,6 +185,42 @@ function ResendCode({ job, tenantId, run }: { job: Job; tenantId: string; run: A
       <Button variant="secondary" icon="refresh" onClick={() => void ask('sms')} disabled={Boolean(busy)}>{busy === 'sms' ? 'Pedindo…' : 'Reenviar SMS'}</Button>
       <Button variant="secondary" icon="phone" onClick={() => void ask('voice')} disabled={Boolean(busy)}>{busy === 'voice' ? 'Pedindo…' : 'Receber por ligação'}</Button>
     </div>
+  </div>;
+}
+
+/** Quando a contagem começou: hora do servidor; com relógio muito diferente, a hora em que a tela viu. */
+const rescueStartedAt = (job: Job, seenAt: number) => {
+  const entry = [...(job.history ?? [])].reverse().find((item) => item.step === 'rescue_offer');
+  const at = Date.parse(entry?.at ?? '');
+  const elapsed = Date.now() - at;
+  return Number.isFinite(at) && elapsed >= 0 && elapsed <= (RESCUE_SECONDS + 30) * 1000 ? at : seenAt;
+};
+
+/** O robô falhou mas o phone ainda está ligado: 59 s para o operador assumir antes de desligar. */
+function RescueOffer({ job, tenantId, run }: { job: Job; tenantId: string; run: ActionProps['run'] }) {
+  const [seenAt] = useState(() => Date.now());
+  const [now, setNow] = useState(() => Date.now());
+  const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, []);
+  const left = Math.max(0, Math.ceil(RESCUE_SECONDS - (now - rescueStartedAt(job, seenAt)) / 1000));
+  const claiming = busy || (job.message ?? '').startsWith('Assumindo o controle');
+  const claim = async () => {
+    setBusy(true);
+    try { await run(() => takeOverJob(tenantId, job.id)); } finally { setBusy(false); }
+  };
+  const explanation = errorExplanation(job.errorCode);
+  return <div className="provisioning-result is-error provisioning-rescue" role="alert">
+    <Icon name="alert" size={20} />
+    <h3>{explanation.title}</h3>
+    {job.message && <p className="provisioning-detail">Detalhe: {job.message}</p>}
+    <p className="provisioning-countdown" role="timer" aria-live="off">{left > 0 ? `O phone desliga em ${left} s` : 'Desligando o phone…'}</p>
+    <div className="provisioning-inline-actions">
+      <Button icon="phone" onClick={() => void claim()} disabled={claiming || left === 0}>{claiming ? 'Assumindo…' : 'Assumir o controle do phone'}</Button>
+    </div>
+    <p className="form-hint">Assumindo, o phone fica ligado com você (e cobrando) e depois você devolve ao robô ou cancela. Tocar na tela abaixo também assume. Sem ninguém, ele desliga para não cobrar.</p>
   </div>;
 }
 

@@ -61,6 +61,8 @@ MAX_MANUAL_HELPS = 3
 # o operador fica com o controle e decide se espera (phone ligado cobra por minuto) ou cancela.
 HELP_CODES = frozenset({"unknown_screen", "manual_takeover", "pair_failed", "wait_limit"})
 TAKEOVER_MESSAGE = "Você assumiu o controle do phone."
+# Contagem depois de um erro: phone ainda ligado, esperando o operador assumir.
+RESCUE_STEP = "rescue_offer"
 MANUAL_HINT = ('Mexa no phone pela tela ao vivo (clique nela) até passar desta tela e clique em '
                '"Devolver ao robô". Se não der, cancele o cadastro.')
 WAIT_LIMIT_HINT = ('Você está com o controle. Toque em OK na tela ao vivo, espere o tempo pedido '
@@ -113,6 +115,7 @@ class Job:
         # sincronização
         self.cancel_event = threading.Event()
         self.takeover = threading.Event()  # "Assumir o controle": o robô para na próxima tela
+        self.rescue_claimed = False  # o operador assumiu durante a contagem depois de um erro
         self.wake = threading.Event()
         self.pending_input: dict[str, Any] | None = None
         self.finished = threading.Event()  # thread terminou (phone desligado e liberado)
@@ -156,6 +159,7 @@ class JobManager:
         egress_probe: EgressProbe = probe_egress_ip,
         stop_phone: Callable[[str], None] | None = None,
         handoff_max_s: float = HANDOFF_MAX_S,
+        rescue_window_s: float = 0,
     ):
         self._factory = factory
         self._stop_phone = stop_phone
@@ -165,6 +169,9 @@ class JobManager:
         self.max_jobs = max_jobs
         self.input_timeout_s = input_timeout_s
         self.job_timeout_s = job_timeout_s
+        # Depois de um erro numa etapa do app, o phone fica ligado este tempo para o operador
+        # assumir. 0 = desliga na hora (padrão dos testes; produção usa 59 s via Settings).
+        self.rescue_window_s = rescue_window_s
         self._debug_dir = debug_dir
         self._lock = threading.RLock()
         self._jobs: dict[str, Job] = {}
@@ -283,6 +290,8 @@ class JobManager:
         with self._lock:
             job = self._require(job_id)
             auto = job.auto if job.status == "waiting_input" else None
+            if auto is not None and job.step == RESCUE_STEP:
+                self._claim_rescue_locked(job)
         if auto is None:
             raise ApiError(409, "robot_busy",
                            "O robô está mexendo no phone agora. Dá para mexer quando ele parar e pedir algo.")
@@ -492,7 +501,9 @@ class JobManager:
             except JobError as exc:
                 taken = exc.code == "manual_takeover"
                 if exc.code not in HELP_CODES or (not taken and helps >= MAX_MANUAL_HELPS):
-                    raise
+                    if not self._offer_rescue(job, ctx, auto, step, exc):
+                        raise
+                    continue  # o operador assumiu e devolveu: tenta a etapa de novo
                 if not taken:
                     helps += 1
                 self._ask_help(job, ctx, auto, step, exc)
@@ -507,12 +518,64 @@ class JobManager:
         self._wait_input(job, ctx, "waiting_manual", "manual", f"{exc.message} {hint}")
         self._set_step(job, step)
 
+    def _claim_rescue_locked(self, job: Job) -> None:
+        job.rescue_claimed = True
+        job.message = "Assumindo o controle do phone…"
+        job.updated_at = _now_iso()
+        job.wake.set()
+
+    def _offer_rescue(self, job: Job, ctx: JobContext, auto: PhoneAutomation, step: str,
+                      exc: JobError) -> bool:
+        """Erro numa etapa do app: antes de desligar, deixa o phone ligado `rescue_window_s`
+        para o operador assumir (botão ou toque na tela ao vivo). Sem ninguém, devolve False e
+        o job falha como antes. Assumindo, espera o operador como numa tela desconhecida."""
+        if self.rescue_window_s <= 0 or job.spec.mode != "register":
+            return False
+        self._capture(job, auto, exc.code)  # print (e XML) do momento do erro
+        with self._lock:
+            job.pending_input = None
+            job.rescue_claimed = False
+            job.wake.clear()
+        self._set_step(job, RESCUE_STEP, exc.message, status="waiting_input", awaiting="manual")
+        with self._lock:
+            job.error_code = exc.code  # a tela mostra o motivo durante a contagem
+        log.info("[%s] %s em %s; %ss para o operador assumir", job.spec.job_id, exc.code, step,
+                 round(self.rescue_window_s))
+        deadline = time.monotonic() + self.rescue_window_s
+        while True:
+            ctx.check()
+            with self._lock:
+                claimed = job.rescue_claimed or job.pending_input is not None
+                if claimed:
+                    job.rescue_claimed = False
+                    job.pending_input = None
+                    job.error_code = None
+                else:
+                    job.wake.clear()
+            if claimed:
+                break
+            remaining = min(deadline, ctx.deadline) - time.monotonic()
+            if remaining <= 0:
+                ctx.check()  # o job inteiro pode ter estourado o tempo
+                log.info("[%s] ninguém assumiu; desligando o phone", job.spec.job_id)
+                return False
+            job.wake.wait(remaining)
+        job.takeover.clear()
+        log.info("[%s] operador assumiu depois do erro", job.spec.job_id)
+        self._wait_input(job, ctx, "waiting_manual", "manual",
+                         f"{TAKEOVER_MESSAGE} O robô tinha parado: {exc.message} {MANUAL_HINT}")
+        self._set_step(job, step)
+        return True
+
     def take_over(self, job_id: str) -> Job:
         """"Assumir o controle": o robô para na próxima tela que olhar e espera o operador."""
         with self._lock:
             job = self._require(job_id)
             if job.terminal or job.spec.mode != "register":
                 raise ApiError(409, "not_running", "Este cadastro não está rodando.")
+            if job.step == RESCUE_STEP and job.status == "waiting_input":
+                self._claim_rescue_locked(job)
+                return job
             if job.status == "waiting_input":
                 return job  # o robô já está parado: dá para mexer direto
             job.takeover.set()
@@ -620,20 +683,22 @@ class JobManager:
                 try:
                     message = auto.request_code("voice" if inp["type"] == "call_me" else "sms")
                 except JobError as exc:
-                    if exc.code not in HELP_CODES:
-                        raise
                     # Ex.: "tente em 5 minutos" ao pedir outro SMS: o operador assume e volta aqui.
-                    self._ask_help(job, ctx, auto, "waiting_sms", exc)
+                    if exc.code in HELP_CODES:
+                        self._ask_help(job, ctx, auto, "waiting_sms", exc)
+                    elif not self._offer_rescue(job, ctx, auto, "waiting_sms", exc):
+                        raise
                     message = None
                 continue
             self._set_step(job, "verifying")
             try:
                 result = auto.submit_sms_code(inp["code"])
             except JobError as exc:
-                if exc.code not in HELP_CODES:
+                if exc.code in HELP_CODES:
+                    self._ask_help(job, ctx, auto, "verifying", exc)
+                elif not self._offer_rescue(job, ctx, auto, "verifying", exc):
                     raise
                 # O código já foi digitado: depois da ajuda, só passa as telas até o perfil.
-                self._ask_help(job, ctx, auto, "verifying", exc)
                 self._with_help(job, ctx, auto, "verifying", auto.finish_verification)
                 result = SmsResult(True)
             del inp
@@ -641,7 +706,11 @@ class JobManager:
                 break
             attempts += 1
             if attempts >= MAX_SMS_ATTEMPTS:
-                raise JobError("sms_rejected", f"O WhatsApp recusou o código {attempts} vezes.")
+                rejected = JobError("sms_rejected", f"O WhatsApp recusou o código {attempts} vezes.")
+                if not self._offer_rescue(job, ctx, auto, "waiting_sms", rejected):
+                    raise rejected
+                attempts, message = 0, None  # depois da ajuda, espera um código novo
+                continue
             message = result.message or "Código incorreto. Confira o SMS e digite de novo."
 
         inp = self._wait_input(job, ctx, "waiting_profile", "profile")

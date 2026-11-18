@@ -11,7 +11,7 @@ export type JobAwaiting = null | 'sms' | 'profile' | 'link_decision' | 'pair_cod
 
 export type JobStep =
   | 'queued' | 'checking_tunnel' | 'setting_network' | 'starting_phone' | 'connecting_adb' | 'checking_network'
-  | 'installing_app' | 'opening_app' | 'entering_number' | 'waiting_sms' | 'verifying'
+  | 'installing_app' | 'opening_app' | 'entering_number' | 'waiting_sms' | 'waiting_manual' | 'rescue_offer' | 'verifying'
   | 'waiting_profile' | 'saving_profile' | 'registered' | 'creating_line' | 'opening_link_screen'
   | 'waiting_pair_code' | 'entering_pair_code' | 'linking' | 'network_ok' | 'done' | 'failed' | 'cancelled';
 

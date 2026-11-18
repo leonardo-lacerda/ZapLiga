@@ -34,6 +34,7 @@ Todos os JSON usam camelCase. Datas em ISO-8601 UTC. O código SMS e o código d
 | `done` | ambos | fim. `linked=true/false` diz se a linha foi conectada ao ZapLiga |
 
 | `waiting_manual` | worker | `status=waiting_input`, `awaiting=manual`: tela que o robô não conhece em `opening_app`, `entering_number`, `saving_profile` ou `opening_link_screen`. O operador mexe no phone pela tela ao vivo e devolve com `{type:'resume'}`; o robô repete a etapa (até 3 vezes por etapa, depois `failed`/`unknown_screen`) |
+| `rescue_offer` | worker | `status=waiting_input`, `awaiting=manual`, `errorCode` já preenchido: uma etapa do app falhou (ou o SMS foi recusado 5 vezes) e o phone fica ligado por 59 s (`rescue_window_s`). `POST /takeover` ou um toque em `/manual` assume: vai para `waiting_manual` e, com `resume`, o robô repete a etapa. Sem ninguém, `failed` com o mesmo `errorCode` e o phone desliga |
 
 `awaiting`: `null` | `sms` | `profile` | `link_decision` | `pair_code` | `manual`
 
@@ -67,7 +68,7 @@ Base: `GEELARK_WORKER_URL` (ex.: `http://geelark-worker:8080`). Toda rota exige 
 | `POST /jobs/{jobId}/input` | `JobInput` | `WorkerJob` · `409 not_awaiting` |
 | `POST /jobs/{jobId}/cancel` | — | `WorkerJob` |
 | `GET /jobs/{jobId}/screen` | — | `image/png` da tela agora (cache de 2 s) · `404` sem phone conectado |
-| `POST /jobs/{jobId}/takeover` | — | `WorkerJob` ("Assumir o controle": o robô para na próxima tela e vai para `awaiting=manual`; já parado, nada muda) · `409 not_running` |
+| `POST /jobs/{jobId}/takeover` | — | `WorkerJob` ("Assumir o controle": o robô para na próxima tela e vai para `awaiting=manual`; já parado, nada muda; em `rescue_offer`, assume o phone antes de ele desligar) · `409 not_running` |
 | `POST /jobs/{jobId}/manual` | `ManualAction` | `{ "ok": true }` · `409 robot_busy` (só com `status=waiting_input`) · `502 device_error` |
 | `GET /jobs/{jobId}/screenshot` | — | `image/png` · `404` |
 

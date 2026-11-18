@@ -52,6 +52,7 @@ def create_app(
         max_jobs=settings.max_jobs,
         input_timeout_s=settings.input_timeout_s,
         job_timeout_s=settings.job_timeout_s,
+        rescue_window_s=settings.rescue_window_s,
         debug_dir=settings.debug_dir,
         stop_phone=geelark.stop_phone,
     )
