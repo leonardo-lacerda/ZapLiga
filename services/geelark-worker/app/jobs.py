@@ -491,6 +491,9 @@ class JobManager:
     def _no_internet_message(self, job: Job, auto: PhoneAutomation) -> str:
         """Diz se o problema é o PC (parou de sair) ou o caminho do phone até ele."""
         reason = getattr(auto, "last_egress_error", None)
+        if getattr(auto, "egress_tool_missing", False):
+            return (f"Não deu para conferir a internet deste phone: {reason}. "
+                    "O WhatsApp não foi aberto; use outro phone ou avise o suporte.")
         detail = f" Erro dentro do phone: {reason}." if reason else ""
         spec = job.spec
         if spec.probe_proxy is None:

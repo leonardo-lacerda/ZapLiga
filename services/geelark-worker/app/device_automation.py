@@ -40,6 +40,17 @@ log = logging.getLogger(__name__)
 SUPPORTED_ANDROID = {9, 11, 12, 13, 14, 15, 16}
 # Sites que devolvem só o IP; alterna entre eles caso um esteja fora ou bloqueie o IP.
 EGRESS_URLS = ("https://api.ipify.org", "https://ifconfig.me/ip", "https://icanhazip.com")
+# Os mesmos sites por HTTP simples (host, caminho), para o nc, que não fala HTTPS.
+EGRESS_HTTP = (("api.ipify.org", "/"), ("ifconfig.me", "/ip"), ("icanhazip.com", "/"))
+# Nem toda imagem de Android do GeeLark tem curl: procura, nesta ordem, o que existir.
+IP_TOOL_PROBE = (
+    "if which curl >/dev/null 2>&1; then echo curl; "
+    "elif which wget >/dev/null 2>&1; then echo wget; "
+    "elif which nc >/dev/null 2>&1; then echo nc; "
+    "elif toybox 2>/dev/null | grep -qw nc; then echo toybox-nc; "
+    "else echo none; fi"
+)
+NO_IP_TOOL = "este phone não tem curl, wget nem nc para conferir o IP"
 EGRESS_ATTEMPTS = 5
 EGRESS_RETRY_S = 5
 
@@ -93,6 +104,8 @@ class GeeLarkAutomation:
         self.d: Any = None     # uiautomator2.Device
         self._number_submitted_at = float("-inf")
         self.last_egress_error: str | None = None  # motivo da última falha do egress_ip
+        self.egress_tool_missing = False           # sem curl/wget/nc: não dá para conferir o IP
+        self._ip_tool_name: str | None = None
         self._reset_done = False  # "apagar o app" do cadastro já feito (não repete ao tentar de novo)
 
     # ----------------------------------------------------------------- utils
@@ -213,19 +226,44 @@ class GeeLarkAutomation:
         out = self._shell(["pm", "list", "packages", "com.whatsapp"])
         return {key: wa.parse_installed(out, app) for key, app in wa.APPS.items()}
 
-    def egress_ip(self) -> str | None:
-        # Logo depois de ligar, a rede do phone pode demorar alguns segundos para subir.
-        self.last_egress_error = None
-        for attempt in range(EGRESS_ATTEMPTS):
-            url = EGRESS_URLS[attempt % len(EGRESS_URLS)]
+    def _ip_tool(self) -> str:
+        if self._ip_tool_name is None:
+            out = self._shell(["sh", "-c", IP_TOOL_PROBE], timeout=15).strip()
+            name = out.splitlines()[-1].strip() if out else "none"
+            self._ip_tool_name = name if name in ("curl", "wget", "nc", "toybox-nc") else "none"
+            log.info("[%s] ferramenta para conferir o IP: %s", self.spec.job_id, self._ip_tool_name)
+        return self._ip_tool_name
+
+    def _ip_command(self, tool: str, attempt: int) -> list[str]:
+        if tool == "curl":
             # -sS: sem barra de progresso, mas com a mensagem de erro (ex.: "Failed to connect").
-            out = self._shell(["curl", "-sS", "-m", "10", url], timeout=20).strip()
+            return ["curl", "-sS", "-m", "10", EGRESS_URLS[attempt % len(EGRESS_URLS)]]
+        host, path = EGRESS_HTTP[attempt % len(EGRESS_HTTP)]
+        if tool == "wget":
+            return ["wget", "-q", "-T", "10", "-O", "-", f"http://{host}{path}"]
+        nc = "toybox nc" if tool == "toybox-nc" else "nc"
+        # HTTP/1.0 à mão: o servidor fecha a conexão no fim e o corpo (o IP) é a última linha.
+        request = f"GET {path} HTTP/1.0\\r\\nHost: {host}\\r\\nUser-Agent: curl/8\\r\\nConnection: close\\r\\n\\r\\n"
+        return ["sh", "-c", f"printf '{request}' | {nc} -w 10 {host} 80"]
+
+    def egress_ip(self) -> str | None:
+        self.last_egress_error = None
+        self.egress_tool_missing = False
+        tool = self._ip_tool()
+        if tool == "none":
+            self.egress_tool_missing = True
+            self.last_egress_error = NO_IP_TOOL
+            return None
+        # Logo depois de ligar, a rede do phone pode demorar alguns segundos para subir.
+        for attempt in range(EGRESS_ATTEMPTS):
+            cmd = self._ip_command(tool, attempt)
+            out = self._shell(cmd, timeout=20).strip()
             last_line = out.splitlines()[-1].strip() if out else ""
             try:
                 return str(ipaddress.ip_address(last_line))
             except ValueError:
                 self.last_egress_error = describe_curl_error(last_line)
-                log.info("[%s] curl sem IP (tentativa %s, %s): %s", self.spec.job_id, attempt + 1, url, self.last_egress_error)
+                log.info("[%s] %s sem IP (tentativa %s): %s", self.spec.job_id, tool, attempt + 1, self.last_egress_error)
             if attempt + 1 < EGRESS_ATTEMPTS:
                 self.ctx.sleep(EGRESS_RETRY_S)
         return None

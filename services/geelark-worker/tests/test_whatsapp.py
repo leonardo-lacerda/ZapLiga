@@ -321,11 +321,39 @@ def test_connect_adb_rejects_android_10():
 def test_egress_ip_uses_curl_and_validates():
     auto = make_auto(mock.Mock())
     auto.adb = mock.Mock()
-    auto.adb.shell.side_effect = ["", "<html>", "203.0.113.7\n"]
+    auto.adb.shell.side_effect = ["curl\n", "", "<html>", "203.0.113.7\n"]
     assert auto.egress_ip() == "203.0.113.7"
     # Alterna os sites de IP a cada tentativa e pede a mensagem de erro do curl (-sS).
-    urls = [c.args[0] for c in auto.adb.shell.call_args_list]
+    urls = [c.args[0] for c in auto.adb.shell.call_args_list][1:]
     assert urls == [["curl", "-sS", "-m", "10", u] for u in ("https://api.ipify.org", "https://ifconfig.me/ip", "https://icanhazip.com")]
     auto.adb.shell.side_effect = ["curl: (7) Failed to connect to api.ipify.org port 443"] * 5
     assert auto.egress_ip() is None
     assert auto.last_egress_error.startswith("não conseguiu conectar")
+
+
+def test_egress_ip_without_curl_uses_toybox_nc():
+    auto = make_auto(mock.Mock())
+    auto.adb = mock.Mock()
+    response = "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nConnection: close\r\n\r\n131.255.254.90"
+    auto.adb.shell.side_effect = ["toybox-nc\n", response]
+    assert auto.egress_ip() == "131.255.254.90"
+    cmd = auto.adb.shell.call_args.args[0]
+    assert cmd[:2] == ["sh", "-c"]
+    assert "toybox nc -w 10 api.ipify.org 80" in cmd[2] and "Host: api.ipify.org" in cmd[2]
+    # A ferramenta é procurada uma vez só por phone.
+    auto.adb.shell.side_effect = [response]
+    assert auto.egress_ip() == "131.255.254.90"
+
+
+def test_egress_ip_with_wget_and_with_no_tool():
+    auto = make_auto(mock.Mock())
+    auto.adb = mock.Mock()
+    auto.adb.shell.side_effect = ["wget\n", "203.0.113.9\n"]
+    assert auto.egress_ip() == "203.0.113.9"
+    assert auto.adb.shell.call_args.args[0] == ["wget", "-q", "-T", "10", "-O", "-", "http://api.ipify.org/"]
+    bare = make_auto(mock.Mock())
+    bare.adb = mock.Mock()
+    bare.adb.shell.side_effect = ["none\n"]
+    assert bare.egress_ip() is None
+    assert bare.egress_tool_missing and "não tem curl, wget nem nc" in bare.last_egress_error
+    assert bare.adb.shell.call_count == 1  # não fica tentando à toa

@@ -330,6 +330,21 @@ def test_no_internet_says_the_pc_is_fine_and_shows_the_phone_error():
     assert "Failed to connect" in job.message
 
 
+def test_no_ip_tool_on_the_phone_is_not_blamed_on_the_network():
+    class Factory(FakeFactory):
+        def __call__(self, spec, ctx):
+            auto = super().__call__(spec, ctx)
+            auto.egress_tool_missing = True
+            auto.last_egress_error = "este phone não tem curl, wget nem nc para conferir o IP"
+            return auto
+
+    manager = JobManager(Factory(egress=None), input_timeout_s=5, job_timeout_s=10)
+    manager.create(make_spec())
+    job = finished(manager, "job-1")
+    assert job.error_code == "no_internet"
+    assert job.message.startswith("Não deu para conferir a internet deste phone: este phone não tem curl")
+
+
 def test_no_internet_blames_the_pc_when_it_stopped_answering():
     calls = []
 
