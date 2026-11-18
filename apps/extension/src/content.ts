@@ -4,8 +4,18 @@
 import type { BubbleStatus, UiState } from './shared/types';
 
 (() => {
-  if (window.top !== window || (window as any).__zapligaFloating) return;
-  (window as any).__zapligaFloating = true;
+  if (window.top !== window) return;
+  // Reloading or updating the extension injects this script again while the old copy is still on
+  // the page, cut off from the extension (its buttons and window stop working). The new copy shuts
+  // the old one down and takes over. A copy from before this existed only left `true` here.
+  const previous = (window as any).__zapligaFloating;
+  if (previous) {
+    if (chrome.runtime?.id === undefined) return;
+    if (typeof previous.shutdown === 'function') previous.shutdown();
+    else return; // older copy without a way to stop it: the page needs a refresh (F5)
+  }
+  const life = new AbortController();
+  const listen = { signal: life.signal };
 
   const UI_KEY = 'zapliga_ui';
   const MARGIN = 12;
@@ -17,6 +27,17 @@ import type { BubbleStatus, UiState } from './shared/types';
   host.id = 'zapliga-extension-root';
   host.style.cssText = 'all: initial; position: fixed; z-index: 2147483647; left: 0; top: 0; width: 0; height: 0;';
   const root = host.attachShadow({ mode: 'closed' });
+  (window as any).__zapligaFloating = {
+    shutdown: () => {
+      life.abort();
+      kommoObserver?.disconnect();
+      if (timer) window.clearInterval(timer);
+      try { port?.disconnect(); } catch { /* already gone */ }
+      host.remove();
+      document.querySelectorAll('[data-zapliga-call-button]').forEach((button) => button.remove());
+      document.querySelectorAll<HTMLElement>('[data-zapliga-call]').forEach((control) => { delete control.dataset.zapligaCall; });
+    },
+  };
   const PHONE = '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 16.9v3a2 2 0 0 1-2.2 2 19.8 19.8 0 0 1-8.6-3.1 19.5 19.5 0 0 1-6-6A19.8 19.8 0 0 1 2.1 4.2 2 2 0 0 1 4.1 2h3a2 2 0 0 1 2 1.7c.1.9.4 1.8.7 2.7a2 2 0 0 1-.5 2.1L8 9.8a16 16 0 0 0 6 6l1.3-1.3a2 2 0 0 1 2.1-.4c.9.3 1.8.6 2.7.7a2 2 0 0 1 1.7 2Z"/></svg>';
   root.innerHTML = `<style>
     * { box-sizing: border-box; }
@@ -94,7 +115,7 @@ import type { BubbleStatus, UiState } from './shared/types';
       frame.title = 'ZapLiga';
       win.insertBefore(frame, root.querySelector('.shield'));
     }
-    if (!host.isConnected) document.documentElement.appendChild(host);
+    if (!host.isConnected && !life.signal.aborted) document.documentElement.appendChild(host);
   };
 
   const save = (patch: Partial<UiState>) => { ui = { ...ui, ...patch }; layout(); void chrome.storage.local.set({ [UI_KEY]: ui }); };
@@ -126,7 +147,7 @@ import type { BubbleStatus, UiState } from './shared/types';
   track(bubble, (dx, dy, s) => { const w = winRect().width || ui.width; ui = { ...ui, left: s.left + BUBBLE - w + dx, top: s.top + dy }; layout(); }, () => save({ collapsed: false }));
   (root.querySelector('.min') as HTMLButtonElement).addEventListener('click', () => save({ collapsed: true }));
   (root.querySelector('.close') as HTMLButtonElement).addEventListener('click', () => save({ visible: false }));
-  window.addEventListener('resize', () => layout());
+  window.addEventListener('resize', () => layout(), listen);
 
   // "Fixar na tela": Chrome's Document Picture-in-Picture window stays above every window and app,
   // and does not go away when the user clicks elsewhere. It lives as long as this tab is open.
@@ -165,7 +186,7 @@ import type { BubbleStatus, UiState } from './shared/types';
     if (status.answeredAt) timer = window.setInterval(render, 1000);
   };
   const connectBubble = async () => {
-    if (port || !shown()) return;
+    if (port || !shown() || life.signal.aborted) return;
     // After the extension is reloaded/updated this old script loses its connection: stop quietly.
     if (!chrome.runtime?.id) return;
     try { await chrome.runtime.sendMessage({ type: 'ensure-offscreen' }); port = chrome.runtime.connect({ name: 'zapliga-bubble' }); } catch { return; }
@@ -175,9 +196,9 @@ import type { BubbleStatus, UiState } from './shared/types';
 
   void Promise.all([chrome.storage.local.get(UI_KEY), askWindow()]).then(([stored]: any) => { ui = { ...ui, ...(stored[UI_KEY] ?? {}) }; layout(); void connectBubble(); });
   // A tab dragged to another window changes owner: check again when it comes back into view.
-  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') void askWindow().then(() => { layout(); void connectBubble(); }); });
+  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') void askWindow().then(() => { layout(); void connectBubble(); }); }, listen);
   chrome.storage.onChanged.addListener((changes: any, area: string) => {
-    if (area !== 'local' || !changes[UI_KEY]) return;
+    if (area !== 'local' || !changes[UI_KEY] || life.signal.aborted) return;
     ui = { ...ui, ...(changes[UI_KEY].newValue ?? {}) };
     layout();
     void connectBubble();
@@ -217,15 +238,23 @@ import type { BubbleStatus, UiState } from './shared/types';
     const left = input.offsetLeft + parseFloat(style.paddingLeft || '0') + parseFloat(style.borderLeftWidth || '0') + textWidth + 10;
     button.style.left = `${Math.round(Math.min(left, input.offsetLeft + input.offsetWidth - 28))}px`;
   };
+  // Reloading the extension injects this script again while the old copy's buttons stay on the
+  // page, dead (their extension context is gone). Each copy marks its own buttons and replaces others.
+  const instance = Math.random().toString(36).slice(2);
+  let kommoObserver: MutationObserver | undefined;
   const scanKommo = () => {
+    // An orphaned copy (extension reloaded) must stop, or it would fight the new copy over the buttons.
+    if (!chrome.runtime?.id || life.signal.aborted) { kommoObserver?.disconnect(); return; }
     document.querySelectorAll<HTMLElement>('.js-control-phone').forEach((control) => {
-      if (control.dataset.zapligaCall) return;
+      if (control.dataset.zapligaCall === instance) return;
       const input = control.querySelector<HTMLInputElement>('input.control-phone__formatted');
       if (!input) return;
-      control.dataset.zapligaCall = '1';
+      control.querySelectorAll('[data-zapliga-call-button]').forEach((old) => old.remove());
+      control.dataset.zapligaCall = instance;
       if (getComputedStyle(control).position === 'static') control.style.position = 'relative';
       const button = document.createElement('button');
       button.type = 'button';
+      button.dataset.zapligaCallButton = '1';
       button.title = 'Ligar com ZapLiga';
       button.setAttribute('aria-label', 'Ligar com ZapLiga');
       button.innerHTML = SMALL_PHONE;
@@ -249,8 +278,9 @@ import type { BubbleStatus, UiState } from './shared/types';
   if (/(^|\.)kommo\.com$/.test(location.hostname)) {
     let pending: number | undefined;
     const schedule = () => { if (pending === undefined) pending = window.setTimeout(() => { pending = undefined; scanKommo(); }, 300); };
-    new MutationObserver(schedule).observe(document.documentElement, { childList: true, subtree: true });
-    document.addEventListener('input', schedule, true);
+    kommoObserver = new MutationObserver(schedule);
+    kommoObserver.observe(document.documentElement, { childList: true, subtree: true });
+    document.addEventListener('input', schedule, { capture: true, signal: life.signal });
     scanKommo();
   }
 })();
