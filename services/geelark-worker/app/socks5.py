@@ -17,8 +17,15 @@ do geelark-worker:
     (senha vazia recusa todo mundo). Repassa o CONNECT ao `socks-edge-N` da vaga
     (`EGRESS_UPSTREAM_TEMPLATE`) e copia os bytes nos dois sentidos.
 
-Sem UDP ASSOCIATE nem BIND. Uma linha de log por conexão (vaga, destino, resultado); a senha
-nunca vai para o log.
+UDP ASSOCIATE (RFC 1928, seção 7): um celular de verdade sempre tem UDP (DNS, QUIC, STUN das
+chamadas); sem ele o phone parece um ambiente de proxy. O gateway escuta UDP na mesma porta do
+TCP e repassa cada datagrama (com o cabeçalho SOCKS) a um UDP ASSOCIATE no `socks-edge-N` da
+vaga, que manda para a internet pelo PC. A associação vive enquanto a conexão TCP de controle
+estiver aberta. O gateway descobre o endereço UDP do phone (atrás de NAT) pelo primeiro
+datagrama vindo do mesmo IP da conexão TCP; o edge só aceita datagramas do gateway e só
+devolve respostas de quem o phone contatou. Datagrama fragmentado (FRAG != 0) é descartado.
+Sem BIND. Uma linha de log por conexão (vaga, destino, resultado); a senha nunca vai para o
+log.
 
 Rodar: ``python -m app.socks5 edge`` ou ``python -m app.socks5 gateway``.
 """
@@ -49,6 +56,7 @@ METHOD_USER_PASS = 0x02
 METHOD_NONE_ACCEPTABLE = 0xFF
 
 CMD_CONNECT = 0x01
+CMD_UDP_ASSOCIATE = 0x03
 
 ATYP_IPV4 = 0x01
 ATYP_DOMAIN = 0x03
@@ -68,6 +76,7 @@ SLOT_RE = re.compile(r"^edge-(\d{1,2})$")
 DEFAULT_SLOTS = frozenset(f"edge-{n}" for n in range(1, 11))
 ROUTE_PC = "pc"
 RELAY_CHUNK = 64 * 1024
+UDP_MAX_PEERS = 1024          # destinos por associação (o edge só aceita resposta deles)
 
 
 # --------------------------------------------------------------------------- config
@@ -131,6 +140,10 @@ class SocksConfig:
     route_check_interval: float = 2.0
     auth_failure_delay: float = 1.0             # freia quem tenta adivinhar a senha
     allow_private_targets: bool = False         # só para testes (destino em 127.0.0.1)
+    udp_enabled: bool = True                    # UDP ASSOCIATE (SOCKS_UDP=0 desliga)
+    udp_port: int | None = None                 # gateway: porta UDP local (None = a do TCP)
+    public_host: str = ""                       # gateway: IP público anunciado no BND.ADDR
+    public_udp_port: int | None = None          # gateway: porta pública (EGRESS_SOCKS_PORT)
 
     def __post_init__(self) -> None:
         if self.mode not in ("edge", "gateway"):
@@ -151,6 +164,9 @@ class SocksConfig:
             connect_timeout=_env_float(env, "SOCKS_CONNECT_TIMEOUT", 15.0),
             idle_timeout=_env_float(env, "SOCKS_IDLE_TIMEOUT", 300.0),
             max_connections=max(1, _env_int(env, "SOCKS_MAX_CONNECTIONS", 256)),
+            udp_enabled=(env.get("SOCKS_UDP") or "1").strip().lower() not in ("0", "false", "no", "off"),
+            public_host=(env.get("EGRESS_SOCKS_PUBLIC_HOST") or "").strip(),
+            public_udp_port=_env_int(env, "EGRESS_SOCKS_PORT", 0) or None,
         )
 
     def upstream_for(self, slot: str) -> tuple[str, int]:
@@ -198,6 +214,55 @@ def reply(code: int, host: str = "0.0.0.0", port: int = 0) -> bytes:
     return bytes([SOCKS_VERSION, code, 0x00]) + encode_address(host, port)
 
 
+def udp_header(host: str, port: int) -> bytes:
+    """Cabeçalho SOCKS de um datagrama UDP: RSV(2) FRAG(1) ATYP DST.ADDR DST.PORT."""
+    return b"\x00\x00\x00" + encode_address(host, port)
+
+
+def parse_udp_header(data: bytes) -> tuple[int, str, int, int] | None:
+    """(atyp, host, port, tamanho do cabeçalho) ou None se inválido ou fragmentado."""
+    if len(data) < 4 or data[0] or data[1] or data[2]:     # RSV precisa ser 0; FRAG != 0 descarta
+        return None
+    atyp = data[3]
+    if atyp == ATYP_IPV4:
+        end = 4 + 4
+        if len(data) < end + 2:
+            return None
+        host = str(ipaddress.IPv4Address(data[4:end]))
+    elif atyp == ATYP_IPV6:
+        end = 4 + 16
+        if len(data) < end + 2:
+            return None
+        host = str(ipaddress.IPv6Address(data[4:end]))
+    elif atyp == ATYP_DOMAIN:
+        if len(data) < 5:
+            return None
+        end = 5 + data[4]
+        if not data[4] or len(data) < end + 2:
+            return None
+        try:
+            host = data[5:end].decode("ascii")
+        except UnicodeDecodeError:
+            return None
+    else:
+        return None
+    return atyp, host, int.from_bytes(data[end:end + 2], "big"), end + 2
+
+
+class _Datagrams(asyncio.DatagramProtocol):
+    def __init__(self, on_datagram):
+        self._on = on_datagram
+
+    def datagram_received(self, data: bytes, addr) -> None:
+        try:
+            self._on(data, addr)
+        except Exception:  # pragma: no cover - um datagrama ruim não derruba o socket
+            log.exception("socks5: erro num datagrama UDP")
+
+    def error_received(self, exc: Exception) -> None:  # ICMP de porta fechada etc.
+        pass
+
+
 def is_public(ip: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
     if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped is not None:
         ip = ip.ipv4_mapped
@@ -241,10 +306,30 @@ class _Conn:
     silent: bool = False                       # fechou sem mandar nada (healthcheck/scan)
     client_writer: asyncio.StreamWriter | None = None
     upstream_writer: asyncio.StreamWriter | None = None
+    udp_transport: asyncio.DatagramTransport | None = None
 
     def abort(self) -> None:
         _abort(self.client_writer)
         _abort(self.upstream_writer)
+        if self.udp_transport is not None:
+            self.udp_transport.close()
+
+
+@dataclass(eq=False)
+class _UdpAssoc:
+    """Uma associação UDP. No edge, `transport` fala com o gateway e com a internet; no gateway,
+    com o edge (o lado do phone é o socket público compartilhado)."""
+    conn: _Conn
+    client_ip: str
+    hint_port: int | None = None                # porta que o cliente anunciou no pedido
+    client_addr: tuple[str, int] | None = None  # aprendido no primeiro datagrama
+    transport: asyncio.DatagramTransport | None = None
+    edge_addr: tuple[str, int] | None = None    # gateway: relay UDP do edge
+    peers: set = field(default_factory=set)     # edge: (ip, porta) que o phone contatou
+    names: dict = field(default_factory=dict)   # edge: cache de DNS desta associação
+    route_ok_until: float = 0.0
+    last: float = field(default_factory=time.monotonic)
+    created: float = field(default_factory=time.monotonic)
 
 
 # --------------------------------------------------------------------------- server
@@ -254,11 +339,21 @@ class SocksServer:
         self._server: asyncio.base_events.Server | None = None
         self._watchdog: asyncio.Task | None = None
         self._conns: set[_Conn] = set()
+        self._udp_public: asyncio.DatagramTransport | None = None   # gateway: porta do phone
+        self._udp_assocs: list[_UdpAssoc] = []                      # gateway: associações vivas
+        self._udp_by_addr: dict[tuple[str, int], _UdpAssoc] = {}
+        self._public_ip = "0.0.0.0"
 
     @property
     def port(self) -> int:
         assert self._server is not None
         return self._server.sockets[0].getsockname()[1]
+
+    @property
+    def udp_port(self) -> int | None:
+        if self._udp_public is None:
+            return None
+        return self._udp_public.get_extra_info("sockname")[1]
 
     @property
     def active(self) -> int:
@@ -271,7 +366,30 @@ class SocksServer:
             self._watchdog = asyncio.create_task(self._watch_route())
         elif not cfg.password:
             log.warning("EGRESS_SOCKS_PASSWORD vazio: o gateway vai recusar todas as conexões")
+        if cfg.mode == "gateway" and cfg.udp_enabled:
+            loop = asyncio.get_running_loop()
+            udp_port = self.port if cfg.udp_port is None else cfg.udp_port
+            self._udp_public, _ = await loop.create_datagram_endpoint(
+                lambda: _Datagrams(self._gateway_from_client), local_addr=(cfg.host, udp_port))
+            self._public_ip = await self._resolve_public_host()
+            log.info("socks5 gateway: UDP em %s:%s (anuncia %s:%s)", cfg.host, self.udp_port,
+                     self._public_ip, cfg.public_udp_port or self.udp_port)
         log.info("socks5 %s ouvindo em %s:%s", cfg.mode, cfg.host, self.port)
+
+    async def _resolve_public_host(self) -> str:
+        host = self.config.public_host
+        if not host:
+            return "0.0.0.0"    # o cliente usa o endereço do próprio proxy
+        try:
+            return str(ipaddress.ip_address(host))
+        except ValueError:
+            pass
+        try:
+            infos = await asyncio.get_running_loop().getaddrinfo(host, None, family=socket.AF_INET)
+            return infos[0][4][0]
+        except Exception:
+            log.warning("EGRESS_SOCKS_PUBLIC_HOST não resolveu; anunciando 0.0.0.0 no UDP")
+            return "0.0.0.0"
 
     async def close(self) -> None:
         if self._watchdog is not None:
@@ -279,6 +397,8 @@ class SocksServer:
             await asyncio.gather(self._watchdog, return_exceptions=True)
         for conn in list(self._conns):
             conn.abort()
+        if self._udp_public is not None:
+            self._udp_public.close()
         if self._server is not None:
             self._server.close()
             await self._server.wait_closed()
@@ -297,7 +417,7 @@ class SocksServer:
             route = read_route(self.config.route_file)
             if route != ROUTE_PC:
                 for conn in list(self._conns):
-                    if conn.upstream_writer is not None:
+                    if conn.upstream_writer is not None or conn.udp_transport is not None:
                         conn.result = f"closed_route_{route or 'missing'}"
                         conn.abort()
 
@@ -376,6 +496,13 @@ class SocksServer:
             slot = ""
 
         raw_request, cmd, host, port = await self._read_request(writer, reader, conn)
+        if cmd == CMD_UDP_ASSOCIATE and cfg.udp_enabled:
+            conn.target = "udp"
+            if cfg.mode == "edge":
+                await self._edge_udp(conn, reader, writer, port)
+            else:
+                await self._gateway_udp(conn, reader, writer, slot, port)
+            return
         if cmd != CMD_CONNECT:
             writer.write(reply(REP_COMMAND_NOT_SUPPORTED))
             await writer.drain()
@@ -520,14 +647,27 @@ class SocksServer:
             await writer.drain()
             raise _Refused(result)
 
-        up_host, up_port = cfg.upstream_for(slot)
-        try:
-            up_reader, up_writer = await asyncio.wait_for(
-                asyncio.open_connection(up_host, up_port), cfg.connect_timeout)
-        except Exception:
-            # A vaga não está de pé (contêiner parado, nome não resolve...).
-            await fail(REP_NETWORK_UNREACHABLE, "edge_unreachable")
+        # A vaga não está de pé (contêiner parado, nome não resolve...): edge_unreachable.
+        up_reader, up_writer = await self._open_edge(writer, slot)
         conn.upstream_writer = up_writer
+
+        head, rest = await self._edge_request(writer, up_reader, up_writer, raw_request)
+        # Repassa a resposta do edge como veio (inclui o código de recusa dele).
+        writer.write(head + rest)
+        await writer.drain()
+        if head[1] != REP_SUCCEEDED:
+            raise _Refused(f"edge_refused:{head[1]}")
+        return up_reader, up_writer
+
+    async def _edge_request(self, writer: asyncio.StreamWriter, up_reader: asyncio.StreamReader,
+                            up_writer: asyncio.StreamWriter, raw_request: bytes) -> tuple[bytes, bytes]:
+        """Saudação sem senha + pedido ao edge; devolve a resposta dele (cabeçalho, resto)."""
+        cfg = self.config
+
+        async def fail(code: int, result: str) -> NoReturn:
+            writer.write(reply(code))
+            await writer.drain()
+            raise _Refused(result)
 
         # O edge resolve e conecta; espera o tempo de conexão dele + folga.
         wait = cfg.connect_timeout + cfg.handshake_timeout
@@ -558,13 +698,223 @@ class SocksServer:
             await fail(REP_TTL_EXPIRED, "edge_timeout")
         except (asyncio.IncompleteReadError, ConnectionError):
             await fail(REP_GENERAL_FAILURE, "edge_closed")
+        return head, rest
 
-        # Repassa a resposta do edge como veio (inclui o código de recusa dele).
-        writer.write(head + rest)
+    async def _open_edge(self, writer: asyncio.StreamWriter, slot: str) -> tuple[asyncio.StreamReader, asyncio.StreamWriter]:
+        up_host, up_port = self.config.upstream_for(slot)
+        try:
+            return await asyncio.wait_for(asyncio.open_connection(up_host, up_port), self.config.connect_timeout)
+        except Exception:
+            writer.write(reply(REP_NETWORK_UNREACHABLE))
+            await writer.drain()
+            raise _Refused("edge_unreachable") from None
+
+    # ------------------------------------------------------------ UDP
+    async def _hold_udp(self, conn: _Conn, assoc: _UdpAssoc, reader: asyncio.StreamReader,
+                        up_reader: asyncio.StreamReader | None = None) -> None:
+        """A associação vive enquanto a conexão TCP de controle (e a do edge) estiver aberta."""
+        loop = asyncio.get_running_loop()
+        watched = [asyncio.create_task(reader.read(1))]
+        if up_reader is not None:
+            watched.append(asyncio.create_task(up_reader.read(1)))
+        try:
+            while True:
+                timeout = assoc.last + self.config.idle_timeout - time.monotonic()
+                if timeout <= 0:
+                    conn.result = "idle_timeout"
+                    return
+                done, _ = await asyncio.wait(watched, timeout=timeout, return_when=asyncio.FIRST_COMPLETED)
+                if done:
+                    return                      # controle fechou (ou mandou lixo): fim
+        finally:
+            for task in watched:
+                task.cancel()
+            await asyncio.gather(*watched, return_exceptions=True)
+            del loop
+
+    # edge ------------------------------------------------------------------
+    async def _edge_udp(self, conn: _Conn, reader: asyncio.StreamReader, writer: asyncio.StreamWriter,
+                        hint_port: int) -> None:
+        route = read_route(self.config.route_file)
+        if route != ROUTE_PC:
+            writer.write(reply(REP_NOT_ALLOWED))
+            await writer.drain()
+            raise _Refused(f"route_{route or 'missing'}")
+        loop = asyncio.get_running_loop()
+        assoc = _UdpAssoc(conn=conn, client_ip=conn.client, hint_port=hint_port or None)
+        assoc.route_ok_until = time.monotonic() + self.config.route_check_interval
+        transport, _ = await loop.create_datagram_endpoint(
+            lambda: _Datagrams(lambda data, addr: self._edge_datagram(assoc, data, addr)),
+            local_addr=(self.config.host, 0))
+        assoc.transport = conn.udp_transport = transport
+        bound = transport.get_extra_info("sockname")
+        writer.write(reply(REP_SUCCEEDED, bound[0], bound[1]))
         await writer.drain()
-        if head[1] != REP_SUCCEEDED:
-            raise _Refused(f"edge_refused:{head[1]}")
-        return up_reader, up_writer
+        conn.result = "ok"
+        try:
+            await self._hold_udp(conn, assoc, reader)
+        finally:
+            transport.close()
+
+    def _edge_route_ok(self, assoc: _UdpAssoc) -> bool:
+        now = time.monotonic()
+        if now < assoc.route_ok_until:
+            return True
+        route = read_route(self.config.route_file)
+        if route != ROUTE_PC:
+            assoc.conn.result = f"closed_route_{route or 'missing'}"
+            assoc.conn.abort()
+            return False
+        assoc.route_ok_until = now + self.config.route_check_interval
+        return True
+
+    def _edge_datagram(self, assoc: _UdpAssoc, data: bytes, addr) -> None:
+        ip, port = str(addr[0]), int(addr[1])
+        from_client = ip == assoc.client_ip and (
+            assoc.client_addr == (ip, port) if assoc.client_addr else assoc.hint_port in (None, port))
+        if from_client:
+            parsed = parse_udp_header(data)
+            if parsed is None or not self._edge_route_ok(assoc):
+                return
+            assoc.client_addr = (ip, port)
+            assoc.last = time.monotonic()
+            atyp, host, dport, size = parsed
+            payload = data[size:]
+            if atyp == ATYP_DOMAIN:
+                cached = assoc.names.get(host)
+                if cached is None:
+                    asyncio.get_running_loop().create_task(self._edge_send_named(assoc, host, dport, payload))
+                    return
+                host = cached
+            self._edge_send(assoc, host, dport, payload)
+            return
+        # Resposta da internet: só de quem o phone contatou, e só depois de saber quem é o phone.
+        if assoc.client_addr is None or (ip, port) not in assoc.peers or assoc.transport is None:
+            return
+        assoc.last = time.monotonic()
+        assoc.conn.down += len(data)
+        assoc.transport.sendto(udp_header(ip, port) + data, assoc.client_addr)
+
+    def _edge_send(self, assoc: _UdpAssoc, host: str, port: int, payload: bytes) -> None:
+        try:
+            ip = ipaddress.ip_address(host)
+        except ValueError:
+            return
+        if ip.version != 4 or not (self.config.allow_private_targets or is_public(ip)):
+            return                              # IPv6 não sai pelo PC; nada interno
+        if assoc.transport is None:
+            return
+        target = (str(ip), port)
+        if target not in assoc.peers:
+            if len(assoc.peers) >= UDP_MAX_PEERS:
+                return
+            assoc.peers.add(target)
+        assoc.conn.up += len(payload)
+        try:
+            assoc.transport.sendto(payload, target)
+        except OSError:
+            pass
+
+    async def _edge_send_named(self, assoc: _UdpAssoc, name: str, port: int, payload: bytes) -> None:
+        loop = asyncio.get_running_loop()
+        try:
+            infos = await asyncio.wait_for(
+                loop.getaddrinfo(name, port, family=socket.AF_INET, type=socket.SOCK_DGRAM),
+                self.config.connect_timeout)
+        except Exception:
+            return
+        for *_ignored, sockaddr in infos:
+            ip = ipaddress.ip_address(sockaddr[0])
+            if self.config.allow_private_targets or is_public(ip):
+                if len(assoc.names) < UDP_MAX_PEERS:
+                    assoc.names[name] = str(ip)
+                self._edge_send(assoc, str(ip), port, payload)
+                return
+
+    # gateway ---------------------------------------------------------------
+    async def _gateway_udp(self, conn: _Conn, reader: asyncio.StreamReader, writer: asyncio.StreamWriter,
+                           slot: str, hint_port: int) -> None:
+        if self._udp_public is None:
+            writer.write(reply(REP_COMMAND_NOT_SUPPORTED))
+            await writer.drain()
+            raise _Refused("udp_disabled")
+        loop = asyncio.get_running_loop()
+        up_reader, up_writer = await self._open_edge(writer, slot)
+        conn.upstream_writer = up_writer
+        assoc = _UdpAssoc(conn=conn, client_ip=conn.client, hint_port=hint_port or None)
+        transport, _ = await loop.create_datagram_endpoint(
+            lambda: _Datagrams(lambda data, addr: self._gateway_from_edge(assoc, data, addr)),
+            local_addr=(self.config.host, 0))
+        assoc.transport = conn.udp_transport = transport
+        local_port = transport.get_extra_info("sockname")[1]
+        request = bytes([SOCKS_VERSION, CMD_UDP_ASSOCIATE, 0]) + encode_address("0.0.0.0", local_port)
+        try:
+            head, rest = await self._edge_request(writer, up_reader, up_writer, request)
+            if head[1] != REP_SUCCEEDED:
+                writer.write(head + rest)
+                await writer.drain()
+                raise _Refused(f"edge_refused:{head[1]}")
+            if head[3] != ATYP_IPV4:
+                writer.write(reply(REP_GENERAL_FAILURE))
+                await writer.drain()
+                raise _Refused("edge_bad_reply")
+            edge_ip = str(ipaddress.IPv4Address(rest[:4]))
+            if ipaddress.ip_address(edge_ip).is_unspecified:
+                edge_ip = up_writer.get_extra_info("peername")[0]
+            assoc.edge_addr = (edge_ip, int.from_bytes(rest[4:6], "big"))
+            self._udp_assocs.append(assoc)
+            writer.write(reply(REP_SUCCEEDED, self._public_ip, self.config.public_udp_port or self.udp_port or 0))
+            await writer.drain()
+            conn.result = "ok"
+            await self._hold_udp(conn, assoc, reader, up_reader)
+        finally:
+            transport.close()
+            if assoc in self._udp_assocs:
+                self._udp_assocs.remove(assoc)
+            if assoc.client_addr is not None and self._udp_by_addr.get(assoc.client_addr) is assoc:
+                del self._udp_by_addr[assoc.client_addr]
+
+    def _gateway_assoc_for(self, addr: tuple[str, int]) -> _UdpAssoc | None:
+        assoc = self._udp_by_addr.get(addr)
+        if assoc is not None:
+            return assoc
+        # Primeiro datagrama deste endereço: o phone está atrás de NAT, então a porta só aparece
+        # agora. Liga à associação ainda sem endereço que veio do mesmo IP.
+        waiting = [a for a in self._udp_assocs if a.client_addr is None and a.client_ip == addr[0]]
+        if not waiting:
+            return None
+        exact = [a for a in waiting if a.hint_port == addr[1]]
+        if exact:
+            chosen = exact[0]
+        elif len({a.conn.slot for a in waiting}) == 1:
+            chosen = min(waiting, key=lambda a: a.created)
+        else:
+            # Dois phones do mesmo IP em vagas diferentes: não dá para saber de quem é.
+            log.warning("socks5 gateway: datagrama UDP de %s ambíguo entre vagas; descartado", addr[0])
+            return None
+        chosen.client_addr = addr
+        self._udp_by_addr[addr] = chosen
+        return chosen
+
+    def _gateway_from_client(self, data: bytes, addr) -> None:
+        addr = (str(addr[0]), int(addr[1]))
+        assoc = self._gateway_assoc_for(addr)
+        if assoc is None or assoc.transport is None or assoc.edge_addr is None:
+            return
+        if len(data) < 4 or data[2]:            # FRAG != 0: descarta
+            return
+        assoc.last = time.monotonic()
+        assoc.conn.up += len(data)
+        assoc.transport.sendto(data, assoc.edge_addr)
+
+    def _gateway_from_edge(self, assoc: _UdpAssoc, data: bytes, addr) -> None:
+        if assoc.edge_addr is None or (str(addr[0]), int(addr[1])) != assoc.edge_addr:
+            return
+        if assoc.client_addr is None or self._udp_public is None:
+            return
+        assoc.last = time.monotonic()
+        assoc.conn.down += len(data)
+        self._udp_public.sendto(data, assoc.client_addr)
 
     # ------------------------------------------------------------ relay
     async def _relay(self, conn: _Conn, c_reader: asyncio.StreamReader, c_writer: asyncio.StreamWriter,

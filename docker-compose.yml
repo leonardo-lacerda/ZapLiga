@@ -586,8 +586,12 @@ services:
     command: ["python", "-m", "app.socks5", "gateway"]
     environment:
       EGRESS_SOCKS_PASSWORD: ${EGRESS_SOCKS_PASSWORD:-}
+      # UDP ASSOCIATE: the phone sends UDP to this host/port (same number as the TCP one).
+      EGRESS_SOCKS_PUBLIC_HOST: ${EGRESS_SOCKS_PUBLIC_HOST:-}
+      EGRESS_SOCKS_PORT: ${EGRESS_SOCKS_PORT:-1080}
     ports:
       - "${EGRESS_SOCKS_BIND:-127.0.0.1}:${EGRESS_SOCKS_PORT:-1080}:1080"
+      - "${EGRESS_SOCKS_BIND:-127.0.0.1}:${EGRESS_SOCKS_PORT:-1080}:1080/udp"
 
   # One SOCKS5 per PC slot, in the slot's network (reachable as tailscale-edge-N:1080).
   # The slot containers above are untouched: these only attach to them.

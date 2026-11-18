@@ -200,7 +200,7 @@ def test_edge_maps_connection_refused(route):
     run(scenario())
 
 
-@pytest.mark.parametrize("cmd", [2, 3])                    # BIND, UDP ASSOCIATE
+@pytest.mark.parametrize("cmd", [2, 9])                    # BIND, comando inexistente
 def test_edge_only_supports_connect(route, cmd):
     async def scenario():
         edge = await start("edge", route_file=str(route))
@@ -275,7 +275,8 @@ def test_max_connections(route):
 async def chain(route_path, **gateway_overrides):
     echo, echo_port = await echo_server()
     edge = await start("edge", route_file=str(route_path))
-    fields = dict(password=PASSWORD, upstream_template=f"127.0.0.1:{edge.port}")
+    # UDP numa porta própria: no Windows a mesma porta efêmera do TCP às vezes não abre em UDP.
+    fields = dict(password=PASSWORD, upstream_template=f"127.0.0.1:{edge.port}", udp_port=0)
     fields.update(gateway_overrides)
     gateway = await start("gateway", **fields)
     return echo, echo_port, edge, gateway
@@ -414,7 +415,7 @@ def test_gateway_only_supports_connect(route):
         echo, echo_port, edge, gateway = await chain(route)
         try:
             stage, code, _, _ = await socks_open(gateway.port, "127.0.0.1", echo_port, user="edge-1",
-                                                 password=PASSWORD, cmd=3)
+                                                 password=PASSWORD, cmd=2)     # BIND
             assert (stage, code) == ("connect", 7)
             assert edge.active == 0
         finally:
@@ -460,3 +461,205 @@ def test_read_route(tmp_path):
 def test_cli_rejects_unknown_mode(capsys):
     assert main(["proxy"]) == 2
     assert "edge|gateway" in capsys.readouterr().err
+
+
+# --------------------------------------------------------------------------- UDP
+from app.socks5 import parse_udp_header, udp_header  # noqa: E402
+
+
+class _Inbox(asyncio.DatagramProtocol):
+    def __init__(self):
+        self.queue: asyncio.Queue = asyncio.Queue()
+
+    def datagram_received(self, data, addr):
+        self.queue.put_nowait((data, addr))
+
+
+async def udp_socket():
+    loop = asyncio.get_running_loop()
+    transport, inbox = await loop.create_datagram_endpoint(_Inbox, local_addr=("127.0.0.1", 0))
+    return transport, inbox
+
+
+async def udp_echo():
+    class Echo(asyncio.DatagramProtocol):
+        def connection_made(self, transport):
+            self.transport = transport
+
+        def datagram_received(self, data, addr):
+            self.transport.sendto(b"eco:" + data, addr)
+
+    loop = asyncio.get_running_loop()
+    transport, _ = await loop.create_datagram_endpoint(Echo, local_addr=("127.0.0.1", 0))
+    return transport, transport.get_extra_info("sockname")[1]
+
+
+async def udp_associate(port: int, *, user=None, password=None, hint_port: int = 0):
+    """UDP ASSOCIATE de teste: devolve (código, (host, porta) do relay, reader, writer)."""
+    reader, writer = await asyncio.open_connection("127.0.0.1", port)
+    writer.write(b"\x05\x01" + (b"\x02" if user else b"\x00"))
+    _ver, method = await asyncio.wait_for(reader.readexactly(2), TIMEOUT)
+    if method == 0x02:
+        u, p = user.encode(), password.encode()
+        writer.write(bytes([1, len(u)]) + u + bytes([len(p)]) + p)
+        _, status = await asyncio.wait_for(reader.readexactly(2), TIMEOUT)
+        assert status == 0
+    writer.write(bytes([5, 3, 0, 1, 0, 0, 0, 0]) + hint_port.to_bytes(2, "big"))
+    head = await asyncio.wait_for(reader.readexactly(4), TIMEOUT)
+    rest = await asyncio.wait_for(reader.readexactly(6 if head[3] == 1 else 18), TIMEOUT)
+    host = str(ipaddress.ip_address(rest[:-2]))
+    return head[1], (host, int.from_bytes(rest[-2:], "big")), reader, writer
+
+
+async def recv(inbox, timeout=2.0):
+    try:
+        return await asyncio.wait_for(inbox.queue.get(), timeout)
+    except (asyncio.TimeoutError, TimeoutError):
+        return None
+
+
+def relay_of(bound):
+    host, port = bound
+    return ("127.0.0.1" if host == "0.0.0.0" else host), port
+
+
+def test_udp_header_roundtrip_and_fragments_are_dropped():
+    data = udp_header("203.0.113.9", 5222) + b"oi"
+    atyp, host, port, size = parse_udp_header(data)
+    assert (atyp, host, port, data[size:]) == (1, "203.0.113.9", 5222, b"oi")
+    assert parse_udp_header(b"\x00\x00\x01" + data[3:]) is None        # FRAG != 0
+    assert parse_udp_header(b"\x00\x00\x00\x03\x03ab") is None          # truncado
+    named = b"\x00\x00\x00\x03\x0bexample.com\x00\x35dns"
+    assert parse_udp_header(named)[1:3] == ("example.com", 53)
+
+
+def test_edge_udp_goes_out_and_only_answers_from_contacted_peers(route):
+    async def scenario():
+        echo, echo_port = await udp_echo()
+        edge = await start("edge", route_file=str(route))
+        client, inbox = await udp_socket()
+        stranger, _ = await udp_socket()
+        try:
+            code, bound, r, w = await udp_associate(edge.port)
+            assert code == 0
+            relay = relay_of(bound)
+            client.sendto(udp_header("127.0.0.1", echo_port) + b"ping", relay)
+            data, _ = await recv(inbox)
+            assert data == udp_header("127.0.0.1", echo_port) + b"eco:ping"
+            # Alguém que o phone nunca contatou manda para o relay: não chega no phone.
+            stranger.sendto(b"intruso", relay)
+            assert await recv(inbox, 0.5) is None
+            w.close()
+            await asyncio.sleep(0.2)
+            assert edge.active == 0                          # fechou o controle: fim da associação
+        finally:
+            client.close()
+            stranger.close()
+            echo.close()
+            await stop(edge)
+
+    run(scenario())
+
+
+@pytest.mark.parametrize("content", ["offline", "vps", ""])
+def test_edge_udp_refused_unless_route_is_pc(route, content):
+    async def scenario():
+        route.write_text(content, encoding="utf-8")
+        edge = await start("edge", route_file=str(route))
+        try:
+            code, _, _, _ = await udp_associate(edge.port)
+            assert code == 2
+        finally:
+            await stop(edge)
+
+    run(scenario())
+
+
+def test_edge_udp_stops_when_route_leaves_pc(route):
+    async def scenario():
+        echo, echo_port = await udp_echo()
+        edge = await start("edge", route_file=str(route))
+        client, inbox = await udp_socket()
+        try:
+            _code, bound, r, _w = await udp_associate(edge.port)
+            route.write_text("offline", encoding="utf-8")
+            await asyncio.sleep(0.2)
+            client.sendto(udp_header("127.0.0.1", echo_port) + b"ping", relay_of(bound))
+            assert await recv(inbox, 0.5) is None
+            assert await closed(r)
+        finally:
+            client.close()
+            echo.close()
+            await stop(edge)
+
+    run(scenario())
+
+
+def test_gateway_udp_end_to_end_through_the_edge(route, caplog):
+    caplog.set_level(logging.INFO, logger="socks5")
+
+    async def scenario():
+        echo, echo_port = await udp_echo()
+        tcp_echo, _, edge, gateway = await chain(route, public_host="198.51.100.7")
+        client, inbox = await udp_socket()
+        try:
+            code, bound, _r, w = await udp_associate(gateway.port, user="edge-1", password=PASSWORD)
+            assert code == 0
+            # Anuncia o IP público configurado e a porta UDP do gateway.
+            assert bound == ("198.51.100.7", gateway.udp_port)
+            client.sendto(udp_header("127.0.0.1", echo_port) + b"ola", ("127.0.0.1", gateway.udp_port))
+            data, _ = await recv(inbox)
+            assert data == udp_header("127.0.0.1", echo_port) + b"eco:ola"
+            w.close()
+            await asyncio.sleep(0.3)
+            assert gateway.active == 0 and edge.active == 0
+        finally:
+            client.close()
+            echo.close()
+            await stop(gateway, edge, tcp_echo)
+        assert "target=udp result=ok" in caplog.text and PASSWORD not in caplog.text
+
+    run(scenario())
+
+
+def test_gateway_udp_ignores_unknown_senders(route):
+    async def scenario():
+        echo, echo_port = await udp_echo()
+        tcp_echo, _, edge, gateway = await chain(route)
+        client, inbox = await udp_socket()
+        other, other_inbox = await udp_socket()
+        try:
+            _code, _bound, _r, _w = await udp_associate(gateway.port, user="edge-1", password=PASSWORD)
+            relay = ("127.0.0.1", gateway.udp_port)
+            client.sendto(udp_header("127.0.0.1", echo_port) + b"1", relay)
+            assert (await recv(inbox))[0].endswith(b"eco:1")
+            # Outro socket do mesmo IP, sem associação própria: descartado.
+            other.sendto(udp_header("127.0.0.1", echo_port) + b"2", relay)
+            assert await recv(other_inbox, 0.5) is None
+        finally:
+            client.close()
+            other.close()
+            echo.close()
+            await stop(gateway, edge, tcp_echo)
+
+    run(scenario())
+
+
+def test_gateway_udp_can_be_turned_off(route):
+    async def scenario():
+        tcp_echo, _, edge, gateway = await chain(route, udp_enabled=False)
+        try:
+            stage, code, _, _ = await socks_open(gateway.port, "0.0.0.0", 0, user="edge-1",
+                                                 password=PASSWORD, cmd=3)
+            assert (stage, code) == ("connect", 7) and gateway.udp_port is None
+        finally:
+            await stop(gateway, edge, tcp_echo)
+
+    run(scenario())
+
+
+def test_config_reads_udp_settings():
+    cfg = SocksConfig.from_env("gateway", {"EGRESS_SOCKS_PUBLIC_HOST": "203.0.113.5", "EGRESS_SOCKS_PORT": "1090",
+                                           "SOCKS_UDP": "0"})
+    assert (cfg.public_host, cfg.public_udp_port, cfg.udp_enabled) == ("203.0.113.5", 1090, False)
+    assert SocksConfig.from_env("gateway", {}).udp_enabled is True

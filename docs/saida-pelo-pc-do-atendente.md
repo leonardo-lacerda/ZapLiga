@@ -112,6 +112,13 @@ cloud phone ──SOCKS5──► socks-gateway (porta pública) ──► socks
   repassa para o `socks-edge-N` da vaga. Senha vazia recusa todo mundo.
 - Antes de ligar o phone, o `geelark-worker` pergunta o IP do PC pelo mesmo proxy (pela rede
   interna) e depois exige o mesmo IP de dentro do phone.
+- **UDP** (DNS, QUIC, STUN): um celular de verdade sempre tem UDP, e sem ele o phone parece um
+  ambiente de proxy. O proxy aceita UDP ASSOCIATE: o phone manda UDP para a mesma porta pública
+  (`EGRESS_SOCKS_PUBLIC_HOST:EGRESS_SOCKS_PORT`, em UDP), o `socks-gateway` repassa ao
+  `socks-edge-N` da vaga e ele sai pelo PC, com as mesmas regras do TCP (só com a rota `pc`, só
+  destinos públicos). O edge só devolve respostas de quem o phone contatou. Sem a porta UDP
+  liberada no firewall, o UDP do phone simplesmente não sai (nunca vaza pela VPS).
+  `SOCKS_UDP=0` desliga. Na linha de log, a associação aparece como `target=udp`.
 
 **A porta vem fechada.** Por padrão ela só escuta em `127.0.0.1`. Para o GeeLark alcançar, no
 `.env` de produção (`/opt/zapliga/.env`):
@@ -123,7 +130,7 @@ EGRESS_SOCKS_PASSWORD=<senha longa e aleatória>   # ex.: openssl rand -base64 3
 EGRESS_SOCKS_PUBLIC_HOST=<IP ou nome público da VPS>
 ```
 
-e libere `EGRESS_SOCKS_PORT` (TCP) no firewall da VPS / do provedor. O próximo deploy recria o
+e libere `EGRESS_SOCKS_PORT` em **TCP e UDP** no firewall da VPS / do provedor. O próximo deploy recria o
 `socks-gateway` com a porta aberta (ou, à mão, `docker compose up -d --no-deps socks-gateway`, e
 `api-a`/`api-b` para eles lerem a senha). Nunca abra a porta com a senha vazia ou fraca: quem
 tiver a senha sai pela internet dos PCs.
