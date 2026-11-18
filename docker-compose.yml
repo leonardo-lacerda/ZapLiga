@@ -78,7 +78,7 @@ x-edge-tailscale: &edge-tailscale
     - NET_RAW
 
 x-edge-waxum: &edge-waxum
-  image: zapliga-waxum:0.12.6-multirelay-v3
+  image: zapliga-waxum:0.12.6-multirelay-v4-opus
   entrypoint: ["/bin/sh", "/usr/local/bin/waxum-edge-guard.sh"]
   command: ["/app/waxum"]
   restart: unless-stopped
@@ -97,6 +97,7 @@ x-edge-waxum-environment: &edge-waxum-environment
   JWT_SECRET: ${WAXUM_JWT_SECRET:-zapcall-local-jwt-secret-change-me}
   NATS_URL: nats://nats:4222
   RATE_LIMIT_ENABLED: "false"
+  WA_CALL_AUDIO_CODEC: opus
   EGRESS_ROUTE_FILE: /egress/route
   # This Waxum's own list of sessions; the sessions themselves are shared.
   SQLITE_PATH: /app/registry/waxum.db
@@ -222,7 +223,7 @@ services:
     # fica unidirecional (SDR nunca ouve o cliente). A imagem stock do
     # fdciabdul/waxum NAO tem essa correcao — nao trocar de volta para ela sem
     # reaplicar o patch em whatsapp-rust/. Ver docs/deploy-runbook.md.
-    image: zapliga-waxum:0.12.6-multirelay-v3
+    image: zapliga-waxum:0.12.6-multirelay-v4-opus
     entrypoint: ["/bin/sh", "/usr/local/bin/waxum-entrypoint-guard.sh"]
     command: ["/app/waxum"]
     restart: unless-stopped
@@ -239,6 +240,10 @@ services:
       # its peer-IP middleware to be disabled, avoiding one shared Docker-IP
       # quota for every tenant and API replica.
       RATE_LIMIT_ENABLED: "false"
+      # Offer standard Opus, not MLow: our MLow decoder drops the phone's
+      # low-bitrate and 10 ms frames, which the caller hears as holes in the
+      # other side's voice. `mlow` brings the old behaviour back (infra/waxum/README.md).
+      WA_CALL_AUDIO_CODEC: opus
     healthcheck:
       test: ["CMD", "/bin/sh", "/usr/local/bin/waxum-healthcheck.sh"]
       interval: 30s
