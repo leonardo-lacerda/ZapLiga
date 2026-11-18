@@ -488,6 +488,22 @@ class JobManager:
                 self._wait_input(job, ctx, "waiting_manual", "manual", f"{exc.message} {MANUAL_HINT}")
                 self._set_step(job, step)
 
+    def _no_internet_message(self, job: Job, auto: PhoneAutomation) -> str:
+        """Diz se o problema é o PC (parou de sair) ou o caminho do phone até ele."""
+        reason = getattr(auto, "last_egress_error", None)
+        detail = f" Erro dentro do phone: {reason}." if reason else ""
+        spec = job.spec
+        if spec.probe_proxy is None:
+            return f"O phone está sem internet pelo proxy da máquina escolhida.{detail}"
+        try:
+            pc_ip = self._egress_probe(spec.probe_proxy)
+        except Exception as exc:
+            log.warning("[%s] o PC também não responde agora (%s)", spec.job_id, type(exc).__name__)
+            return (f"O PC escolhido parou de sair para a internet durante o teste (caiu a rede ou o Tailscale dele).{detail} "
+                    "Confira o PC e tente de novo.")
+        return (f"O PC está saindo normalmente (IP {pc_ip}), mas o phone não conseguiu usar o proxy até ele.{detail} "
+                "Tente de novo em 1 minuto; se repetir, o problema está entre o GeeLark e a VPS.")
+
     def _probe_pc_ip(self, job: Job) -> str:
         """IP do PC visto pelo probeProxy; sem resposta = egress_offline (contrato §4)."""
         spec = job.spec
@@ -529,7 +545,7 @@ class JobManager:
         self._set_step(job, "checking_network")
         ip = auto.egress_ip()
         if not ip:
-            raise JobError("no_internet", "O phone está sem internet pelo proxy da máquina escolhida.")
+            raise JobError("no_internet", self._no_internet_message(job, auto))
         with self._lock:
             job.egress_ip = ip
         if expected_ips and ip not in expected_ips:

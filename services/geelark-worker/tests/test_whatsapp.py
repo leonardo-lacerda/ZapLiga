@@ -54,6 +54,15 @@ def test_selectors_match_english_and_portuguese(pattern, texts):
         assert java_matches(pattern, text), text
 
 
+def test_describe_curl_error():
+    from app.device_automation import describe_curl_error
+    assert describe_curl_error("") == "sem resposta"
+    assert describe_curl_error("curl: (6) Could not resolve host: api.ipify.org").startswith("não achou o endereço do site (DNS)")
+    assert describe_curl_error("curl: (7) Failed to connect to api.ipify.org port 443").startswith("não conseguiu conectar")
+    assert describe_curl_error("curl: (28) Connection timed out after 10001 milliseconds").startswith("a conexão demorou demais")
+    assert describe_curl_error("/system/bin/sh: curl: inaccessible or not found").startswith("o curl não existe")
+
+
 def test_no_false_positives():
     assert not java_matches(wa.WAIT_LIMIT_TEXT, "Couldn't connect. Please try again later.")
     assert not java_matches(wa.PHONE_HINT_TITLE, "+55 11 99999-8888")
@@ -314,6 +323,9 @@ def test_egress_ip_uses_curl_and_validates():
     auto.adb = mock.Mock()
     auto.adb.shell.side_effect = ["", "<html>", "203.0.113.7\n"]
     assert auto.egress_ip() == "203.0.113.7"
-    assert auto.adb.shell.call_args.args[0] == ["curl", "-s", "-m", "10", "https://api.ipify.org"]
-    auto.adb.shell.side_effect = ["", "", ""]
+    # Alterna os sites de IP a cada tentativa e pede a mensagem de erro do curl (-sS).
+    urls = [c.args[0] for c in auto.adb.shell.call_args_list]
+    assert urls == [["curl", "-sS", "-m", "10", u] for u in ("https://api.ipify.org", "https://ifconfig.me/ip", "https://icanhazip.com")]
+    auto.adb.shell.side_effect = ["curl: (7) Failed to connect to api.ipify.org port 443"] * 5
     assert auto.egress_ip() is None
+    assert auto.last_egress_error.startswith("não conseguiu conectar")

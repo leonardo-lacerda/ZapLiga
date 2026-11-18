@@ -38,7 +38,31 @@ from .whatsapp import Screen
 log = logging.getLogger(__name__)
 
 SUPPORTED_ANDROID = {9, 11, 12, 13, 14, 15, 16}
-EGRESS_URL = "https://api.ipify.org"
+# Sites que devolvem só o IP; alterna entre eles caso um esteja fora ou bloqueie o IP.
+EGRESS_URLS = ("https://api.ipify.org", "https://ifconfig.me/ip", "https://icanhazip.com")
+EGRESS_ATTEMPTS = 5
+EGRESS_RETRY_S = 5
+
+
+def describe_curl_error(output: str) -> str:
+    """Erro do curl em português curto (vai para a mensagem do job e para o log)."""
+    text = output.strip()
+    if not text:
+        return "sem resposta"
+    known = (
+        (r"\(6\)|resolve host", "não achou o endereço do site (DNS)"),
+        (r"\(5\)|resolve proxy", "não achou o endereço do proxy"),
+        (r"\(7\)|failed to connect|connection refused", "não conseguiu conectar"),
+        (r"\(28\)|timed out", "a conexão demorou demais"),
+        (r"\(35\)|\(60\)|ssl|certificate", "erro de segurança (SSL) na conexão"),
+        (r"\(56\)|\(52\)|reset|empty reply", "a conexão caiu no meio"),
+        (r"\(97\)|proxy", "o proxy recusou a conexão"),
+        (r"not found|inaccessible", "o curl não existe neste phone"),
+    )
+    for pattern, meaning in known:
+        if re.search(pattern, text, re.I):
+            return f"{meaning} ({text[:120]})"
+    return text[:160]
 
 
 def android_major(system_ver: Any) -> int | None:
@@ -68,6 +92,7 @@ class GeeLarkAutomation:
         self.adb: Any = None   # adbutils.AdbDevice
         self.d: Any = None     # uiautomator2.Device
         self._number_submitted_at = float("-inf")
+        self.last_egress_error: str | None = None  # motivo da última falha do egress_ip
         self._reset_done = False  # "apagar o app" do cadastro já feito (não repete ao tentar de novo)
 
     # ----------------------------------------------------------------- utils
@@ -189,13 +214,20 @@ class GeeLarkAutomation:
         return {key: wa.parse_installed(out, app) for key, app in wa.APPS.items()}
 
     def egress_ip(self) -> str | None:
-        for attempt in range(3):
-            out = self._shell(["curl", "-s", "-m", "10", EGRESS_URL], timeout=20).strip()
+        # Logo depois de ligar, a rede do phone pode demorar alguns segundos para subir.
+        self.last_egress_error = None
+        for attempt in range(EGRESS_ATTEMPTS):
+            url = EGRESS_URLS[attempt % len(EGRESS_URLS)]
+            # -sS: sem barra de progresso, mas com a mensagem de erro (ex.: "Failed to connect").
+            out = self._shell(["curl", "-sS", "-m", "10", url], timeout=20).strip()
+            last_line = out.splitlines()[-1].strip() if out else ""
             try:
-                return str(ipaddress.ip_address(out))
+                return str(ipaddress.ip_address(last_line))
             except ValueError:
-                log.info("[%s] curl sem IP (tentativa %s)", self.spec.job_id, attempt + 1)
-            self.ctx.sleep(4)
+                self.last_egress_error = describe_curl_error(last_line)
+                log.info("[%s] curl sem IP (tentativa %s, %s): %s", self.spec.job_id, attempt + 1, url, self.last_egress_error)
+            if attempt + 1 < EGRESS_ATTEMPTS:
+                self.ctx.sleep(EGRESS_RETRY_S)
         return None
 
     def install_app(self) -> None:

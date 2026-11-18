@@ -9,6 +9,7 @@ import pytest
 
 from app.automation import SmsResult
 from app.errors import ApiError, JobError, PERMISSION_TODO_MESSAGE
+from app.egress_probe import ProbeFailed
 from app.jobs import JobManager
 
 from conftest import PNG, FakeFactory, make_spec, wait_for
@@ -306,6 +307,39 @@ def test_no_internet_when_curl_returns_nothing():
     manager.create(make_spec())
     job = finished(manager, "job-1")
     assert job.error_code == "no_internet" and job.egress_ip is None
+
+
+def _no_internet_job(probe):
+    from app.automation import ProbeProxySpec
+
+    class Factory(FakeFactory):
+        def __call__(self, spec, ctx):
+            auto = super().__call__(spec, ctx)
+            auto.last_egress_error = "não conseguiu conectar (curl: (7) Failed to connect)"
+            return auto
+
+    manager = JobManager(Factory(egress=None), input_timeout_s=5, job_timeout_s=10, egress_probe=probe)
+    manager.create(make_spec(expected_egress_ips=(), probe_proxy=ProbeProxySpec("socks-edge-1", 1080, "edge-1", "x")))
+    return finished(manager, "job-1")
+
+
+def test_no_internet_says_the_pc_is_fine_and_shows_the_phone_error():
+    job = _no_internet_job(lambda _: "203.0.113.7")
+    assert job.error_code == "no_internet"
+    assert "PC está saindo normalmente (IP 203.0.113.7)" in job.message
+    assert "Failed to connect" in job.message
+
+
+def test_no_internet_blames_the_pc_when_it_stopped_answering():
+    calls = []
+
+    def probe(_):
+        calls.append(1)
+        if len(calls) > 1:
+            raise ProbeFailed("timeout")
+        return "203.0.113.7"
+    job = _no_internet_job(probe)
+    assert job.error_code == "no_internet" and "parou de sair para a internet" in job.message
 
 
 def test_installs_app_when_missing():
