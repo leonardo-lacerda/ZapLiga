@@ -22,10 +22,15 @@ const eventStatus: Record<string, { label: string; tone: string }> = {
   dead_letter: { label: 'Falhou', tone: 'warning' },
 };
 
+// A key that can only check whether phones have WhatsApp (no calls, lines or agents).
+const isCheckOnly = (integration: AnyRow) => Array.isArray(integration.scopes) && integration.scopes.length === 1 && integration.scopes[0] === 'whatsapp:check';
+
 /** Franco CRM: the leader generates the key the CRM uses to place calls through ZapLiga. */
 export function CrmIntegrationsPanel({ tenantId }: CrmIntegrationsPanelProps) {
   const [integrations, setIntegrations] = useState<AnyRow[]>([]);
   const [name, setName] = useState('Franco CRM');
+  const [access, setAccess] = useState<'full' | 'whatsapp_check'>('full');
+  const [keyAccess, setKeyAccess] = useState<'full' | 'whatsapp_check'>('full');
   const [apiKey, setApiKey] = useState('');
   const [message, setMessage] = useState('');
   const [busy, setBusy] = useState(false);
@@ -49,7 +54,8 @@ export function CrmIntegrationsPanel({ tenantId }: CrmIntegrationsPanelProps) {
     event.preventDefault();
     setBusy(true); setMessage('');
     try {
-      const result = await json('/api/tenants/' + tenantId + '/crm-integrations', { method: 'POST', body: JSON.stringify({ name: name.trim() }) });
+      const result = await json('/api/tenants/' + tenantId + '/crm-integrations', { method: 'POST', body: JSON.stringify({ name: name.trim(), access }) });
+      setKeyAccess(access);
       showKey(result.api_key, 'Chave gerada. Copie agora: ela não será exibida novamente.');
       await load();
     } catch (error) { setMessage(error instanceof Error ? error.message : String(error)); }
@@ -97,11 +103,12 @@ export function CrmIntegrationsPanel({ tenantId }: CrmIntegrationsPanelProps) {
     {message && <div className="alert" role="status"><span>{message}</span><button type="button" onClick={() => setMessage('')} aria-label="Fechar mensagem">×</button></div>}
 
     {apiKey ? <div className="integration-credentials" role="status">
-      <div className="integration-credentials-head"><span className="integration-credentials-icon"><Icon name="check" size={16} /></span><div><strong>Chave da integração</strong><small>No Franco: Configurações → Caixas de entrada → Nova → ZapLiga, e cole esta chave.</small></div></div>
+      <div className="integration-credentials-head"><span className="integration-credentials-icon"><Icon name="check" size={16} /></span><div><strong>Chave da integração</strong><small>{keyAccess === 'whatsapp_check' ? 'Esta chave só verifica se um telefone tem WhatsApp. Guarde-a no servidor (variável de ambiente), nunca no navegador.' : 'No Franco: Configurações → Caixas de entrada → Nova → ZapLiga, e cole esta chave.'}</small></div></div>
       <label>API key<div className="credential-row"><input readOnly value={apiKey} aria-label="API key da integração" /><Button type="button" variant="secondary" icon="copy" onClick={() => void handleCopy()}>{copied ? 'Copiado' : 'Copiar'}</Button></div></label>
       <Button type="button" variant="ghost" onClick={() => setApiKey('')}>Já copiei</Button>
     </div> : <form className="integration-create-form" onSubmit={(event) => void create(event)}>
       <label><span>Nome da integração</span><small>Ex.: Franco comercial</small><input aria-label="Nome da integração CRM" value={name} onChange={(event) => setName(event.target.value)} minLength={2} maxLength={80} required /></label>
+      <label><span>Permissões da chave</span><small>Dê à chave só o que ela precisa.</small><select aria-label="Permissões da chave" value={access} onChange={(event) => setAccess(event.target.value === 'whatsapp_check' ? 'whatsapp_check' : 'full')}><option value="full">Completa: integração do Franco (ligações, linhas e agentes)</option><option value="whatsapp_check">Só verificar se o telefone tem WhatsApp</option></select></label>
       <div className="integration-destination-note"><Icon name="lock" size={15} /><span><strong>O Franco recebe telefone e nome de cada contato discado.</strong><small>A chave também permite ao Franco conectar linhas e vincular agentes. Cada agente vinculado ocupa um assento de SDR.</small></span></div>
       <div className="integration-form-footer"><span /><Button type="submit" disabled={busy || name.trim().length < 2} icon="unlock">{busy ? 'Gerando...' : 'Gerar chave'}</Button></div>
     </form>}
@@ -109,7 +116,7 @@ export function CrmIntegrationsPanel({ tenantId }: CrmIntegrationsPanelProps) {
     <div className="integration-list">
       {integrations.map((integration) => <article className="integration-card" key={integration.id}>
         <div className="integration-card-title"><span className="integration-card-icon"><Icon name="plug" size={15} /></span><div><strong>{integration.name}</strong><small>{integration.api_key_prefix}…</small></div></div>
-        <Badge tone={integration.status !== 'active' ? 'neutral' : integration.connected_at ? 'success' : 'warning'}>{integration.status !== 'active' ? 'Revogada' : integration.connected_at ? 'Conectada' : 'Aguardando o Franco'}</Badge>
+        {isCheckOnly(integration) ? <Badge tone={integration.status !== 'active' ? 'neutral' : 'info'}>{integration.status !== 'active' ? 'Revogada' : 'Só verificação de WhatsApp'}</Badge> : <Badge tone={integration.status !== 'active' ? 'neutral' : integration.connected_at ? 'success' : 'warning'}>{integration.status !== 'active' ? 'Revogada' : integration.connected_at ? 'Conectada' : 'Aguardando o Franco'}</Badge>}
         <div className="integration-stats">
           <span><small>Conectada em</small><strong>{integration.connected_at ? `${formatDate(integration.connected_at)}${hostOf(integration.webhook_url) ? ' · ' + hostOf(integration.webhook_url) : ''}` : 'Ainda não'}</strong></span>
           <span><small>Último uso</small><strong>{formatDate(integration.last_used_at) || 'Nunca'}</strong></span>

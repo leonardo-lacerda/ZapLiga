@@ -32,6 +32,15 @@ describe('CrmIntegrationsService', () => {
     expect(params[4]).toBe(created.api_key.slice(0, 16));
   });
 
+  it('gives a new key the full Franco scopes by default, and only whatsapp:check when asked', async () => {
+    const { service, db } = makeService();
+    await service.create('tenant-1', 'user-1', { name: 'Franco' });
+    expect(db.query.mock.calls[0][1]![8]).toEqual(['calls', 'numbers:read', 'numbers:write', 'agents', 'webhooks']);
+    await service.create('tenant-1', 'user-1', { name: 'Formulário', access: 'whatsapp_check' });
+    expect(db.query.mock.calls[1][1]![8]).toEqual(['whatsapp:check']);
+    await expect(service.create('tenant-1', 'user-1', { name: 'X', access: 'admin' as any })).rejects.toMatchObject({ status: 400 });
+  });
+
   it('never looks up keys of another format', async () => {
     const { service, db } = makeService();
     await expect(service.authenticate('zpl_in_lead-ingestion-key')).resolves.toBeNull();
@@ -98,6 +107,17 @@ describe('IntegrationKeyGuard', () => {
     expect(request.tenantId).toBe('tenant-1');
     expect(request.integration.id).toBe('int-1');
     expect(flags.assertEnabled).toHaveBeenCalledWith('tenant-1', 'crm_integration', 'POST');
+  });
+
+  it('lets a WhatsApp-check key reach only the routes that accept its scope', async () => {
+    const checkOnly = { ...integration, scopes: ['whatsapp:check'] };
+    const headers = { authorization: 'Bearer zpl_crm_check' };
+    await expect(makeGuard({ found: checkOnly }).guard.canActivate(makeContext({ headers, method: 'POST' }, ['numbers:read', 'whatsapp:check'] as any))).resolves.toBe(true);
+    for (const scope of ['calls', 'numbers:read', 'numbers:write', 'agents', 'webhooks']) {
+      await expect(makeGuard({ found: checkOnly }).guard.canActivate(makeContext({ headers, method: 'POST' }, [scope] as any))).rejects.toMatchObject({ status: 403 });
+    }
+    // The full Franco key still reaches the check through numbers:read.
+    await expect(makeGuard().guard.canActivate(makeContext({ headers, method: 'POST' }, ['numbers:read', 'whatsapp:check'] as any))).resolves.toBe(true);
   });
 
   it('rejects a missing or unknown key, a missing scope and a flood', async () => {

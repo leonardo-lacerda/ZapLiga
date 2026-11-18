@@ -3,6 +3,8 @@ import { Allow, ArrayMaxSize, IsArray, IsBoolean, IsEmail, IsIn, IsInt, IsObject
 export class CreateCrmIntegrationDto {
   @IsString() @MinLength(2) @MaxLength(80) name!: string;
   @IsOptional() @IsArray() @ArrayMaxSize(5) @IsString({ each: true }) allowedOrigins?: string[];
+  // `whatsapp_check` makes a key that can only check whether phones have WhatsApp.
+  @IsOptional() @IsIn(['full', 'whatsapp_check']) access?: 'full' | 'whatsapp_check';
 }
 
 export class HandshakeDto {

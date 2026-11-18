@@ -23,6 +23,26 @@ describe('CrmIntegrationsPanel', () => {
     expect(screen.queryByDisplayValue('zpl_crm_secret')).not.toBeInTheDocument();
   });
 
+  it('generates a key that can only check WhatsApp', async () => {
+    const bodies: unknown[] = [];
+    let created = false;
+    server.use(
+      http.get('http://localhost:3000/api/tenants/tenant-1/crm-integrations', () => HttpResponse.json(created ? [{ id: 'int-2', name: 'Formulário', api_key_prefix: 'zpl_crm_check123', status: 'active', scopes: ['whatsapp:check'], connected_at: null, last_used_at: null }] : [])),
+      http.post('http://localhost:3000/api/tenants/tenant-1/crm-integrations', async ({ request }) => { bodies.push(await request.json()); created = true; return HttpResponse.json({ id: 'int-2', api_key: 'zpl_crm_check' }); }),
+    );
+
+    render(<CrmIntegrationsPanel tenantId="tenant-1" />);
+    await screen.findByText('Nenhuma integração com CRM');
+    fireEvent.change(screen.getByLabelText('Nome da integração CRM'), { target: { value: 'Formulário' } });
+    fireEvent.change(screen.getByLabelText('Permissões da chave'), { target: { value: 'whatsapp_check' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Gerar chave' }));
+
+    expect(await screen.findByDisplayValue('zpl_crm_check')).toBeInTheDocument();
+    expect(screen.getByText(/só verifica se um telefone tem WhatsApp/)).toBeInTheDocument();
+    expect(await screen.findByText('Só verificação de WhatsApp')).toBeInTheDocument();
+    expect(bodies).toEqual([{ name: 'Formulário', access: 'whatsapp_check' }]);
+  });
+
   it('lists recent deliveries and requeues a failed one', async () => {
     let retried = false;
     server.use(

@@ -8,7 +8,14 @@ import { EntitlementService } from '../billing/entitlement.service';
 import { encryptSecret, hashCredential } from '../lead-ingestion/lead-ingestion.crypto';
 import { CrmEventsService } from '../crm-events/crm-events.service';
 
-export const INTEGRATION_SCOPES = ['calls', 'numbers:read', 'numbers:write', 'agents', 'webhooks'] as const;
+export const INTEGRATION_SCOPES = ['calls', 'numbers:read', 'numbers:write', 'agents', 'webhooks', 'whatsapp:check'] as const;
+// What a new key may do. `full` is the Franco integration; `whatsapp_check` only answers
+// POST /whatsapp-check, so a leaked key cannot place calls or touch lines and agents.
+export const INTEGRATION_ACCESS = {
+  full: ['calls', 'numbers:read', 'numbers:write', 'agents', 'webhooks'],
+  whatsapp_check: ['whatsapp:check'],
+} as const;
+export type IntegrationAccess = keyof typeof INTEGRATION_ACCESS;
 export type IntegrationScope = typeof INTEGRATION_SCOPES[number];
 export const CRM_CONTRACT_VERSION = 1;
 
@@ -72,16 +79,18 @@ export class CrmIntegrationsService {
     return result.rows.map((row) => this.publicView(row));
   }
 
-  async create(tenantId: string, userId: string, input: { name: string; allowedOrigins?: string[] }) {
+  async create(tenantId: string, userId: string, input: { name: string; allowedOrigins?: string[]; access?: IntegrationAccess }) {
     const name = String(input.name ?? '').trim();
     if (name.length < 2 || name.length > 80) throw new BadRequestException('O nome da integração deve ter entre 2 e 80 caracteres');
     const allowedOrigins = normalizeOrigins(input.allowedOrigins);
+    const access = input.access ?? 'full';
+    if (!(access in INTEGRATION_ACCESS)) throw new BadRequestException('Tipo de acesso inválido');
     const apiKey = newApiKey();
-    const row = (await this.db.query(`INSERT INTO crm_integrations (id, tenant_id, kind, name, public_id, api_key_prefix, api_key_hash, allowed_origins, created_by)
-      VALUES ($1, $2, 'franco', $3, $4, $5, $6, $7, $8) RETURNING *`, [
-      randomUUID(), tenantId, name, `crm_${randomBytes(12).toString('hex')}`, apiKey.slice(0, 16), hashCredential(apiKey), allowedOrigins, userId,
+    const row = (await this.db.query(`INSERT INTO crm_integrations (id, tenant_id, kind, name, public_id, api_key_prefix, api_key_hash, allowed_origins, created_by, scopes)
+      VALUES ($1, $2, 'franco', $3, $4, $5, $6, $7, $8, $9) RETURNING *`, [
+      randomUUID(), tenantId, name, `crm_${randomBytes(12).toString('hex')}`, apiKey.slice(0, 16), hashCredential(apiKey), allowedOrigins, userId, [...INTEGRATION_ACCESS[access]],
     ])).rows[0];
-    await this.audit.record({ actorUserId: userId, tenantId, action: 'crm_integration.created', entityType: 'crm_integration', entityId: row.id });
+    await this.audit.record({ actorUserId: userId, tenantId, action: 'crm_integration.created', entityType: 'crm_integration', entityId: row.id, metadata: { access } });
     return { ...this.publicView(row), api_key: apiKey };
   }
 

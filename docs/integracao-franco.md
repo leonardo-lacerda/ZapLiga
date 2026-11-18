@@ -35,7 +35,9 @@ Por que a discagem vai pelo socket: a estação vive em memória na instância (
 O header é `Authorization: Bearer zpl_crm_…` ou `x-zapliga-api-key: zpl_crm_…`.
 
 - A chave sozinha define o tenant: rota ou header nenhum muda isso.
-- Escopos: `calls`, `numbers:read`, `numbers:write`, `agents`, `webhooks`. Hoje toda chave recebe todos.
+- Escopos: `calls`, `numbers:read`, `numbers:write`, `agents`, `webhooks`, `whatsapp:check`.
+  - Chave **completa** (padrão, a do Franco): todos menos `whatsapp:check`.
+  - Chave **só verificação**: apenas `whatsapp:check`. Só acessa `POST /whatsapp-check` (e `GET /me`, `GET /catalog`, que não pedem escopo).
 - Limite de requisições: 600 por minuto por integração (`CRM_INTEGRATION_RATE_LIMIT_PER_MINUTE`). Acima disso, responde `429` com `code: rate_limited`.
 
 | Situação | Resposta |
@@ -59,7 +61,7 @@ Erros de discagem retornam `409` com `{code, message, retry_after_seconds}`.
 | `POST /numbers/:id/reconnect` | `numbers:write` | — |
 | `PATCH /numbers/:id/settings` | `numbers:write` | `{label?, cooldownSeconds?, maxCallsPerWindow?, callWindowSeconds?, verificationOnly?}` |
 | `DELETE /numbers/:id` | `numbers:write` | Arquiva a linha (recusa se estiver em ligação) |
-| `POST /whatsapp-check` | `numbers:read` | `{phone}` (E.164, com ou sem `+`) → `{phone, on_whatsapp, jid}` |
+| `POST /whatsapp-check` | `numbers:read` ou `whatsapp:check` | `{phone}` (E.164, com ou sem `+`) → `{phone, on_whatsapp, jid}` |
 | `GET /agents` | `agents` | Vínculos com estado da estação |
 | `POST /agents/ensure` | `agents` | `{externalUserId, email, name}` → `{sdr_id, user_id, operator_kind, provisioned, external_user_id}` |
 | `DELETE /agents/:sdrId/link` | `agents` | Desvincula; libera o assento se a integração o criou |

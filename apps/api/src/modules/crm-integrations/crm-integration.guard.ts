@@ -5,7 +5,8 @@ import { FeatureFlagsService } from '../feature-flags/feature-flags.service';
 import { CrmIntegration, CrmIntegrationsService, IntegrationScope } from './crm-integrations.service';
 
 export const INTEGRATION_SCOPE_KEY = 'zapliga_integration_scope';
-export const RequiresScope = (scope: IntegrationScope) => SetMetadata(INTEGRATION_SCOPE_KEY, scope);
+/** The key needs at least one of the given scopes. */
+export const RequiresScope = (...scopes: IntegrationScope[]) => SetMetadata(INTEGRATION_SCOPE_KEY, scopes);
 
 export const CurrentIntegration = createParamDecorator((_data: unknown, context: ExecutionContext) => {
   const request = context.switchToHttp().getRequest<{ integration?: CrmIntegration }>();
@@ -37,8 +38,9 @@ export class IntegrationKeyGuard implements CanActivate {
     const count = await this.redis.client.incr(rateKey);
     if (count === 1) await this.redis.client.expire(rateKey, 70);
     if (count > rateLimitPerMinute()) throw new HttpException({ code: 'rate_limited', message: 'Limite de requisições da integração excedido', retry_after_seconds: 60 - Math.floor((Date.now() % 60_000) / 1000) }, HttpStatus.TOO_MANY_REQUESTS);
-    const scope = this.reflector.getAllAndOverride<IntegrationScope | undefined>(INTEGRATION_SCOPE_KEY, [context.getHandler(), context.getClass()]);
-    if (scope && !integration.scopes.includes(scope)) throw new ForbiddenException({ code: 'missing_scope', message: `A chave não tem o escopo ${scope}` });
+    const required = this.reflector.getAllAndOverride<IntegrationScope[] | IntegrationScope | undefined>(INTEGRATION_SCOPE_KEY, [context.getHandler(), context.getClass()]);
+    const scopes = required === undefined ? [] : Array.isArray(required) ? required : [required];
+    if (scopes.length && !scopes.some((scope) => integration.scopes.includes(scope))) throw new ForbiddenException({ code: 'missing_scope', message: `A chave não tem o escopo ${scopes.join(' ou ')}` });
     await this.flags.assertEnabled(integration.tenant_id, 'crm_integration', request.method);
     request.integration = integration;
     request.tenantId = integration.tenant_id;

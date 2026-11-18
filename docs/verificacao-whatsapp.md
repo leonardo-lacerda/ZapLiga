@@ -24,6 +24,18 @@ Resposta: `{ "phone": "5531989739997", "on_whatsapp": true, "jid": "...@s.whatsa
 | `429 rate_limited` | Passou de 10 consultas por minuto |
 | `502 check_failed` | Não deu para verificar agora. **Não** quer dizer "sem WhatsApp" |
 
+## Chave só para verificação
+
+Para usar a verificação fora do Franco (por exemplo, num formulário), gere uma chave que só serve para isso:
+
+1. No ZapLiga, abra **Integrações → Ligações pelo Franco**.
+2. Dê um nome (ex.: "Formulário") e, em **Permissões da chave**, escolha **"Só verificar se o telefone tem WhatsApp"**.
+3. Clique em **Gerar chave** e copie na hora: ela aparece uma vez só.
+
+Essa chave não faz ligações, não mexe em linhas nem em agentes e não recebe eventos. Mesmo assim, ela gasta o limite de consultas da empresa:
+- guarde no servidor (variável de ambiente), nunca no navegador ou no código do formulário;
+- se vazar, clique em **Revogar** no card dela e gere outra.
+
 ## Linha só para verificação
 
 Você pode separar uma linha só para essas consultas, para não arriscar as linhas que fazem ligação.

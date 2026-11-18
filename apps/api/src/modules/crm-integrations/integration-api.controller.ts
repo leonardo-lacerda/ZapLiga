@@ -70,7 +70,7 @@ export class IntegrationApiController {
   /** Whether a phone has WhatsApp, asked through one of the tenant's lines (cached, rate limited). */
   @Post('/whatsapp-check')
   @HttpCode(HttpStatus.OK)
-  @RequiresScope('numbers:read')
+  @RequiresScope('numbers:read', 'whatsapp:check')
   whatsappCheckPhone(@CurrentIntegration() integration: CrmIntegration, @Body() body: WhatsappCheckDto) { return this.whatsappCheck.check(integration, body?.phone); }
 
   @Get('/agents')
