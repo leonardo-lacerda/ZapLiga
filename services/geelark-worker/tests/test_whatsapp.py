@@ -41,6 +41,9 @@ def java_matches(pattern: str, text: str) -> bool:
     (wa.WAIT_LIMIT_TEXT, ["Please wait 2 hours", "Tente novamente em 5 horas"]),
     (wa.RESEND_SMS_TEXT, ["Reenviar SMS", "Reenviar SMS em 0:45", "Resend SMS", "Resend SMS in 1:02"]),
     (wa.CALL_ME_TEXT, ["Ligar para mim", "Ligar para mim em 1:00", "Call me", "Receber ligação"]),
+    (wa.OTHER_VERIFY_TEXT, ["Usar outra forma de verificação", "Use another verification method", "Verify another way"]),
+    (wa.SMS_METHOD_TEXT, ["Receber SMS", "Receive SMS", "SMS"]),
+    (wa.CALL_METHOD_TEXT, ["Receber ligação", "Ligação de voz", "Voice call", "Call me"]),
     (wa.DIDNT_RECEIVE_TEXT, ["Não recebeu o código?", "Didn't receive code?", "Didn’t get the code?"]),
     (wa.CONFIRM_NUMBER_TEXT, ["O número está certo?", "Este número está correto?", "Is this the correct number?",
                               "Is this the right phone number?", "Is your phone number correct?",
@@ -57,6 +60,9 @@ def test_no_false_positives():
     assert not java_matches(wa.SKIP_TEXT, "Next")
     assert not java_matches(wa.CONFIRM_NUMBER_TEXT, "Insira seu número de telefone")
     assert not java_matches(wa.CONFIRM_NUMBER_TEXT, "Qual é o meu número de telefone?")
+    # A verificação por ligação não atendida nunca passa no phone da nuvem: não é um método válido.
+    assert not java_matches(wa.CALL_METHOD_TEXT, "Ligação não atendida")
+    assert not java_matches(wa.CALL_METHOD_TEXT, "Missed call")
 
 
 def test_each_app_uses_its_own_prefix():
@@ -100,6 +106,10 @@ class FakeDevice:
     # A janela de confirmação fica por cima da tela do número: tem de ganhar dela.
     (["O número está certo?", "+55 27 98152-2584", "Editar", "Sim"], ["com.whatsapp:id/registration_phone"], Screen.CONFIRM_NUMBER),
     (["O número está certo?", "Editar", "Sim"], [], Screen.CONFIRM_NUMBER),
+    (["Permitir acesso", "Para fazer a verificação com uma ligação não atendida, permita o acesso nas próximas telas:",
+      "Continuar", "Usar outra forma de verificação"], [], Screen.MISSED_CALL_INTRO),
+    # Lista de métodos com "outra forma" também: escolhe o SMS da lista.
+    (["Receber SMS", "Ligação não atendida", "Usar outra forma de verificação"], [], Screen.VERIFY_METHOD),
 ])
 def test_detect_screen(texts, ids, expected):
     assert wa.detect_screen(FakeDevice(texts, ids), WA) == expected

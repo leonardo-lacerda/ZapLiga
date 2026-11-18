@@ -339,7 +339,8 @@ class GeeLarkAutomation:
             self.d.app_start(self.app.package, wait=True)
             self._pause(2, 4)
 
-        self._drive({Screen.PHONE_ENTRY}, {Screen.CHATS: already_registered, Screen.VERIFY_CODE: mid_registration},
+        half_done = (Screen.VERIFY_CODE, Screen.CONFIRM_NUMBER, Screen.VERIFY_METHOD, Screen.MISSED_CALL_INTRO)
+        self._drive({Screen.PHONE_ENTRY}, {Screen.CHATS: already_registered, **{s: mid_registration for s in half_done}},
                     what="digitar número")
 
     def _fill_number(self) -> None:
@@ -367,6 +368,8 @@ class GeeLarkAutomation:
             Screen.PHONE_ENTRY: self._fill_number,
             Screen.CONFIRM_NUMBER: lambda: self._click({"resourceId": "android:id/button1"}, {"textMatches": wa.CONFIRM_TEXT}),
             Screen.VERIFY_METHOD: self._choose_verify_method,
+            # Nunca "Continuar" aqui: daria permissão de ligações para uma verificação que não tem como passar.
+            Screen.MISSED_CALL_INTRO: lambda: self._click({"textMatches": wa.OTHER_VERIFY_TEXT}),
         }
         # Nunca pede um novo código sozinho: pedir repetidamente trava o número por horas.
         self._drive({Screen.VERIFY_CODE}, actions, what="digitar código", timeout=240, unknown_grace=45)

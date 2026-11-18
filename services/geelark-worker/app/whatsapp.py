@@ -59,6 +59,7 @@ class Screen(Enum):
     USE_OTHER_NUMBER = "escolher número (Business)"
     PHONE_ENTRY = "digitar número"
     VERIFY_METHOD = "escolher SMS/ligação"
+    MISSED_CALL_INTRO = "verificar por ligação não atendida"
     EULA = "termos (concordar e continuar)"
     RESTORE_BACKUP = "restaurar backup"
     BUSINESS_CATEGORY = "categoria da empresa"
@@ -88,8 +89,14 @@ CONFIRM_NUMBER_TEXT = (
 NEXT_TEXT = r"(?i)^(next|avançar|próximo|done|concluir|salvar|save)$"
 OTHER_NUMBER_TEXT = r"(?i)^(use a different number|usar (um )?outro número)$"
 EULA_TEXT = r"(?i)^(agree and continue|concordar e continuar|aceitar e continuar)$"
-SMS_METHOD_TEXT = r"(?i)^(receive sms|receber sms|send sms|enviar sms)$"
-CALL_METHOD_TEXT = r"(?i)^(call me|me ligue|ligar|receber ligação)$"
+SMS_METHOD_TEXT = r"(?i)^(receive sms|receber (um |o c[oó]digo por )?sms|send sms|enviar sms|sms|text message|mensagem de texto)$"
+CALL_METHOD_TEXT = r"(?i)^(call me|me ligue|ligar|receber (uma )?liga[cç][aã]o( de voz)?|liga[cç][aã]o de voz|voice call|receive (a )?(voice )?call)$"
+# "Permitir acesso": o WhatsApp quer verificar ligando para o número e lendo o registro de
+# chamadas. O chip não está no phone da nuvem, então isso nunca funciona: pede outra forma.
+OTHER_VERIFY_TEXT = (
+    r"(?i)^(usar outra forma de verifica[cç][aã]o|outra forma de verifica[cç][aã]o|verificar de outra forma"
+    r"|use (an)?other (verification )?(method|option)|verify another way|try another way|other verification options?)$"
+)
 
 BANNED_TEXT = r"(?is).*(not allowed to use whatsapp|não (tem permissão|pode) usar o whatsapp|is banned|foi banido|banned from|banido).*"
 WAIT_LIMIT_TEXT = r"(?is).*(wait \d+|try again in \d|aguarde \d+|tente novamente (em|daqui a) \d).*"
@@ -169,6 +176,8 @@ def build_screens(app: WhatsAppApp) -> tuple[tuple[Screen, tuple[dict, ...]], ..
     screens += [
         (Screen.PHONE_ENTRY, ({"resourceId": w + "registration_phone"},)),
         (Screen.VERIFY_METHOD, ({"textMatches": SMS_METHOD_TEXT}, {"textMatches": CALL_METHOD_TEXT})),
+        # Depois da lista de métodos: se a lista também oferecer "outra forma", escolhe o SMS nela.
+        (Screen.MISSED_CALL_INTRO, ({"textMatches": OTHER_VERIFY_TEXT},)),
         (Screen.EULA, ({"resourceId": w + "eula_accept"}, {"textMatches": EULA_TEXT})),
         (Screen.RESTORE_BACKUP, ({"textMatches": r"(?is).*(restore backup|restaurar backup|restaurar conversas|restore chats).*"},)),
     ]
