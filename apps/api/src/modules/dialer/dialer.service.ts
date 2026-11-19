@@ -138,6 +138,13 @@ const dialerPacingConfig = (settings: any) => ({
 // still RECORDS the call in the per-number window -- the automatic dialer
 // must keep seeing the line's real volume when it paces its own calls.
 const MANUAL_UNPACED = 1_000_000;
+/**
+ * TEMPORARY (2026-11-19): manual calls ignore the tenant's "simultaneous calls" limit
+ * (global_max_concurrent_calls), so several attendants can call at once on different lines.
+ * Each line still places one call at a time. Restore settings.global_max_concurrent_calls
+ * in manualCall and manualCallWithInput when the limit is wanted back.
+ */
+const MANUAL_TENANT_CONCURRENCY = MANUAL_UNPACED;
 const manualPacingConfig = (number: any) => ({
   maxCallsPerWindow: MANUAL_UNPACED,
   callWindowSeconds: numberRateConfig(number).callWindowSeconds,
@@ -600,7 +607,7 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
 
     const token = randomUUID();
     const reserved = await this.redis.reserve({
-      tenantId, token, globalMax: settings.global_max_concurrent_calls,
+      tenantId, token, globalMax: MANUAL_TENANT_CONCURRENCY,
       numberMax: number.max_concurrent_calls, numberId: number.id, waxumSessionId: numberSessionId(number),
       ...manualPacingConfig(number),
       leadId: lead.id, sdrId: sdr.id,
@@ -731,7 +738,7 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
 
     const token = randomUUID();
     const reserved = await this.redis.reserve({
-      tenantId, token, globalMax: settings.global_max_concurrent_calls,
+      tenantId, token, globalMax: MANUAL_TENANT_CONCURRENCY,
       numberMax: number.max_concurrent_calls, numberId: number.id, waxumSessionId: numberSessionId(number),
       ...manualPacingConfig(number),
       leadId: lead.id, sdrId: sdr.id,
