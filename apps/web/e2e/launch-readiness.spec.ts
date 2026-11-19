@@ -168,8 +168,20 @@ async function waitForPause(api: any) {
   throw new Error('Pos-atendimento nao foi aberto');
 }
 
+// Ligações só saem por uma linha num PC de atendente online (docs/saida-pelo-pc-do-atendente.md).
+// O stack de teste tem um único Waxum (nó "main"): registra um PC nesse slot e renova o
+// relatório de rota antes de cada jornada, como o vigia do PC faz a cada 10 s.
+async function reportPcOnline() {
+  await billingPool.query(`
+    INSERT INTO egress_pcs (id, name, slot, tailscale_hostname, route, route_reported_at)
+    VALUES ('e2e-pc', 'PC do atendente (E2E)', 'main', 'zapliga-e2e-pc', 'pc', now())
+    ON CONFLICT (id) DO UPDATE SET route = 'pc', route_reported_at = now()
+  `);
+}
+
 test.describe.serial('Gate B - jornadas criticas', () => {
   test.beforeAll(async () => { await seedBillingCatalog(); });
+  test.beforeEach(async () => { await reportPcOnline(); });
   test.afterAll(async () => { await billingPool.end(); });
 
   test('1. cadastro, aceite legal, verificacao e login pela interface', async ({ page }) => {
