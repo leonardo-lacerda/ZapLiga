@@ -62,7 +62,7 @@ describe('DialerService dial intents', () => {
     ['line_disconnected', { numbers: [{ ...line, status: 'disconnected' }] }],
     ['line_verification_only', { numbers: [{ ...line, verification_only: true }] }],
     ['line_off_pc_network', { numbers: [{ ...line, on_pc_network: false }] }],
-    ['line_busy', { numbers: [{ ...line, active_calls: 1 }] }],
+    ['line_busy', { numbers: [{ ...line, active_calls: 4 }] }],
     ['self_call', { numbers: [{ ...line, phone: '5511999990000' }] }],
     ['suppressed', { suppressed: true }],
     ['agent_not_eligible', { sdrs: [] }],

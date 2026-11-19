@@ -19,13 +19,17 @@ const reserveScript = `
   if minIntervalMs > 0 and redis.call('EXISTS', KEYS[9]) == 1 then return 0 end
   if redis.call('ZCARD', KEYS[1]) >= tonumber(ARGV[1]) then return 0 end
   if redis.call('ZCARD', KEYS[2]) >= tonumber(ARGV[2]) then return 0 end
-  if redis.call('EXISTS', KEYS[3]) == 1 or redis.call('EXISTS', KEYS[4]) == 1 or redis.call('EXISTS', KEYS[5]) == 1 or redis.call('EXISTS', KEYS[6]) == 1 then return 0 end
+  local exclusiveLine = ARGV[11] == '1'
+  if redis.call('EXISTS', KEYS[3]) == 1 or redis.call('EXISTS', KEYS[4]) == 1 then return 0 end
+  if exclusiveLine and (redis.call('EXISTS', KEYS[5]) == 1 or redis.call('EXISTS', KEYS[6]) == 1) then return 0 end
   redis.call('ZADD', KEYS[1], ARGV[4], ARGV[5])
   redis.call('ZADD', KEYS[2], ARGV[4], ARGV[5])
   redis.call('SET', KEYS[3], ARGV[5], 'PX', ARGV[6])
   redis.call('SET', KEYS[4], ARGV[5], 'PX', ARGV[6])
-  redis.call('SET', KEYS[5], ARGV[5], 'PX', ARGV[6])
-  redis.call('SET', KEYS[6], ARGV[5], 'PX', ARGV[6])
+  if exclusiveLine then
+    redis.call('SET', KEYS[5], ARGV[5], 'PX', ARGV[6])
+    redis.call('SET', KEYS[6], ARGV[5], 'PX', ARGV[6])
+  end
   if maxCallsPerWindow > 0 then
     redis.call('ZADD', KEYS[7], ARGV[3], ARGV[5])
     redis.call('EXPIRE', KEYS[7], math.max(1, math.ceil(rateWindowMs / 1000) * 2))
@@ -68,7 +72,7 @@ export class RedisService implements OnModuleInit, OnModuleDestroy {
     await this.client.eval(releaseLockScript, 1, name, token);
   }
 
-  async reserve(resources: { tenantId: string; token: string; globalMax: number; numberMax: number; maxCallsPerWindow?: number; callWindowSeconds?: number; maxCallsPerMinute?: number; minSecondsBetweenCalls?: number; numberId: string; waxumSessionId: string; leadId: string; sdrId: string; ttlMs: number }) {
+  async reserve(resources: { tenantId: string; token: string; globalMax: number; numberMax: number; maxCallsPerWindow?: number; callWindowSeconds?: number; maxCallsPerMinute?: number; minSecondsBetweenCalls?: number; exclusiveLine?: boolean; numberId: string; waxumSessionId: string; leadId: string; sdrId: string; ttlMs: number }) {
     const now = Date.now();
     const expires = now + resources.ttlMs;
     const tenantPrefix = `zapcall:tenant:${resources.tenantId}`;
@@ -78,7 +82,7 @@ export class RedisService implements OnModuleInit, OnModuleDestroy {
     const callWindowSeconds = Math.max(60, Number(resources.callWindowSeconds ?? 180) || 180);
     const maxCallsPerMinute = Math.max(1, Number(resources.maxCallsPerMinute ?? 6) || 6);
     const minSecondsBetweenCalls = Math.max(0, Number(resources.minSecondsBetweenCalls ?? 10) || 0);
-    const result = await this.client.eval(reserveScript, keys.length, ...keys, resources.globalMax, resources.numberMax, now, expires, resources.token, resources.ttlMs, maxCallsPerWindow, callWindowSeconds * 1000, maxCallsPerMinute, minSecondsBetweenCalls * 1000);
+    const result = await this.client.eval(reserveScript, keys.length, ...keys, resources.globalMax, resources.numberMax, now, expires, resources.token, resources.ttlMs, maxCallsPerWindow, callWindowSeconds * 1000, maxCallsPerMinute, minSecondsBetweenCalls * 1000, resources.exclusiveLine === false ? '0' : '1');
     return Number(result) === 1;
   }
 

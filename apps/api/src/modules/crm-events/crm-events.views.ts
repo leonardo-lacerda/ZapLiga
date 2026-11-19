@@ -1,3 +1,5 @@
+import { MANUAL_CALLS_PER_LINE } from '../dialer/dialer.rules';
+
 /**
  * Shapes shared by the CRM integration API responses and the webhook events, so the CRM sees the
  * same call and line objects whether it asks or is told.
@@ -19,7 +21,7 @@ export const lineView = (row: any) => {
   const quarantinedUntil = futureIso(row.flagged_until);
   return {
     id: row.id, label: row.label, phone: row.phone ?? null, status: row.status,
-    in_call: Number(row.active_calls ?? 0) > 0,
+    in_call: Number(row.active_calls ?? 0) >= MANUAL_CALLS_PER_LINE,
     verification_only: Boolean(row.verification_only),
     available_at: quarantinedUntil ?? futureIso(row.last_call_ended_at),
     quarantined_until: quarantinedUntil,

@@ -33,6 +33,7 @@ import {
   lineIsProtected,
   normalizePhone,
   shouldQuarantineLine,
+  MANUAL_CALLS_PER_LINE,
 } from './dialer.rules';
 import { DIAL_INTENT_TTL_SECONDS, DialIntent, DialRefusedError, dialIntentKey } from './dial-intents';
 import { OFF_PC_NETWORK_CODE, OFF_PC_NETWORK_MESSAGE, onPcNetworkSql } from '../egress/pc-network';
@@ -140,8 +141,7 @@ const dialerPacingConfig = (settings: any) => ({
 const MANUAL_UNPACED = 1_000_000;
 /**
  * TEMPORARY (2026-11-19): manual calls ignore the tenant's "simultaneous calls" limit
- * (global_max_concurrent_calls), so several attendants can call at once on different lines.
- * Each line still places one call at a time. Restore settings.global_max_concurrent_calls
+ * (global_max_concurrent_calls), so several attendants can call at once (see MANUAL_CALLS_PER_LINE). Restore settings.global_max_concurrent_calls
  * in manualCall and manualCallWithInput when the limit is wanted back.
  */
 const MANUAL_TENANT_CONCURRENCY = MANUAL_UNPACED;
@@ -608,7 +608,7 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
     const token = randomUUID();
     const reserved = await this.redis.reserve({
       tenantId, token, globalMax: MANUAL_TENANT_CONCURRENCY,
-      numberMax: number.max_concurrent_calls, numberId: number.id, waxumSessionId: numberSessionId(number),
+      numberMax: MANUAL_CALLS_PER_LINE, exclusiveLine: false, numberId: number.id, waxumSessionId: numberSessionId(number),
       ...manualPacingConfig(number),
       leadId: lead.id, sdrId: sdr.id,
       ttlMs: (MANUAL_RING_SAFETY_SECONDS + 60) * 1000,
@@ -739,7 +739,7 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
     const token = randomUUID();
     const reserved = await this.redis.reserve({
       tenantId, token, globalMax: MANUAL_TENANT_CONCURRENCY,
-      numberMax: number.max_concurrent_calls, numberId: number.id, waxumSessionId: numberSessionId(number),
+      numberMax: MANUAL_CALLS_PER_LINE, exclusiveLine: false, numberId: number.id, waxumSessionId: numberSessionId(number),
       ...manualPacingConfig(number),
       leadId: lead.id, sdrId: sdr.id,
       ttlMs: (MANUAL_RING_SAFETY_SECONDS + 60) * 1000,
@@ -779,7 +779,7 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
     const secondsUntil = (value: unknown) => Math.max(1, Math.ceil((new Date(String(value)).getTime() - Date.now()) / 1000));
     if (number.flagged_until && new Date(number.flagged_until).getTime() > Date.now()) throw new DialRefusedError('line_quarantined', 'A linha está em quarentena (aquecimento de número novo ou sinais de bloqueio do WhatsApp)', secondsUntil(number.flagged_until));
     if (lineIsProtected(number.last_call_ended_at)) throw new DialRefusedError('line_protected', 'A linha está temporariamente protegida pelo limite de chamadas do WhatsApp', secondsUntil(number.last_call_ended_at));
-    if (Number(number.active_calls ?? 0) >= Math.max(1, Number(number.max_concurrent_calls ?? 1))) throw new DialRefusedError('line_busy', 'A linha já está em uma ligação');
+    if (Number(number.active_calls ?? 0) >= MANUAL_CALLS_PER_LINE) throw new DialRefusedError('line_busy', 'A linha já está em uma ligação');
     if (number.phone && isSelfCallNumber(number.phone, phone)) throw new DialRefusedError('self_call', 'O número de destino é a própria linha de saída');
     if (suppressed.rows[0]) throw new DialRefusedError('suppressed', 'Este telefone está na lista de não contato');
     const intent: DialIntent = {

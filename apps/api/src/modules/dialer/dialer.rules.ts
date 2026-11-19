@@ -12,6 +12,13 @@ export function leadIsEligible(input: {
     && new Date(input.nextEligibleAt).getTime() <= now.getTime();
 }
 
+/**
+ * TEMPORARY (2026-11-19): a line takes up to this many manual calls at once, instead of
+ * whatsapp_numbers.max_concurrent_calls and the exclusive line/session lock. Asked for while
+ * there is a single working line; restore one call per line when the limit is wanted back.
+ */
+export const MANUAL_CALLS_PER_LINE = 4;
+
 // A manual call is a human deciding to dial now, so it skips the automatic
 // dialer's pacing (the per-line cooldown between calls). What it must still
 // respect is a line under PROTECTION: rapid-failure quarantine and Waxum 429
