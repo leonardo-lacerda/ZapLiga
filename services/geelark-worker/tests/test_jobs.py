@@ -490,11 +490,43 @@ def test_take_over_stops_the_robot_at_the_next_screen():
     manager.cancel("job-1")
 
 
-def test_take_over_while_waiting_does_nothing_and_finished_is_refused(manager):
+def test_take_over_while_waiting_for_the_sms_hands_the_phone_and_comes_back(manager, factory):
     manager.create(make_spec())
     awaiting(manager, "job-1", "sms")
-    assert manager.take_over("job-1").awaiting == "sms"
+    manager.take_over("job-1")
+    awaiting(manager, "job-1", "manual")
+    assert manager.get("job-1").message.startswith("Você assumiu o controle do phone.")
     assert not manager.get("job-1").takeover.is_set()
+    manager.manual_action("job-1", {"type": "tap", "x": 0.5, "y": 0.5})
+    manager.submit_input("job-1", {"type": "resume"})
+    awaiting(manager, "job-1", "sms")  # não passou do código: volta a esperar o SMS
+    assert "finish_verification" not in factory.instances["job-1"].calls
+    manager.cancel("job-1")
+
+
+def test_take_over_while_waiting_and_verified_by_hand_goes_to_the_profile(manager, factory):
+    manager.create(make_spec())
+    awaiting(manager, "job-1", "sms")
+    manager.take_over("job-1")
+    awaiting(manager, "job-1", "manual")
+    factory.instances["job-1"].verified = True  # o operador pediu a ligação e digitou o código
+    manager.submit_input("job-1", {"type": "resume"})
+    awaiting(manager, "job-1", "profile")
+    calls = factory.instances["job-1"].calls
+    assert "finish_verification" in calls and "submit_sms_code" not in calls
+    manager.take_over("job-1")  # também no perfil
+    awaiting(manager, "job-1", "manual")
+    manager.submit_input("job-1", {"type": "resume"})
+    awaiting(manager, "job-1", "profile")
+    manager.cancel("job-1")
+
+
+def test_take_over_during_manual_help_does_nothing_and_finished_is_refused(manager):
+    manager.create(make_spec())
+    awaiting(manager, "job-1", "sms")
+    manager.take_over("job-1")
+    awaiting(manager, "job-1", "manual")
+    assert manager.take_over("job-1").awaiting == "manual"
     manager.cancel("job-1")
     with pytest.raises(ApiError) as exc:
         manager.take_over("job-1")

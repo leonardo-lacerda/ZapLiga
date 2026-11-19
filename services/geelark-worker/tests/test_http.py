@@ -280,7 +280,8 @@ def test_takeover_route(client):
     job_id = client.post("/jobs", headers=H, json=job_body()).json()["jobId"]
     wait_for(lambda: client.manager.get(job_id).awaiting == "sms")
     resp = client.post(f"/jobs/{job_id}/takeover", headers=H)
-    assert resp.status_code == 200 and resp.json()["awaiting"] == "sms"
+    assert resp.status_code == 200 and resp.json()["message"] == "Assumindo o controle do phone…"
+    wait_for(lambda: client.manager.get(job_id).awaiting == "manual")
     assert client.post(f"/jobs/{job_id}/takeover").status_code == 401
     client.post(f"/jobs/{job_id}/cancel", headers=H)
     assert client.post(f"/jobs/{job_id}/takeover", headers=H).status_code == 409

@@ -34,6 +34,7 @@ class FakeAutomation:
         self.photo_warning = photo_warning
         self.calls: list[str] = []
         self.received: dict[str, Any] = {}
+        self.verified = False  # past_verification(): o operador passou do código na mão
 
     def _do(self, name: str) -> None:
         self.calls.append(name)
@@ -75,6 +76,10 @@ class FakeAutomation:
 
     def open_link_screen(self): self._do("open_link_screen")
     def finish_verification(self): self._do("finish_verification")
+
+    def past_verification(self):
+        self.calls.append("past_verification")
+        return self.verified
 
     def enter_pair_code(self, code):
         self._do("enter_pair_code")

@@ -20,6 +20,8 @@ type Props = {
 };
 
 const linkingSteps = new Set(['creating_line', 'opening_link_screen', 'waiting_pair_code', 'entering_pair_code', 'linking']);
+// Esperas em que o robô está parado e o operador também pode pegar o phone (o worker devolve depois).
+const takeOverAwaiting = new Set(['sms', 'profile', 'link_decision']);
 /** Depois de um erro o worker deixa o phone ligado este tempo (RESCUE_WINDOW no worker). */
 export const RESCUE_SECONDS = 59;
 const errorText = (error: unknown) => error instanceof Error ? error.message : String(error);
@@ -61,9 +63,12 @@ export function JobProgress({ tenantId, jobId, pollIntervalMs = JOB_POLL_INTERVA
   const control = isControl(job);
   // Na sessão "Abrir", quem desliga é o botão do cartão; aqui só antes de o phone ficar pronto.
   const controlReady = control && job.step === 'controlling';
-  // Com o robô andando: o operador pede o controle; o robô para na próxima tela do WhatsApp.
-  const canTakeOver = active && !network && !control && job.status === 'running' && !linkingSteps.has(job.step);
-  const pausing = canTakeOver && (job.message ?? '').startsWith('Pausando o robô');
+  // O botão fica disponível o cadastro todo: com o robô andando ele para na próxima tela do
+  // WhatsApp; parado esperando (SMS, perfil, conectar), o phone passa na hora para o operador.
+  const robotWaiting = job.status === 'waiting_input' && takeOverAwaiting.has(job.awaiting ?? '');
+  const canTakeOver = active && !network && !control && !linkingSteps.has(job.step)
+    && (job.status === 'running' || robotWaiting);
+  const pausing = canTakeOver && /^(Pausando o robô|Assumindo o controle)/.test(job.message ?? '');
   const takeOver = async () => {
     setTakingOver(true);
     try { await run(() => takeOverJob(tenantId, jobId)); } finally { setTakingOver(false); }
@@ -87,7 +92,9 @@ export function JobProgress({ tenantId, jobId, pollIntervalMs = JOB_POLL_INTERVA
       </div>
       {canTakeOver && <div className="provisioning-takeover">
         <Button variant="secondary" icon="phone" onClick={() => void takeOver()} disabled={takingOver || pausing}>{pausing ? 'Pausando o robô…' : takingOver ? 'Pedindo…' : 'Assumir o controle'}</Button>
-        <span className="form-hint">O robô para na próxima tela e você mexe no phone pela imagem abaixo.</span>
+        <span className="form-hint">{robotWaiting
+          ? 'O robô para de esperar e o phone fica com você; quando terminar, clique em "Devolver ao robô".'
+          : 'O robô para na próxima tela e você mexe no phone pela imagem abaixo.'}</span>
       </div>}
       {active && <LiveScreen tenantId={tenantId} jobId={job.id} controllable={job.status === 'waiting_input'} />}
 

@@ -131,6 +131,9 @@ class PhoneAutomation(Protocol):
     def finish_verification(self) -> None:
         """Depois do código (e da ajuda do operador): passa as telas até o perfil."""
 
+    def past_verification(self) -> bool:
+        """A tela atual já é de depois do código (o operador verificou na mão)?"""
+
     def request_code(self, method: str) -> str:
         """Na tela do código, pede outro por "sms" ou "voice" (ligação). Só a pedido do usuário:
         pedir sozinho e repetidamente trava o número. Retorna a mensagem para `message`."""

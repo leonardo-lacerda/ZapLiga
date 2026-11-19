@@ -61,6 +61,9 @@ MAX_MANUAL_HELPS = 3
 # o operador fica com o controle e decide se espera (phone ligado cobra por minuto) ou cancela.
 HELP_CODES = frozenset({"unknown_screen", "manual_takeover", "pair_failed", "wait_limit"})
 TAKEOVER_MESSAGE = "Você assumiu o controle do phone."
+# Esperas em que o operador também pode pedir o controle: o robô está parado, então a
+# espera vira uma entrada "take_over" que o fluxo trata como uma ajuda manual.
+TAKEOVER_AWAITING = frozenset({"sms", "profile", "link_decision"})
 # Contagem depois de um erro: phone ainda ligado, esperando o operador assumir.
 RESCUE_STEP = "rescue_offer"
 # "Abrir o phone": o operador usa o phone pela tela ao vivo; nunca mais que isso ligado.
@@ -530,6 +533,10 @@ class JobManager:
         self._wait_input(job, ctx, "waiting_manual", "manual", f"{exc.message} {hint}")
         self._set_step(job, step)
 
+    def _operator_turn(self, job: Job, ctx: JobContext, auto: PhoneAutomation, step: str) -> None:
+        """O operador pediu o controle durante uma espera: fica com ele até "Devolver ao robô"."""
+        self._ask_help(job, ctx, auto, step, JobError("manual_takeover", TAKEOVER_MESSAGE))
+
     def _claim_rescue_locked(self, job: Job) -> None:
         job.rescue_claimed = True
         job.message = "Assumindo o controle do phone…"
@@ -605,8 +612,17 @@ class JobManager:
             if job.step == RESCUE_STEP and job.status == "waiting_input":
                 self._claim_rescue_locked(job)
                 return job
+            if job.status == "waiting_input" and job.awaiting in TAKEOVER_AWAITING:
+                job.pending_input = {"type": "take_over"}
+                job.status = "running"
+                job.awaiting = None
+                job.message = "Assumindo o controle do phone…"
+                job.updated_at = _now_iso()
+                job.wake.set()
+                log.info("[%s] operador pediu o controle durante a espera", job_id)
+                return job
             if job.status == "waiting_input":
-                return job  # o robô já está parado: dá para mexer direto
+                return job  # já está com o operador (ajuda manual) ou no pareamento
             job.takeover.set()
             job.message = "Pausando o robô: ele para assim que chegar na próxima tela do WhatsApp."
             job.updated_at = _now_iso()
@@ -712,6 +728,15 @@ class JobManager:
         attempts = 0
         while True:
             inp = self._wait_input(job, ctx, "waiting_sms", "sms", message)
+            if inp["type"] == "take_over":
+                self._operator_turn(job, ctx, auto, "waiting_sms")
+                # O operador pode ter resolvido a verificação na mão (ligação, código digitado).
+                if auto.past_verification():
+                    self._set_step(job, "verifying")
+                    self._with_help(job, ctx, auto, "verifying", auto.finish_verification)
+                    break
+                message = None
+                continue
             if inp["type"] in ("resend_sms", "call_me"):
                 try:
                     message = auto.request_code("voice" if inp["type"] == "call_me" else "sms")
@@ -746,7 +771,8 @@ class JobManager:
                 continue
             message = result.message or "Código incorreto. Confira o SMS e digite de novo."
 
-        inp = self._wait_input(job, ctx, "waiting_profile", "profile")
+        while (inp := self._wait_input(job, ctx, "waiting_profile", "profile"))["type"] == "take_over":
+            self._operator_turn(job, ctx, auto, "waiting_profile")
         self._set_step(job, "saving_profile")
         name, photo, photo_mime = inp["name"], inp.get("photo"), inp.get("photoMime")
         warning = self._with_help(job, ctx, auto, "saving_profile", lambda: auto.save_profile(name, photo, photo_mime))
@@ -754,7 +780,8 @@ class JobManager:
         del inp
 
         registered_msg = "Número cadastrado." + (f" {warning}" if warning else "")
-        inp = self._wait_input(job, ctx, "registered", "link_decision", registered_msg)
+        while (inp := self._wait_input(job, ctx, "registered", "link_decision", registered_msg))["type"] == "take_over":
+            self._operator_turn(job, ctx, auto, "registered")
         if inp["type"] == "finish":
             self._finish(job, "done", None, "Cadastro concluído (sem conectar ao ZapLiga).", step="done")
             return

@@ -269,6 +269,26 @@ it('assume o controle com o robô andando: pede ao worker e mostra que está pau
   expect(screen.queryByRole('button', { name: /Assumir o controle|Pausando/ })).not.toBeInTheDocument();
 });
 
+it('assume o controle enquanto espera o SMS', async () => {
+  let current = job({ status: 'waiting_input', step: 'waiting_sms', awaiting: 'sms', message: null, history: historyOf('queued', 'waiting_sms') });
+  let asked = 0;
+  server.use(
+    http.get(`${API}/jobs/job-1`, () => HttpResponse.json(current)),
+    http.post(`${API}/jobs/job-1/takeover`, () => {
+      asked += 1;
+      current = job({ ...current, status: 'running', awaiting: null, message: 'Assumindo o controle do phone…' });
+      return HttpResponse.json(current);
+    }),
+  );
+  render(<JobProgress tenantId="tenant-1" jobId="job-1" pollIntervalMs={POLL_MS} onBack={vi.fn()} onNewJob={vi.fn()} onOpenNumbers={vi.fn()} />);
+  expect(await screen.findByText(/o phone fica com você/)).toBeInTheDocument();
+  await userEvent.click(screen.getByRole('button', { name: 'Assumir o controle' }));
+  expect(await screen.findByRole('button', { name: 'Pausando o robô…' })).toBeDisabled();
+  expect(asked).toBe(1);
+  current = job({ status: 'waiting_input', step: 'waiting_manual', awaiting: 'manual', message: 'Você assumiu o controle do phone.', history: historyOf('queued', 'waiting_sms', 'waiting_manual') });
+  expect(await screen.findByRole('heading', { name: 'Você está no controle do phone' })).toBeInTheDocument();
+});
+
 it('mostra o erro quando o robô ainda está mexendo no phone', async () => {
   URL.createObjectURL = vi.fn(() => 'blob:live-2');
   URL.revokeObjectURL = vi.fn();

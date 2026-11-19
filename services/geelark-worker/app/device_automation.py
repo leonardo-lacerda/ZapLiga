@@ -35,6 +35,10 @@ from .geelark_api import (
 from . import whatsapp as wa
 from .whatsapp import Screen
 
+# Telas que só aparecem depois de o WhatsApp aceitar o código.
+AFTER_CODE_SCREENS = frozenset({Screen.PROFILE_NAME, Screen.CHATS, Screen.BUSINESS_CATEGORY,
+                                Screen.BUSINESS_WELCOME, Screen.RESTORE_BACKUP, Screen.INITIALIZING})
+
 log = logging.getLogger(__name__)
 
 SUPPORTED_ANDROID = {9, 11, 12, 13, 14, 15, 16}
@@ -524,6 +528,9 @@ class GeeLarkAutomation:
         if wa.detect_screen(self.d, self.app) == Screen.VERIFY_CODE:
             return SmsResult(False, "O WhatsApp não aceitou o código. Confira o SMS e digite de novo.")
         raise JobError("unknown_screen", "O WhatsApp não saiu da verificação do código.")
+
+    def past_verification(self) -> bool:
+        return wa.detect_screen(self.d, self.app) in AFTER_CODE_SCREENS
 
     def finish_verification(self) -> None:
         self._drive({Screen.PROFILE_NAME, Screen.CHATS, Screen.BUSINESS_CATEGORY},
