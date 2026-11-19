@@ -19,10 +19,10 @@ describe('CallbacksService', () => {
     const db = { query: jest.fn(async (sql: string) => sql.includes('SELECT user_id FROM sdrs')
       ? { rows: [{ user_id: 'sdr-user-2' }] }
       : { rows: [{ id: 'cb-1', lead_id: 'lead-1', assigned_sdr_id: 'sdr-2', status: 'due' }] }) };
-    const dialer = { manualCallWithInput: jest.fn().mockResolvedValue({ callId: 'call-2' }) };
+    const dialer = { manualCallFromStation: jest.fn().mockResolvedValue({ callId: 'call-2' }) };
     const audit = { record: jest.fn() };
     const service = new CallbacksService(db as any, audit as any, dialer as any);
     await service.callNow('tenant-1', 'cb-1', 'leader-1');
-    expect(dialer.manualCallWithInput).toHaveBeenCalledWith({ leadId: 'lead-1' }, 'tenant-1', 'sdr-user-2');
+    expect(dialer.manualCallFromStation).toHaveBeenCalledWith({ leadId: 'lead-1' }, 'tenant-1', 'sdr-user-2');
   });
 });

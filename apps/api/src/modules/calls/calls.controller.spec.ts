@@ -7,7 +7,7 @@ import { ManualCallDto } from './dto/manual-call.dto';
 
 describe('CallsController manual call line choice', () => {
   const make = () => {
-    const dialer = { connectedStationFor: jest.fn().mockResolvedValue(true), manualCallWithInput: jest.fn().mockResolvedValue({ callId: 'call-1', status: 'reserved', leadId: 'lead-1' }) };
+    const dialer = { connectedStationFor: jest.fn().mockResolvedValue(true), manualCallFromStation: jest.fn().mockResolvedValue({ callId: 'call-1', status: 'reserved', leadId: 'lead-1' }) };
     const audit = { record: jest.fn().mockResolvedValue(undefined) };
     const controller = new CallsController({} as any, dialer as any, audit as any, {} as any);
     return { controller, dialer };
@@ -17,13 +17,13 @@ describe('CallsController manual call line choice', () => {
   it('dials from the line the operator picked', async () => {
     const { controller, dialer } = make();
     await controller.manual({ phone: '5511988887777', numberId: ' num-2 ' } as ManualCallDto, 'tenant-1', leader);
-    expect(dialer.manualCallWithInput).toHaveBeenCalledWith(expect.objectContaining({ phone: '5511988887777', numberId: 'num-2' }), 'tenant-1', 'user-1');
+    expect(dialer.manualCallFromStation).toHaveBeenCalledWith(expect.objectContaining({ phone: '5511988887777', numberId: 'num-2' }), 'tenant-1', 'user-1');
   });
 
   it('keeps the automatic line choice when none is picked', async () => {
     const { controller, dialer } = make();
     await controller.manual({ phone: '5511988887777' } as ManualCallDto, 'tenant-1', leader);
-    expect(dialer.manualCallWithInput.mock.calls[0][0].numberId).toBeUndefined();
+    expect(dialer.manualCallFromStation.mock.calls[0][0].numberId).toBeUndefined();
   });
 
   it('accepts numberId in the request body', async () => {

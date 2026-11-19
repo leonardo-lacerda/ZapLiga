@@ -81,7 +81,7 @@ export class CallbacksService {
       if (!assignedUserId) throw new BadRequestException('O SDR responsável não está mais disponível');
     }
     try {
-      const result = await this.dialer.manualCallWithInput({ leadId: callback.lead_id }, tenantId, assignedUserId);
+      const result = await this.dialer.manualCallFromStation({ leadId: callback.lead_id }, tenantId, assignedUserId);
       await this.audit.record({ actorUserId, tenantId, action: 'callback.call_started', entityType: 'callback', entityId: id, metadata: { callId: result.callId } }); return result;
     } catch (error) {
       if (error instanceof HttpException) throw error;

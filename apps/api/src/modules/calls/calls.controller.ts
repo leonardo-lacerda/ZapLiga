@@ -58,7 +58,7 @@ export class CallsController {
     const isSdr = user.platformRole !== 'super_admin' && user.tenantMembership?.role === 'sdr';
     const sdrUserId = isSdr || await this.dialer.connectedStationFor(tenantId, user.id) ? user.id : undefined;
     try {
-      const result = await this.dialer.manualCallWithInput({ leadId: leadId || undefined, phone: phone || undefined, name: body.name, numberId: String(body.numberId ?? '').trim() || undefined }, tenantId, sdrUserId);
+      const result = await this.dialer.manualCallFromStation({ leadId: leadId || undefined, phone: phone || undefined, name: body.name, numberId: String(body.numberId ?? '').trim() || undefined }, tenantId, sdrUserId);
       await this.audit.record({ actorUserId: user.id, tenantId, action: user.platformRole === 'super_admin' && sdrUserId ? 'call.placed_by_platform_admin' : 'call.manual_started', entityType: 'lead', entityId: leadId || String(result.leadId ?? ''), metadata: result });
       return result;
     } catch (error) { if (error instanceof HttpException) throw error; throw new BadRequestException(String((error as Error).message ?? error)); }

@@ -1,6 +1,7 @@
 import { ConflictException, Inject, Injectable, Logger, NotFoundException, OnModuleDestroy, OnModuleInit, Optional, forwardRef } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
 import WebSocket, { RawData } from 'ws';
+import type Redis from 'ioredis';
 import { DatabaseService } from '../../database/database.service';
 import { legacyTenantId } from '../../database/tenant-context';
 import { RedisService } from '../../infrastructure/redis/redis.service';
@@ -159,6 +160,11 @@ const manualPacingConfig = (number: any) => ({
  */
 const MANUAL_RING_SAFETY_SECONDS = 180;
 
+/** Redis channel prefix of the manual calls forwarded to the instance holding the station. */
+const MANUAL_CALL_CHANNEL = 'zapcall:manual-call';
+const MANUAL_CALL_FORWARD_TIMEOUT_MS = 15_000;
+const STATION_UNAVAILABLE_MESSAGE = 'Sua estação de ligação não está conectada ou está ocupada';
+
 @Injectable()
 export class DialerService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(DialerService.name);
@@ -170,6 +176,8 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
   private readonly active = new Map<string, CallResource>();
   private readonly finishingCalls = new Set<string>();
   private readonly logs: any[] = [];
+  private subscriber?: Redis;
+  private readonly forwardedCalls = new Map<string, { resolve: (value: any) => void; reject: (error: Error) => void; timer: NodeJS.Timeout }>();
   // Consecutive "instant failure" count per WhatsApp line (no media frames, no
   // answer, closed in <FLAG_FAST_FAIL_MS). Repeated instant failures are the
   // signature of a WhatsApp reachout timelock (463 MissingTcToken).
@@ -217,6 +225,7 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
     void this.heartbeat();
     this.heartbeatTimer = setInterval(() => void this.heartbeat(), 10_000);
     this.timer = setInterval(() => void this.tickAllTenants(), 1000);
+    void this.listenForForwardedCalls().catch((error) => this.logger.error(`Manual call channel unavailable: ${safeOperationalError(error)}`));
     void this.resetStaleSdrPresence()
       .then(() => this.recoverInterruptedCalls())
       .then(() => this.tickAllTenants())
@@ -231,7 +240,56 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
     if (this.heartbeatTimer) clearInterval(this.heartbeatTimer);
     await Promise.allSettled([...this.active.keys()].map((callId) => this.finishCall(callId, 'failed', 'api_restarted', false)));
     await this.redis.client.del(runtimeHeartbeatKey).catch(() => undefined);
+    await this.subscriber?.quit().catch(() => undefined);
     this.gateway.closeAll();
+  }
+
+  /**
+   * nginx keeps a browser on one API instance by client address (ip_hash), but the address of a
+   * request and of the station socket can differ (rotating IPv6, say). A manual call must run on
+   * the instance holding the station's socket, so the other instance forwards it over Redis.
+   */
+  private async listenForForwardedCalls() {
+    this.subscriber = this.redis.client.duplicate();
+    await this.subscriber.subscribe(`${MANUAL_CALL_CHANNEL}:${runtimeInstanceId}`);
+    this.subscriber.on('message', (_channel, raw) => {
+      const message = JSON.parse(raw);
+      if (message.type === 'reply') {
+        const pending = this.forwardedCalls.get(message.requestId);
+        if (!pending) return;
+        this.forwardedCalls.delete(message.requestId);
+        clearTimeout(pending.timer);
+        if (!message.error) pending.resolve(message.result);
+        else pending.reject(message.error.code ? new DialRefusedError(message.error.code, message.error.message, message.error.retryAfterSeconds) : new Error(message.error.message));
+        return;
+      }
+      void this.manualCallWithInput(message.input, message.tenantId, message.sdrUserId)
+        .then((result) => ({ result }), (error) => ({ error: { code: error instanceof DialRefusedError ? error.code : undefined, message: String(error?.message ?? error), retryAfterSeconds: error?.retryAfterSeconds } }))
+        .then((reply) => this.redis.client.publish(`${MANUAL_CALL_CHANNEL}:${message.replyTo}`, JSON.stringify({ type: 'reply', requestId: message.requestId, ...reply })))
+        .catch((error) => this.logger.warn(`Forwarded manual call reply failed: ${safeOperationalError(error)}`));
+    });
+  }
+
+  /** manualCallWithInput, run on the API instance that holds the caller's station socket. */
+  async manualCallFromStation(input: { leadId?: string; phone?: string; name?: string; numberId?: string }, tenantId: string, sdrUserId?: string): Promise<any> {
+    const station = sdrUserId ? (await this.db.query('SELECT id, connection_instance_id FROM sdrs WHERE tenant_id = $1 AND user_id = $2 LIMIT 1', [tenantId, sdrUserId])).rows[0] : undefined;
+    const instance = station?.connection_instance_id as string | undefined;
+    if (!instance || instance === runtimeInstanceId || this.gateway.isConnected(station.id)) return this.manualCallWithInput(input, tenantId, sdrUserId);
+    const requestId = randomUUID();
+    const reply = new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        this.forwardedCalls.delete(requestId);
+        reject(new Error(STATION_UNAVAILABLE_MESSAGE));
+      }, MANUAL_CALL_FORWARD_TIMEOUT_MS);
+      this.forwardedCalls.set(requestId, { resolve, reject, timer });
+    });
+    const receivers = await this.redis.client.publish(`${MANUAL_CALL_CHANNEL}:${instance}`, JSON.stringify({ type: 'call', requestId, replyTo: runtimeInstanceId, input, tenantId, sdrUserId }));
+    if (!receivers) {
+      clearTimeout(this.forwardedCalls.get(requestId)?.timer);
+      this.forwardedCalls.delete(requestId);
+      throw new Error(STATION_UNAVAILABLE_MESSAGE);
+    }
+    return reply;
   }
 
   private heartbeat() { return this.redis.client.set(runtimeHeartbeatKey, runtimeInstanceId, 'EX', 30); }
@@ -619,9 +677,13 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
 
   /** The caller's own operator row if their calling station is connected right now. */
   async connectedStationFor(tenantId: string, userId: string): Promise<string | null> {
-    const result = await this.db.query('SELECT id FROM sdrs WHERE tenant_id = $1 AND user_id = $2 LIMIT 1', [tenantId, userId]);
-    const id = result.rows[0]?.id as string | undefined;
-    return id && this.gateway.isConnected(id) ? id : null;
+    const station = (await this.db.query('SELECT id, connection_instance_id FROM sdrs WHERE tenant_id = $1 AND user_id = $2 LIMIT 1', [tenantId, userId])).rows[0];
+    if (!station) return null;
+    if (this.gateway.isConnected(station.id)) return station.id as string;
+    // Connected to the other API instance (see manualCallFromStation).
+    const remote = station.connection_instance_id && station.connection_instance_id !== runtimeInstanceId
+      && await this.redis.client.exists(`zapcall:runtime:${station.connection_instance_id}`);
+    return remote ? station.id as string : null;
   }
 
   async manualCallWithInput(input: { leadId?: string; phone?: string; name?: string; numberId?: string; integration?: IntegrationCallContext }, tenantId = legacyTenantId(), sdrUserId?: string) {
@@ -709,7 +771,7 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
     // queue work: they are not on campaign rosters, so the campaign's SDR filter does not apply.
     const sdr = sdrs.rows.find((row: any) => this.gateway.isConnected(row.id)
       && (!execution?.campaignId || execution.sdrIds.includes(row.id) || (sdrUserId && row.operator_kind !== 'sdr')));
-    if (!sdr) throw new Error(sdrUserId ? 'Sua estação de ligação não está conectada ou está ocupada' : 'Nenhum SDR conectado e disponivel');
+    if (!sdr) throw new Error(sdrUserId ? STATION_UNAVAILABLE_MESSAGE : 'Nenhum SDR conectado e disponivel');
     if (!numbers.rows.length) throw new Error(input.numberId ? 'A linha escolhida não está conectada ou está em quarentena' : 'Nenhum numero WhatsApp conectado');
     const networkedNumbers = numbers.rows.filter((row: any) => row.on_pc_network);
     if (!networkedNumbers.length) throw new DialRefusedError(OFF_PC_NETWORK_CODE, OFF_PC_NETWORK_MESSAGE);
