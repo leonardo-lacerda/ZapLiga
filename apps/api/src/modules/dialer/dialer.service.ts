@@ -35,6 +35,7 @@ import {
   shouldQuarantineLine,
 } from './dialer.rules';
 import { DIAL_INTENT_TTL_SECONDS, DialIntent, DialRefusedError, dialIntentKey } from './dial-intents';
+import { OFF_PC_NETWORK_CODE, OFF_PC_NETWORK_MESSAGE, onPcNetworkSql } from '../egress/pc-network';
 import { CrmCallEventType, CrmEventsService, CrmLineEventType } from '../crm-events/crm-events.service';
 import { CallRecordingsService } from '../call-recordings/call-recordings.service';
 import { CallRecorder } from '../call-recordings/call-recorder';
@@ -543,7 +544,7 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
       // Manual calls keep the line PROTECTIONS (quarantine after instant
       // failures, Waxum 429 backoff -- both future-date last_call_ended_at) but
       // not the automatic dialer's pacing: a person may dial again right away.
-      this.db.query(`SELECT * FROM whatsapp_numbers WHERE tenant_id = $1 AND verification_only = false AND status IN ('connected', 'online', 'ready', 'authenticated') AND (flagged_until IS NULL OR flagged_until <= now()) ORDER BY last_call_ended_at NULLS FIRST, last_call_ended_at ASC`, [tenantId]),
+      this.db.query(`SELECT *, ${onPcNetworkSql('whatsapp_numbers')} AS on_pc_network FROM whatsapp_numbers WHERE tenant_id = $1 AND verification_only = false AND status IN ('connected', 'online', 'ready', 'authenticated') AND (flagged_until IS NULL OR flagged_until <= now()) ORDER BY last_call_ended_at NULLS FIRST, last_call_ended_at ASC`, [tenantId]),
       this.db.query(`SELECT l.*, f.is_active AS folder_active,
           EXISTS (SELECT 1 FROM contact_suppressions cs WHERE cs.tenant_id = l.tenant_id AND cs.phone = l.phone AND cs.lifted_at IS NULL) AS contact_suppressed,
           EXISTS (SELECT 1 FROM calls active_call WHERE active_call.tenant_id = l.tenant_id AND active_call.lead_id = l.id AND active_call.status IN ('reserved','dialing','media_active')) AS active_call,
@@ -575,7 +576,9 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
     if (!lead) throw new Error('Este lead não está elegível para uma chamada manual');
     if (!sdr) throw new Error('Nenhum SDR conectado e disponível');
     if (!numbers.rows.length) throw new Error('Nenhum número WhatsApp conectado');
-    const readyNumbers = numbers.rows.filter((row: any) => !lineIsProtected(row.last_call_ended_at));
+    const networkedNumbers = numbers.rows.filter((row: any) => row.on_pc_network);
+    if (!networkedNumbers.length) throw new DialRefusedError(OFF_PC_NETWORK_CODE, OFF_PC_NETWORK_MESSAGE);
+    const readyNumbers = networkedNumbers.filter((row: any) => !lineIsProtected(row.last_call_ended_at));
     if (!readyNumbers.length) throw new Error('A linha WhatsApp está temporariamente protegida por limite de chamadas. Aguarde alguns minutos e tente novamente.');
     const number = readyNumbers.find((row: any) => {
       if (execution?.campaignId && !execution.numberIds.includes(row.id)) return false;
@@ -690,7 +693,7 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
         ORDER BY s.last_assigned_at NULLS FIRST, s.last_assigned_at ASC
       `, [tenantId, sdrUserId ?? null]),
       // A CRM call names its line: never silently swap it for another one.
-      this.db.query(`SELECT * FROM whatsapp_numbers WHERE tenant_id = $1 AND verification_only = false AND status IN ('connected', 'online', 'ready', 'authenticated') AND (flagged_until IS NULL OR flagged_until <= now()) AND ($2::text IS NULL OR id = $2) ORDER BY last_call_ended_at NULLS FIRST, last_call_ended_at ASC`, [tenantId, input.numberId ?? null]),
+      this.db.query(`SELECT *, ${onPcNetworkSql('whatsapp_numbers')} AS on_pc_network FROM whatsapp_numbers WHERE tenant_id = $1 AND verification_only = false AND status IN ('connected', 'online', 'ready', 'authenticated') AND (flagged_until IS NULL OR flagged_until <= now()) AND ($2::text IS NULL OR id = $2) ORDER BY last_call_ended_at NULLS FIRST, last_call_ended_at ASC`, [tenantId, input.numberId ?? null]),
     ]);
     const execution = this.campaignExecution ? await this.campaignExecution.resolveForLead(tenantId, lead) : undefined;
     if (execution && !execution.allowed) throw new Error('A campanha deste lead não está em execução ou não possui recursos disponíveis');
@@ -701,8 +704,10 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
       && (!execution?.campaignId || execution.sdrIds.includes(row.id) || (sdrUserId && row.operator_kind !== 'sdr')));
     if (!sdr) throw new Error(sdrUserId ? 'Sua estação de ligação não está conectada ou está ocupada' : 'Nenhum SDR conectado e disponivel');
     if (!numbers.rows.length) throw new Error(input.numberId ? 'A linha escolhida não está conectada ou está em quarentena' : 'Nenhum numero WhatsApp conectado');
+    const networkedNumbers = numbers.rows.filter((row: any) => row.on_pc_network);
+    if (!networkedNumbers.length) throw new DialRefusedError(OFF_PC_NETWORK_CODE, OFF_PC_NETWORK_MESSAGE);
     // Protections only (see manualCall): a manual call is not paced by the cooldown.
-    const readyNumbers = numbers.rows.filter((row: any) => !lineIsProtected(row.last_call_ended_at));
+    const readyNumbers = networkedNumbers.filter((row: any) => !lineIsProtected(row.last_call_ended_at));
     if (!readyNumbers.length) throw new Error('A linha WhatsApp esta temporariamente protegida por limite de chamadas. Aguarde alguns minutos e tente novamente.');
     // WhatsApp cannot place a call to the line's own number (self-call closes
     // the media socket immediately), so never pair a lead with its own line.
@@ -750,7 +755,7 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
     if (phone.length < 10 || phone.length > 15) throw new DialRefusedError('invalid_phone', 'Informe um telefone válido com DDD');
     const [sdrs, numbers, suppressed, busy] = await Promise.all([
       this.db.query(`SELECT s.id, s.connection_instance_id FROM sdrs s WHERE s.tenant_id = $1 AND s.id = $2 AND ${eligibleOperatorSql('s')} LIMIT 1`, [tenantId, input.sdrId]),
-      this.db.query(`SELECT n.*, (SELECT count(*)::int FROM calls c WHERE c.number_id = n.id AND c.status IN ('reserved', 'dialing', 'media_active')) AS active_calls FROM whatsapp_numbers n WHERE n.tenant_id = $1 AND n.id = $2 AND n.status <> 'removed' LIMIT 1`, [tenantId, input.numberId]),
+      this.db.query(`SELECT n.*, ${onPcNetworkSql('n')} AS on_pc_network, (SELECT count(*)::int FROM calls c WHERE c.number_id = n.id AND c.status IN ('reserved', 'dialing', 'media_active')) AS active_calls FROM whatsapp_numbers n WHERE n.tenant_id = $1 AND n.id = $2 AND n.status <> 'removed' LIMIT 1`, [tenantId, input.numberId]),
       this.db.query(`SELECT 1 FROM contact_suppressions WHERE tenant_id = $1 AND phone = $2 AND lifted_at IS NULL LIMIT 1`, [tenantId, phone]),
       this.db.query(`SELECT 1 FROM calls WHERE tenant_id = $1 AND sdr_id = $2 AND status IN ('reserved', 'dialing', 'media_active') LIMIT 1`, [tenantId, input.sdrId]),
     ]);
@@ -763,6 +768,7 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
     if (!number) throw new DialRefusedError('line_not_found', 'Linha não encontrada');
     if (number.verification_only) throw new DialRefusedError('line_verification_only', 'Esta linha é só para verificação de WhatsApp e não faz ligações');
     if (!CONNECTED_LINE_STATUSES.includes(String(number.status).toLowerCase())) throw new DialRefusedError('line_disconnected', 'A linha escolhida não está conectada');
+    if (!number.on_pc_network) throw new DialRefusedError(OFF_PC_NETWORK_CODE, OFF_PC_NETWORK_MESSAGE);
     const secondsUntil = (value: unknown) => Math.max(1, Math.ceil((new Date(String(value)).getTime() - Date.now()) / 1000));
     if (number.flagged_until && new Date(number.flagged_until).getTime() > Date.now()) throw new DialRefusedError('line_quarantined', 'A linha está em quarentena (aquecimento de número novo ou sinais de bloqueio do WhatsApp)', secondsUntil(number.flagged_until));
     if (lineIsProtected(number.last_call_ended_at)) throw new DialRefusedError('line_protected', 'A linha está temporariamente protegida pelo limite de chamadas do WhatsApp', secondsUntil(number.last_call_ended_at));
@@ -1011,7 +1017,7 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
       this.getSettings(tenantId),
       this.db.query(`SELECT id FROM sdrs WHERE tenant_id = $1 AND user_id = $2 LIMIT 1`, [tenantId, userId]),
       // Per-tenant lines: expose only whether a line is available, never how many.
-      this.db.query(`SELECT EXISTS (SELECT 1 FROM whatsapp_numbers WHERE tenant_id = $1 AND verification_only = false AND status IN ('connected', 'online', 'ready', 'authenticated') AND (flagged_until IS NULL OR flagged_until <= now())) AS ready`, [tenantId]),
+      this.db.query(`SELECT EXISTS (SELECT 1 FROM whatsapp_numbers WHERE tenant_id = $1 AND verification_only = false AND status IN ('connected', 'online', 'ready', 'authenticated') AND (flagged_until IS NULL OR flagged_until <= now()) AND ${onPcNetworkSql('whatsapp_numbers')}) AS ready`, [tenantId]),
       this.schedule ? this.schedule.evaluate(tenantId, new Date(), true) : Promise.resolve({ allowed: true, reason: 'schedule_service_unavailable' }),
     ]);
     const sdr = ownSdr.rows[0] ? await this.getSdrState(ownSdr.rows[0].id, tenantId) : null;
@@ -1202,7 +1208,7 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
             )
           ORDER BY s.last_assigned_at NULLS FIRST, s.last_assigned_at ASC
         `, [tenantId]),
-        this.db.query(`SELECT * FROM whatsapp_numbers WHERE tenant_id = $1 AND verification_only = false AND status IN ('connected', 'online', 'ready', 'authenticated') AND (flagged_until IS NULL OR flagged_until <= now()) AND (last_call_ended_at IS NULL OR last_call_ended_at <= now() - (cooldown_seconds * interval '1 second')) ORDER BY last_call_ended_at NULLS FIRST, last_call_ended_at ASC`, [tenantId]),
+        this.db.query(`SELECT * FROM whatsapp_numbers WHERE tenant_id = $1 AND verification_only = false AND status IN ('connected', 'online', 'ready', 'authenticated') AND (flagged_until IS NULL OR flagged_until <= now()) AND (last_call_ended_at IS NULL OR last_call_ended_at <= now() - (cooldown_seconds * interval '1 second')) AND ${onPcNetworkSql('whatsapp_numbers')} ORDER BY last_call_ended_at NULLS FIRST, last_call_ended_at ASC`, [tenantId]),
           this.db.query(`
           WITH active_folders AS (
             SELECT f.id, (ROW_NUMBER() OVER (ORDER BY f.sort_order ASC, f.created_at ASC) - 1)::int AS folder_index,

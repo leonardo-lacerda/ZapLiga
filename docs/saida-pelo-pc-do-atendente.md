@@ -60,6 +60,12 @@ modo do PC:
 
 A troca de rota derruba uma ligação em andamento.
 
+**Ligação só sai pelo PC.** Uma linha só disca (automático, manual, extensão ou
+Franco) se estiver numa vaga cujo PC está online e saindo pelo PC. Na VPS, ou
+com o PC fora (em qualquer modo), a ligação é recusada com o código
+`line_off_pc_network` e a mensagem "Nenhuma rede de PC conectada…": ligar pelo IP
+da VPS é o que fez o WhatsApp bloquear números.
+
 Status na lista: **Online**; **PC sem resposta** (PC desligado ou sem
 internet); **Vaga parada na VPS** (o contêiner da vaga não está respondendo:
 veja os logs); **Sem vaga livre** (todas as vagas ocupadas).

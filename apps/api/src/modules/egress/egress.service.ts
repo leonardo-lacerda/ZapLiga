@@ -19,7 +19,9 @@ const PC_KEY_SECONDS = 90 * 24 * 3600;
 const PC_KEY_RENEW_SECONDS = 7 * 24 * 3600;
 const EDGE_KEY_SECONDS = 3600;
 // The slot watcher reports every 10 s; past this the slot itself is down.
-export const REPORT_STALE_SECONDS = 60;
+import { REPORT_STALE_SECONDS } from './pc-network';
+
+export { REPORT_STALE_SECONDS };
 // How often the tailnet's devices are read again while a slot waits for its PC.
 const DEVICE_REFRESH_MS = 60_000;
 

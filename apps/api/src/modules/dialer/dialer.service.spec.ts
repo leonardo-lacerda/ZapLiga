@@ -40,7 +40,7 @@ describe('DialerService', () => {
         if (sql.includes('INSERT INTO dialer_settings')) return { rows: [] };
         if (sql.includes('SELECT * FROM dialer_settings')) return { rows: [settings] };
         if (sql.includes('FROM leads l') && sql.includes('l.id = $2')) return { rows: input.leads };
-        if (sql.includes('FROM whatsapp_numbers')) return { rows: input.numbers };
+        if (sql.includes('FROM whatsapp_numbers')) return { rows: input.numbers.map((number: any) => ({ on_pc_network: true, ...number })) };
         if (sql.includes('FROM sdrs s')) return { rows: input.sdrs };
         return { rows: [] };
       });
@@ -57,6 +57,19 @@ describe('DialerService', () => {
       const service = new DialerService(db as any, makeRedis() as any, makeWaxum() as any, gateway as any);
 
       await expect(service.manualCall('lead-1', 'tenant-1')).rejects.toThrow('própria linha');
+      expect(db.transaction).not.toHaveBeenCalled();
+    });
+
+    it('refuses to dial when no line goes out through a PC', async () => {
+      const gateway = makeGateway();
+      const db = makeDb({
+        sdrs: [{ id: 'sdr-1' }],
+        numbers: [{ id: 'num-1', phone: '5585989779394', max_concurrent_calls: 2, on_pc_network: false }],
+        leads: [{ id: 'lead-1', phone: '5511957632036', name: 'Lead' }],
+      });
+      const service = new DialerService(db as any, makeRedis() as any, makeWaxum() as any, gateway as any);
+
+      await expect(service.manualCall('lead-1', 'tenant-1')).rejects.toMatchObject({ code: 'line_off_pc_network' });
       expect(db.transaction).not.toHaveBeenCalled();
     });
 

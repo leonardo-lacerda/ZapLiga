@@ -116,6 +116,7 @@ Os mesmos códigos valem para `POST /dial-intents` (`409`) e para a mensagem `di
 | `agent_busy` | O agente já está numa ligação |
 | `line_not_found` / `line_disconnected` | A linha não existe ou não está pareada |
 | `line_quarantined` | Quarentena por sinais de bloqueio (`retry_after_seconds`) |
+| `line_off_pc_network` | A linha não está saindo pelo PC de um atendente (está na VPS ou o PC está fora): ligar pela VPS bloqueia o número |
 | `line_protected` | Backoff de proteção do WhatsApp (`retry_after_seconds`) |
 | `line_busy` | A linha já está em ligação |
 | `line_verification_only` | A linha é só para verificação de WhatsApp e não faz ligações |

@@ -19,7 +19,7 @@ describe('sanitizeExternalRef', () => {
 });
 
 describe('DialerService dial intents', () => {
-  const line = { id: 'num-1', tenant_id: 'tenant-1', phone: '5585900000000', status: 'connected', flagged_until: null, last_call_ended_at: null, max_concurrent_calls: 1, active_calls: 0 };
+  const line = { id: 'num-1', tenant_id: 'tenant-1', phone: '5585900000000', status: 'connected', flagged_until: null, last_call_ended_at: null, max_concurrent_calls: 1, active_calls: 0, on_pc_network: true };
 
   const makeService = (overrides: { sdrs?: any[]; numbers?: any[]; suppressed?: boolean; busy?: boolean; stationAlive?: boolean; storedIntent?: any } = {}) => {
     const query = jest.fn(async (sql: string) => {
@@ -61,6 +61,7 @@ describe('DialerService dial intents', () => {
     ['line_not_found', { numbers: [] }],
     ['line_disconnected', { numbers: [{ ...line, status: 'disconnected' }] }],
     ['line_verification_only', { numbers: [{ ...line, verification_only: true }] }],
+    ['line_off_pc_network', { numbers: [{ ...line, on_pc_network: false }] }],
     ['line_busy', { numbers: [{ ...line, active_calls: 1 }] }],
     ['self_call', { numbers: [{ ...line, phone: '5511999990000' }] }],
     ['suppressed', { suppressed: true }],
