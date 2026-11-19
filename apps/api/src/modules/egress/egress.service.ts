@@ -91,8 +91,10 @@ export class EgressService {
     const key = await this.pcKey();
     const up = `up --reset --force-reauth --advertise-exit-node --auth-key=${key}`;
     return {
-      // Wrapped in `powershell -Command` so it also runs when pasted into cmd.exe.
-      windows: `powershell -NoProfile -Command "winget install -e --id Tailscale.Tailscale --silent --accept-source-agreements --accept-package-agreements; Start-Sleep 5; & (Join-Path $env:ProgramFiles 'Tailscale\\tailscale.exe') ${up} --unattended; powercfg /change standby-timeout-ac 0"`,
+      // Wrapped in `powershell -Command` so it also runs when pasted into cmd.exe. No `$` inside the
+      // quotes: pasted into PowerShell, the outer shell would expand `$env:ProgramFiles` to an
+      // unquoted path with a space. `--source winget` skips the Microsoft Store source and its prompts.
+      windows: `powershell -NoProfile -Command "winget install -e --id Tailscale.Tailscale --source winget --silent --accept-source-agreements --accept-package-agreements; Start-Sleep 5; & (Join-Path ([Environment]::GetFolderPath('ProgramFiles')) 'Tailscale\\tailscale.exe') ${up} --unattended; powercfg /change standby-timeout-ac 0"`,
       linux: `curl -fsSL https://tailscale.com/install.sh | sh && sudo tailscale ${up}`,
     };
   }
