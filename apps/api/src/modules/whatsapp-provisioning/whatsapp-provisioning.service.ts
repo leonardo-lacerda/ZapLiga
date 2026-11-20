@@ -33,7 +33,7 @@ const NODE_ID = /^[A-Za-z0-9][A-Za-z0-9-]{0,63}$/;
 export type ProvisioningJobRow = {
   id: string; tenant_id: string; created_by: string | null; egress_node: string; geelark_phone_id: string; phone_name: string | null;
   mode?: JobMode | null; app: 'whatsapp' | 'business' | null; phone: string | null; status: string; step: string; awaiting: string | null; message: string | null;
-  error_code: string | null; egress_ip: string | null; has_screenshot: boolean; history: unknown; linked: boolean; number_id: string | null;
+  error_code: string | null; egress_ip: string | null; app_version?: string | null; has_screenshot: boolean; history: unknown; linked: boolean; number_id: string | null;
   link_started_at: Date | string | null; created_at: Date | string; updated_at: Date | string; finished_at: Date | string | null;
   power_off_when_done?: boolean | null;
 };
@@ -317,6 +317,41 @@ export class WhatsappProvisioningService implements OnModuleInit, OnModuleDestro
     return this.toJob(await this.applySnapshot(inserted, snapshot, actorUserId));
   }
 
+  /**
+   * Números dos cadastros terminados nos últimos `days` dias: quanto dá certo, onde falha,
+   * por IP de saída e por versão do WhatsApp, e quanto tempo cada etapa leva (do histórico).
+   */
+  async stats(tenantId: string, days?: number) {
+    const window = Math.min(90, Math.max(1, Math.floor(Number(days) || 30)));
+    const base = `FROM provisioning_jobs WHERE tenant_id = $1 AND COALESCE(mode, 'register') = 'register'
+      AND finished_at IS NOT NULL AND created_at > now() - make_interval(days => $2)`;
+    const ok = `(status = 'done' OR linked)`;
+    const [totals, byError, byStep, byIp, byVersion, durations] = await Promise.all([
+      this.db.query(`SELECT count(*)::int AS total, count(*) FILTER (WHERE ${ok})::int AS done,
+          count(*) FILTER (WHERE status = 'failed')::int AS failed, count(*) FILTER (WHERE status = 'cancelled')::int AS cancelled ${base}`, [tenantId, window]),
+      this.db.query(`SELECT COALESCE(error_code, 'desconhecido') AS key, count(*)::int AS count ${base} AND status = 'failed' GROUP BY 1 ORDER BY 2 DESC LIMIT 20`, [tenantId, window]),
+      this.db.query(`SELECT step AS key, count(*)::int AS count ${base} AND status = 'failed' GROUP BY 1 ORDER BY 2 DESC LIMIT 20`, [tenantId, window]),
+      this.db.query(`SELECT COALESCE(egress_ip, 'sem IP') AS key, count(*)::int AS total, count(*) FILTER (WHERE ${ok})::int AS done ${base} GROUP BY 1 ORDER BY 2 DESC LIMIT 20`, [tenantId, window]),
+      this.db.query(`SELECT COALESCE(app || ' ' || app_version, app, 'sem versão') AS key, count(*)::int AS total, count(*) FILTER (WHERE ${ok})::int AS done ${base} GROUP BY 1 ORDER BY 2 DESC LIMIT 20`, [tenantId, window]),
+      this.db.query(`SELECT step AS key, count(*)::int AS count, round(percentile_cont(0.5) WITHIN GROUP (ORDER BY secs)::numeric, 1)::float AS median_s,
+          round(max(secs)::numeric, 1)::float AS max_s
+        FROM (SELECT e.value->>'step' AS step,
+            EXTRACT(EPOCH FROM (lead((e.value->>'at')::timestamptz) OVER (PARTITION BY j.id ORDER BY e.ord) - (e.value->>'at')::timestamptz)) AS secs
+          FROM (SELECT id, history ${base}) j, jsonb_array_elements(j.history) WITH ORDINALITY e(value, ord)
+          WHERE e.value->>'at' ~ '^[0-9]{4}-') x
+        WHERE secs IS NOT NULL AND secs >= 0 GROUP BY step ORDER BY median_s DESC LIMIT 30`, [tenantId, window]),
+    ]);
+    return {
+      days: window,
+      ...totals.rows[0],
+      failuresByError: byError.rows,
+      failuresByStep: byStep.rows,
+      byEgressIp: byIp.rows,
+      byAppVersion: byVersion.rows,
+      stepDurations: durations.rows,
+    };
+  }
+
   async listJobs(tenantId: string, limit?: number) {
     const safeLimit = Math.min(100, Math.max(1, Math.floor(Number(limit) || 20)));
     const result = await this.db.query('SELECT * FROM provisioning_jobs WHERE tenant_id = $1 ORDER BY created_at DESC LIMIT $2', [tenantId, safeLimit]);
@@ -500,7 +535,7 @@ export class WhatsappProvisioningService implements OnModuleInit, OnModuleDestro
     const message = linking ? 'Aguardando o WhatsApp confirmar a conexão com o ZapLiga.' : (snapshot?.message == null ? null : String(snapshot.message).slice(0, 1000));
     const finished = FINISHED_STATUSES.has(status);
     const result = await this.db.query(`UPDATE provisioning_jobs SET status = $3, step = $4, awaiting = $5, message = $6, error_code = $7, egress_ip = $8,
-        has_screenshot = $9, history = $10::jsonb,
+        has_screenshot = $9, history = $10::jsonb, app_version = COALESCE($13, app_version),
         link_started_at = CASE WHEN $11::boolean THEN COALESCE(link_started_at, now()) ELSE link_started_at END,
         finished_at = CASE WHEN $12::boolean THEN now() ELSE NULL END, updated_at = now()
       WHERE id = $1 AND tenant_id = $2 AND finished_at IS NULL RETURNING *`, [
@@ -508,6 +543,7 @@ export class WhatsappProvisioningService implements OnModuleInit, OnModuleDestro
       snapshot?.errorCode ? String(snapshot.errorCode).slice(0, 60) : null,
       snapshot?.egressIp ? String(snapshot.egressIp).slice(0, 64) : null,
       Boolean(snapshot?.hasScreenshot), JSON.stringify(sanitizeHistory(snapshot?.history)), linking, finished,
+      snapshot?.appVersion ? String(snapshot.appVersion).slice(0, 40) : null,
     ]);
     const next = (result.rows[0] as ProvisioningJobRow | undefined) ?? await this.findRow(row.tenant_id, row.id);
     await this.auditTransitions(row, next, actorUserId);
@@ -699,6 +735,7 @@ export class WhatsappProvisioningService implements OnModuleInit, OnModuleDestro
       errorCode: row.error_code ?? null,
       hasScreenshot: Boolean(row.has_screenshot),
       egressIp: row.egress_ip ?? null,
+      appVersion: row.app_version ?? null,
       history: sanitizeHistory(row.history),
       linked: Boolean(row.linked),
       numberId: row.number_id ?? null,

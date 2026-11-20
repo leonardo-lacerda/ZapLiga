@@ -1,5 +1,5 @@
 import { ApiError, apiFetch, json, refreshAccessToken } from '../../services/api';
-import type { CreateJob, CreatePhone, EgressList, EgressNode, Job, Phone } from './provisioning.types';
+import type { CreateJob, CreatePhone, EgressList, EgressNode, Job, Phone, ProvisioningStats } from './provisioning.types';
 
 const base = (tenantId: string) => `/api/tenants/${encodeURIComponent(tenantId)}/provisioning`;
 const jobPath = (tenantId: string, jobId: string) => `${base(tenantId)}/jobs/${encodeURIComponent(jobId)}`;
@@ -112,3 +112,7 @@ export const apiErrorCode = (error: unknown): string | undefined => {
   const details = error.details as { error?: unknown } | undefined;
   return typeof details?.error === 'string' ? details.error : undefined;
 };
+
+/** Números dos cadastros terminados nos últimos `days` dias. */
+export const fetchStats = (tenantId: string, days = 30): Promise<ProvisioningStats> =>
+  json(`${base(tenantId)}/stats?days=${days}`);

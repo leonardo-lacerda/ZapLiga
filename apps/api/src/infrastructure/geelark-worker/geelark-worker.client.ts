@@ -61,6 +61,7 @@ export type WorkerJob = {
   step: string; awaiting: WorkerAwaiting;
   message: string | null; errorCode: string | null; hasScreenshot: boolean;
   egressIp: string | null;
+  appVersion?: string | null;
   history: { step: string; at: string; message: string | null }[];
   createdAt: string; updatedAt: string;
 };
@@ -77,6 +78,7 @@ const DEFAULT_TIMEOUT_MS = 15_000;
 /** Portuguese message shown to the operator for each worker error. */
 const messageFor = (status: number, code: string, workerMessage: string | null) => {
   if (code === 'phone_busy') return 'Este telefone já está em outro cadastro. Aguarde ele terminar ou cancele-o.';
+  if (code === 'worker_draining') return 'O cadastrador está sendo atualizado e terminando os cadastros em andamento. Tente novamente em alguns minutos.';
   if (code === 'worker_full') return 'O cadastrador já está com o máximo de cadastros simultâneos. Tente novamente em alguns minutos.';
   if (code === 'not_awaiting') return 'O cadastro não está aguardando essa informação agora. Atualize a página.';
   if ((code === 'robot_busy' || code === 'device_error') && workerMessage) return workerMessage;

@@ -45,6 +45,9 @@ export class WhatsappProvisioningController {
   @Delete('/phones/:id')
   deletePhone(@Param('id') id: string, @CurrentTenant() tenantId: string, @CurrentUser() user: any) { return this.provisioning.deletePhone(tenantId, user.id, id); }
 
+  @Get('/stats')
+  stats(@Query('days') days: string | undefined, @CurrentTenant() tenantId: string) { return this.provisioning.stats(tenantId, Number(days)); }
+
   @Get('/jobs')
   list(@Query('limit') limit: string | undefined, @CurrentTenant() tenantId: string) { return this.provisioning.listJobs(tenantId, Number(limit)); }
 

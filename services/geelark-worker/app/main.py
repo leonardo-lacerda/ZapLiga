@@ -6,8 +6,9 @@ Rodar: `uvicorn app.main:create_app --factory --host 0.0.0.0 --port 8080`
 from __future__ import annotations
 
 import hmac
-import time
 import logging
+import os
+import time
 
 from fastapi import Depends, FastAPI, Header, Request
 from fastapi.exceptions import RequestValidationError
@@ -15,7 +16,10 @@ from fastapi.responses import JSONResponse, Response
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from .config import Settings
+from .copilot import Copilot
 from .device_automation import make_factory
+from .screen_archive import ScreenArchive
+from .screen_learning import LearnedScreens
 from .errors import ApiError
 from .geelark_api import PHONE_OFF, PROXY_CHECK_FAILED, GeeLarkAPI, GeeLarkError
 from .jobs import JobManager
@@ -48,8 +52,11 @@ def create_app(
     _configure_logging()
     settings = settings or Settings.from_env()
     geelark = geelark or GeeLarkAPI(settings.geelark_api_token)
+    memory = LearnedScreens(os.path.join(settings.data_dir, "learned_screens.json"))
+    copilot = Copilot(model=settings.copilot_model, effort=settings.copilot_effort) if settings.copilot_enabled else None
+    log.info("copiloto de IA: %s", f"ligado ({settings.copilot_model})" if copilot else "desligado")
     manager = manager or JobManager(
-        factory=make_factory(geelark),
+        factory=make_factory(geelark, memory, copilot, ScreenArchive(os.path.join(settings.data_dir, "screens"))),
         max_jobs=settings.max_jobs,
         input_timeout_s=settings.input_timeout_s,
         job_timeout_s=settings.job_timeout_s,
@@ -68,6 +75,7 @@ def create_app(
     app = FastAPI(title="geelark-worker", docs_url=None, redoc_url=None, openapi_url=None)
     app.state.manager = manager
     app.state.geelark = geelark
+    app.state.memory = memory
 
     # ------------------------------------------------------------ erros
     @app.exception_handler(ApiError)
@@ -107,6 +115,24 @@ def create_app(
     @app.get("/health")
     def health() -> dict:
         return {"ok": True}
+
+    @app.get("/drain", dependencies=auth)
+    def drain_status() -> dict:
+        return {"draining": manager.draining, "active": manager.active_count()}
+
+    @app.post("/drain", dependencies=auth)
+    def drain(on: bool = True) -> dict:
+        """Deploy: para de aceitar cadastros novos (on=false volta a aceitar, se o deploy desistir)."""
+        manager.draining = bool(on)
+        log.info("drain %s; %s cadastros em andamento", "ligado" if manager.draining else "desligado", manager.active_count())
+        return {"draining": manager.draining, "active": manager.active_count()}
+
+    @app.get("/learned-screens", dependencies=auth)
+    def learned_screens() -> dict:
+        """Telas que o robô aprendeu (com a IA ou com o operador) e se já anda sozinho nelas."""
+        items = memory.all()
+        return {"items": items, "trusted": sum(1 for item in items if item["trusted"]),
+                "copilot": copilot is not None}
 
     @app.get("/phones", dependencies=auth)
     def list_phones() -> dict:

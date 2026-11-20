@@ -70,9 +70,10 @@ class JobContext:
     """Cancelamento e prazo do job, compartilhados com a automação."""
 
     def __init__(self, cancel_event: threading.Event, deadline: float, timeout_message: str,
-                 takeover: threading.Event | None = None):
+                 takeover: threading.Event | None = None, note: Callable[[str], None] | None = None):
         self._cancel = cancel_event
         self._takeover = takeover
+        self._note = note
         self.deadline = deadline
         self._timeout_message = timeout_message
 
@@ -93,6 +94,11 @@ class JobContext:
         """O operador clicou em "Assumir o controle": para a etapa (só entre uma tela e outra)."""
         if self._takeover is not None and self._takeover.is_set():
             raise JobError("manual_takeover", "Você assumiu o controle do phone.")
+
+    def note(self, message: str) -> None:
+        """Mensagem para o operador sem mudar a etapa (ex.: a IA está numa tela nova)."""
+        if self._note is not None:
+            self._note(message)
 
     def sleep(self, seconds: float) -> None:
         """Dorme até `seconds`, acordando na hora se o job for cancelado ou estourar o prazo."""

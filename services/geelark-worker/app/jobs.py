@@ -114,6 +114,7 @@ class Job:
         self.error_code: str | None = None
         self.screenshot: bytes | None = None
         self.egress_ip: str | None = None
+        self.app_version: str | None = None  # versionName do WhatsApp do phone (separa falhas por versão)
         self.history: list[dict[str, Any]] = [{"step": "queued", "at": now, "message": self.message}]
         self.created_at = now
         self.updated_at = now
@@ -150,6 +151,7 @@ class Job:
             "errorCode": self.error_code,
             "hasScreenshot": self.screenshot is not None,
             "egressIp": self.egress_ip,
+            "appVersion": self.app_version,
             "history": [dict(h) for h in self.history],
             "createdAt": self.created_at,
             "updatedAt": self.updated_at,
@@ -176,6 +178,9 @@ class JobManager:
         self._handed: dict[str, float] = {}         # phoneId -> quando foi entregue à API ligado
         self._egress_probe = egress_probe
         self.max_jobs = max_jobs
+        # Deploy: com draining, não aceita cadastro novo; os em andamento seguem até o fim
+        # (o deploy espera `active_count()` chegar a 0 antes de trocar o contêiner).
+        self.draining = False
         self.input_timeout_s = input_timeout_s
         self.job_timeout_s = job_timeout_s
         # Depois de um erro numa etapa do app, o phone fica ligado este tempo para o operador
@@ -218,6 +223,10 @@ class JobManager:
                 raise ApiError(409, "job_exists", "Já existe um job com esse jobId.")
             if spec.phone_id in self._busy:
                 raise ApiError(409, "phone_busy", "Este phone já está em outro cadastro.")
+            if self.draining:
+                raise ApiError(503, "worker_draining",
+                               "O cadastrador está terminando os cadastros em andamento para uma atualização. "
+                               "Tente de novo em alguns minutos.")
             if len(self._busy) >= self.max_jobs:
                 raise ApiError(429, "worker_full", f"O worker já está com {self.max_jobs} cadastros em andamento.")
             job = Job(spec)
@@ -370,6 +379,13 @@ class JobManager:
             job.history.append({"step": step, "at": job.updated_at, "message": message})
         log.info("[%s] %s/%s", job.spec.job_id, status, step)
 
+    def _note(self, job: Job, message: str) -> None:
+        with self._lock:
+            if job.terminal or job.status != "running":
+                return
+            job.message = message
+            job.updated_at = _now_iso()
+
     def _finish_locked(self, job: Job, status: str, error_code: str | None, message: str | None,
                        step: str | None = None) -> None:
         if job.terminal:
@@ -418,7 +434,8 @@ class JobManager:
         limit = self.control_timeout_s if spec.mode == "control" else self.job_timeout_s
         minutes = max(1, round(limit / 60))
         ctx = JobContext(job.cancel_event, job.started_mono + limit,
-                         f"O cadastro passou de {minutes} min e foi interrompido.", takeover=job.takeover)
+                         f"O cadastro passou de {minutes} min e foi interrompido.", takeover=job.takeover,
+                         note=lambda message: self._note(job, message))
         auto: PhoneAutomation | None = None
         outcome: tuple[str, str, str] | None = None  # (status, errorCode, message)
         try:
@@ -719,6 +736,10 @@ class JobManager:
 
         self._set_step(job, "opening_app")
         self._with_help(job, ctx, auto, "opening_app", auto.open_app)
+        version = getattr(auto, "app_version", "") or None
+        if version:
+            with self._lock:
+                job.app_version = str(version)[:40]
         ctx.check()
 
         self._set_step(job, "entering_number")

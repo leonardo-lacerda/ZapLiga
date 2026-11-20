@@ -576,6 +576,13 @@ services:
       GEELARK_API_TOKEN: ${GEELARK_API_TOKEN:-}
       GEELARK_WORKER_TOKEN: ${GEELARK_WORKER_TOKEN:-zapcall-local-worker-token}
       WORKER_MAX_JOBS: ${GEELARK_WORKER_MAX_JOBS:-2}
+      WORKER_DATA_DIR: /data
+      # Copiloto de IA para telas desconhecidas (services/geelark-worker/README.md). Vazio = desligado.
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      WORKER_COPILOT: ${WORKER_COPILOT:-on}
+    volumes:
+      # Telas aprendidas e telas reais arquivadas: sobrevivem ao deploy.
+      - geelark_worker_data:/data
     stop_grace_period: 30s
 
   # Proxy SOCKS5 do cadastro (docs/saida-pelo-pc-do-atendente.md, "Proxy do cadastro").
@@ -746,3 +753,4 @@ volumes:
   tailscale_edge_10:
   egress_edge_10:
   waxum_edge_10_data:
+  geelark_worker_data:

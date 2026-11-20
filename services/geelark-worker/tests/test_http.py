@@ -176,7 +176,7 @@ def test_job_lifecycle_over_http(client, factory):
     assert resp.status_code == 201
     job = resp.json()
     assert set(job) == {"jobId", "phoneId", "mode", "app", "number", "status", "step", "awaiting", "message",
-                        "errorCode", "hasScreenshot", "egressIp", "history", "createdAt", "updatedAt"}
+                        "errorCode", "hasScreenshot", "egressIp", "appVersion", "history", "createdAt", "updatedAt"}
     assert job["number"] == "5511999998888"
     job_id = job["jobId"]
 
@@ -379,3 +379,15 @@ def test_phone_actions_refuse_a_phone_in_use(client, geelark):
         assert (resp.status_code, resp.json()["error"]) == (409, "phone_busy")
     geelark.delete_phone.assert_not_called()
     geelark.new_device.assert_not_called()
+
+
+def test_drain_refuses_new_jobs_and_reports_the_running_ones(client):
+    running = client.post("/jobs", headers=H, json=job_body()).json()["jobId"]
+    wait_for(lambda: client.manager.get(running).awaiting == "sms")
+    assert client.post("/drain", headers=H).json() == {"draining": True, "active": 1}
+    assert client.post("/drain").status_code == 401
+    refused = client.post("/jobs", headers=H, json=job_body(jobId="22222222-2222-3333-4444-555555555555", phoneId="p2"))
+    assert refused.status_code == 503 and refused.json()["error"] == "worker_draining"
+    client.post(f"/jobs/{running}/cancel", headers=H)  # o que estava rodando segue até terminar
+    wait_for(lambda: client.get("/drain", headers=H).json()["active"] == 0)
+    assert client.post("/drain?on=false", headers=H).json()["draining"] is False

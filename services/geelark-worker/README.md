@@ -18,6 +18,10 @@ perfil e, se pedido, abre "Conectar com número de telefone" e digita o código 
 | `WORKER_MAX_JOBS` | jobs simultâneos (padrão 2) |
 | `ADBUTILS_ADB_PATH` | caminho do `adb` (na imagem: `/usr/bin/adb`) |
 | `WORKER_DEBUG_DIR` | onde gravar o XML de telas desconhecidas, sem o texto dos campos (padrão `/tmp/geelark-worker-debug`) |
+| `WORKER_DATA_DIR` | onde fica `learned_screens.json`, a memória de telas aprendidas; precisa de volume para sobreviver ao deploy (padrão `/tmp/geelark-worker-data`) |
+| `ANTHROPIC_API_KEY` | liga o copiloto de IA para telas desconhecidas (lida pelo SDK; sem ela, só a memória e o operador) |
+| `WORKER_COPILOT` | `off` desliga o copiloto mesmo com a chave |
+| `WORKER_COPILOT_MODEL` / `WORKER_COPILOT_EFFORT` | modelo e esforço do copiloto (padrão `claude-opus-5-5` / `low`) |
 
 ### IP esperado (`probeProxy`)
 
@@ -67,6 +71,9 @@ cloud phone ──SOCKS5──► socks-gateway:1080 ──► socks-edge-N:1080
 - `app/device_automation.py` — implementação real (GeeLark + adb + uiautomator2).
 - `app/egress_probe.py` — IP do PC pelo `probeProxy` (cliente SOCKS5 mínimo).
 - `app/socks5.py` — proxy SOCKS5 do cadastro (`edge` e `gateway`).
+- `app/screen_learning.py` — memória de telas: impressão digital da tela, ação gravada, quando confiar nela.
+- `app/copilot.py` — copiloto de IA (Claude): uma ação por chamada, de um conjunto fechado; nunca digita.
+- `app/screen_resolver.py` — tela desconhecida: memória → IA → operador; aprende com a IA e com o toque do operador.
 - `app/whatsapp.py` — seletores das telas (inglês e português). `handle_permission` é um
   `TODO(human)`: enquanto não for implementado, o job falha com `internal` ao ver um diálogo
   de permissão do Android.
@@ -74,6 +81,22 @@ cloud phone ──SOCKS5──► socks-gateway:1080 ──► socks-edge-N:1080
 Estado dos jobs só em memória: se o worker reiniciar, `GET /jobs/{id}` devolve 404 e a API
 marca `worker_lost`. `GET /phones` informa os apps instalados só para phones em que o worker
 já rodou um job desde que subiu (senão `null`).
+
+## Tela desconhecida: memória, IA e operador
+
+Quando o `_drive` vê uma tela que `whatsapp.py` não conhece:
+
+1. **Memória** (`learned_screens.json`): se a impressão digital da tela (ids e textos, números
+   trocados por `#`) já tem uma ação confiável (`is_trusted`), o robô repete a ação na hora.
+2. **Copiloto** (com `ANTHROPIC_API_KEY`): depois de 8 s na tela, pergunta ao Claude uma ação
+   por vez (tocar num elemento, voltar, rolar, esperar, desistir), até 8 seguidas e 25 por
+   cadastro. Toque em botão bloqueado ("reenviar SMS", "me ligue", "excluir"...) é recusado no
+   código. Cada ação que faz a tela andar é gravada na memória.
+3. **Operador**: se nada resolveu, o job pede ajuda como antes. O toque dele numa tela
+   desconhecida também é gravado na memória (`source: operator`).
+
+Com o tempo, as telas novas viram ações confiáveis e a IA deixa de ser chamada para elas.
+`GET /learned-screens` lista o que foi aprendido.
 
 ## Rodar e testar
 

@@ -60,7 +60,10 @@ Base: `GEELARK_WORKER_URL` (ex.: `http://geelark-worker:8080`). Toda rota exige 
 | Método e rota | Corpo | Resposta |
 |---|---|---|
 | `GET /health` | — | `{ "ok": true }` |
+| `GET /drain` | — | `{ draining, active }` |
+| `POST /drain` | `?on=true\|false` | `{ draining, active }`. Deploy: com `draining`, `POST /jobs` responde `503 worker_draining` e os cadastros em andamento seguem até o fim; o deploy espera `active = 0` (até 25 min) antes de trocar a imagem |
 | `GET /phones` | — | `{ "items": [Phone] }` |
+| `GET /learned-screens` | — | `{ items: [{ key, app, action, source: ai\|operator, successes, failures, trusted, screen: [textos], goal, last_seen }], trusted, copilot }` (memória de telas desconhecidas; ver o README do worker) |
 | `POST /phones` | `CreateWorkerPhone` | `201 Phone` · `409 egress_offline` (o GeeLark testou o proxy e ele não respondeu) · `502 geelark_error` |
 | `POST /phones/{phoneId}/stop` | — | `{ "ok": true }` |
 | `POST /phones/{phoneId}/rename` | `{ name }` (1–60) | `{ ok, name }` · `404 phone_not_found` |
@@ -134,6 +137,7 @@ type WorkerJob = {
   step: string; awaiting: null | 'sms' | 'profile' | 'link_decision' | 'pair_code' | 'manual';
   message: string | null; errorCode: string | null; hasScreenshot: boolean;
   egressIp: string | null;    // IP visto de dentro do phone
+  appVersion: string | null;  // versionName do WhatsApp do phone (depois de abrir o app)
   history: { step: string; at: string; message: string | null }[];
   createdAt: string; updatedAt: string;
 };
@@ -156,6 +160,7 @@ passa por `entitlement.assertAction(tenantId, 'write', userId)`.
 | `DELETE phones/{id}` | — | `{ ok }` (auditado `provisioning.phone_deleted`) |
 | `POST jobs` | `CreateJob` | `201 Job` |
 | `GET jobs` | `?limit=20` | `{ items: Job[] }` (mais recentes primeiro) |
+| `GET stats` | `?days=30` (1–90) | `{ days, total, done, failed, cancelled, failuresByError, failuresByStep, byEgressIp, byAppVersion, stepDurations }`: cadastros terminados no período (só `mode=register`); tempo por etapa vem do `history` |
 | `GET jobs/{id}` | — | `Job` |
 | `POST jobs/{id}/sms` | `{ code: string }` | `Job` |
 | `POST jobs/{id}/profile` | multipart: `name` (texto) + `photo` (arquivo opcional, JPEG/PNG ≤ 2 MB) | `Job` |

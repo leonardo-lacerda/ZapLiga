@@ -412,3 +412,89 @@ def test_typing_puts_the_phone_keyboard_back():
     auto.d.send_keys.assert_called_once_with("123456", clear=True)
     assert shell == [["ime", "set", "com.android.inputmethod.latin/.LatinIME"],
                      ["ime", "disable", "com.github.uiautomator/.AdbKeyboard"]]
+
+
+# ------------------------------------------ tela desconhecida: memória e IA
+class ScreensDevice(FakeDevice):
+    """Tela desconhecida com um botão "Fechar aviso"; tocar nele leva ao perfil."""
+    UNKNOWN_XML = ('<hierarchy><node text="Novidade do WhatsApp" resource-id="com.whatsapp:id/title" '
+                   'class="android.widget.TextView" package="com.whatsapp" content-desc="" clickable="false" '
+                   'scrollable="false" bounds="[0,0][1000,100]" /><node text="Fechar aviso" '
+                   'resource-id="com.whatsapp:id/skip" class="android.widget.Button" package="com.whatsapp" '
+                   'content-desc="" clickable="true" scrollable="false" bounds="[0,900][1000,1000]" /></hierarchy>')
+
+    def __init__(self):
+        super().__init__(texts=["Novidade do WhatsApp", "Fechar aviso"])
+        self.clicks = []
+
+    def dump_hierarchy(self):
+        return self.UNKNOWN_XML if self.texts != ["Profile info"] else "<hierarchy />"
+
+    def click(self, x, y):
+        self.clicks.append((x, y))
+        if 900 <= y <= 1000:
+            self.texts = ["Profile info"]
+
+    def app_current(self):
+        return {"package": "com.whatsapp"}
+
+
+def test_drive_asks_the_ai_on_an_unknown_screen_and_carries_on(tmp_path):
+    from types import SimpleNamespace
+
+    from app import device_automation
+    from app.copilot import Decision
+    from app.screen_learning import LearnedScreens
+
+    copilot = SimpleNamespace(decide=mock.Mock(return_value=Decision("tocar", 1, "pular a novidade")))
+    memory = LearnedScreens(str(tmp_path / "m.json"))
+    auto = make_auto(mock.Mock())
+    auto.resolver = device_automation.ScreenResolver(memory, copilot, "whatsapp", "job-1")
+    auto.d = ScreensDevice()
+    auto.screenshot = lambda: None
+    with mock.patch.object(device_automation, "AI_GRACE_S", 0):
+        assert auto._drive({Screen.PROFILE_NAME}, what="perfil") == Screen.PROFILE_NAME
+    assert auto.d.clicks == [(500, 950)]
+    goal = copilot.decide.call_args.args[0]
+    assert goal.startswith("perfil.") and Screen.PROFILE_NAME.value in goal
+    assert [item["action"]["rid"] for item in memory.all()] == ["skip"]
+
+
+def test_drive_without_the_ai_still_hands_over_to_the_operator():
+    auto = make_auto(mock.Mock())
+    auto.d = ScreensDevice()
+    clock = iter(range(0, 100_000, 30))  # cada leitura do relógio avança 30 s
+    with mock.patch.object(time_module(), "monotonic", side_effect=lambda: next(clock)), \
+            pytest.raises(JobError) as exc:
+        auto._drive({Screen.PROFILE_NAME}, what="perfil", unknown_grace=20)
+    assert exc.value.code == "unknown_screen" and "IA" not in exc.value.message
+
+
+def time_module():
+    from app import device_automation
+    return device_automation.time
+
+
+def test_blocked_sms_on_the_method_list_is_not_a_wait():
+    # 18/11: "Receber SMS / Tente novamente em 3 horas" e "Ligação de voz" na mesma lista.
+    texts = ["Receber SMS", "Tente novamente em 3 horas", "Ligação de voz", "Continuar"]
+    assert wa.detect_screen(FakeDevice(texts), WA) == Screen.VERIFY_METHOD
+    assert wa.detect_screen(FakeDevice(["Tente novamente em 5 minutos", "OK"]), WA) == Screen.WAIT_LIMIT
+
+
+def test_blocked_sms_chooses_the_voice_call():
+    auto = make_auto(mock.Mock())
+    auto.d = FakeDevice(["Receber SMS", "Tente novamente em 3 horas", "Ligação de voz", "Continuar"])
+    clicked = []
+    auto._click = lambda *sels, timeout=5: clicked.append(sels[0]["textMatches"]) or True
+    auto._choose_verify_method()
+    assert clicked == [wa.CALL_METHOD_TEXT, wa.CONFIRM_TEXT]
+
+
+def test_blocked_sms_without_voice_call_is_a_wait():
+    auto = make_auto(mock.Mock())
+    auto.d = FakeDevice(["Receber SMS", "Tente novamente em 3 horas"])
+    with mock.patch.object(wa, "first_text", return_value="Tente novamente em 3 horas"), \
+            pytest.raises(JobError) as exc:
+        auto._choose_verify_method()
+    assert exc.value.code == "wait_limit" and "3 horas" in exc.value.message

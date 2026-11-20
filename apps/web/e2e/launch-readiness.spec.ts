@@ -476,4 +476,26 @@ test.describe.serial('Gate B - jornadas criticas', () => {
     control?.close();
     await api.dispose();
   });
+
+  test('14. numeros do cadastro de WhatsApp saem do historico real no Postgres', async () => {
+    const api = await context();
+    await expectOk(await api.patch(`/api/tenants/${tenantA}/feature-flags`, { headers: headers(adminToken, tenantA), data: { whatsapp_provisioning: true } }));
+    const at = (seconds: number) => new Date(Date.now() - 3_600_000 + seconds * 1000).toISOString();
+    const history = (...steps: Array<[string, number]>) => JSON.stringify(steps.map(([step, s]) => ({ step, at: at(s), message: null })));
+    const insert = (id: string, status: string, step: string, errorCode: string | null, ip: string, version: string, hist: string) => billingPool.query(
+      `INSERT INTO provisioning_jobs (id, tenant_id, egress_node, geelark_phone_id, app, phone, status, step, error_code, egress_ip, app_version, history, finished_at, created_at)
+       VALUES ($1, $2, 'pc-e2e', 'phone-e2e', 'business', '5527981554290', $3, $4, $5, $6, $7, $8::jsonb, now(), now() - interval '1 hour')`,
+      [`${id}-${suffix}`, tenantA, status, step, errorCode, ip, version, hist]);
+    await insert('stats-ok', 'done', 'done', null, '45.172.112.163', '2.26.1', history(['queued', 0], ['opening_app', 10], ['waiting_sms', 40], ['done', 100]));
+    await insert('stats-fail', 'failed', 'waiting_sms', 'wait_limit', '131.255.254.90', '2.26.1', history(['queued', 0], ['opening_app', 20], ['waiting_sms', 60]));
+    const stats = await expectOk(await api.get(`/api/tenants/${tenantA}/provisioning/stats?days=7`, { headers: headers(leaderToken, tenantA) }));
+    expect(stats).toMatchObject({ days: 7, total: 2, done: 1, failed: 1, cancelled: 0 });
+    expect(stats.failuresByError).toEqual([{ key: 'wait_limit', count: 1 }]);
+    expect(stats.failuresByStep).toEqual([{ key: 'waiting_sms', count: 1 }]);
+    expect(stats.byAppVersion).toEqual([{ key: 'business 2.26.1', total: 2, done: 1 }]);
+    expect(stats.byEgressIp).toHaveLength(2);
+    const opening = stats.stepDurations.find((row: any) => row.key === 'opening_app');
+    expect(opening).toMatchObject({ count: 2, median_s: 35, max_s: 40 });
+    await api.dispose();
+  });
 });

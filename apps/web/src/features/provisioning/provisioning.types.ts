@@ -101,3 +101,21 @@ export type CreatePhone = { name: string; androidVersion: AndroidVersion; egress
 
 /** Valores para reabrir o assistente já preenchido ("Tentar de novo"). */
 export type WizardPrefill = Partial<{ egressNode: string; phoneId: string; app: ProvisioningApp; countryCode: string; number: string }>;
+
+export type StatsCount = { key: string; count: number };
+export type StatsRate = { key: string; total: number; done: number };
+export type StatsDuration = { key: string; count: number; median_s: number; max_s: number };
+
+/** `GET provisioning/stats`: cadastros terminados nos últimos `days` dias. */
+export type ProvisioningStats = {
+  days: number;
+  total: number;
+  done: number;
+  failed: number;
+  cancelled: number;
+  failuresByError: StatsCount[];
+  failuresByStep: StatsCount[];
+  byEgressIp: StatsRate[];
+  byAppVersion: StatsRate[];
+  stepDurations: StatsDuration[];
+};

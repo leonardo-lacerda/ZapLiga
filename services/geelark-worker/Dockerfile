@@ -4,7 +4,8 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
     ADBUTILS_ADB_PATH=/usr/bin/adb \
-    WORKER_DEBUG_DIR=/tmp/geelark-worker-debug
+    WORKER_DEBUG_DIR=/tmp/geelark-worker-debug \
+    WORKER_DATA_DIR=/data
 
 # adb do Debian (o adbutils fala com o servidor adb que ele mesmo sobe).
 RUN apt-get update \
@@ -18,7 +19,8 @@ RUN pip install -r requirements.txt
 COPY app ./app
 
 # Usuário sem root; o HOME guarda as chaves do adb (~/.android).
-RUN useradd --create-home --uid 10001 worker
+# /data: memória de telas aprendidas e arquivo de telas reais (volume no compose).
+RUN useradd --create-home --uid 10001 worker && mkdir -p /data && chown worker:worker /data
 USER worker
 
 EXPOSE 8080

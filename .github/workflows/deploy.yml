@@ -278,6 +278,26 @@ jobs:
           "${COMPOSE[@]}" build geelark-worker </dev/null \
             || echo "Aviso: a imagem do geelark-worker não buildou; seguindo o deploy" >&2
 
+          # Cadastros em andamento moram na memória do worker e saem pelos socks-edge-N, que
+          # rodam a mesma imagem: trocar a imagem no meio mata o cadastro. Se a imagem mudou,
+          # o worker para de aceitar cadastros novos e o deploy espera os atuais terminarem
+          # (até 25 min, o teto de um cadastro). O token fica dentro do contêiner.
+          worker_api() {
+            "${COMPOSE[@]}" exec -T geelark-worker python -c "import os,sys,urllib.request as u; r=u.Request('http://127.0.0.1:8080/drain'+sys.argv[2], method=sys.argv[1], headers={'x-worker-token': os.environ.get('GEELARK_WORKER_TOKEN','')}); print(u.urlopen(r, timeout=5).read().decode())" "$1" "${2:-}" </dev/null 2>/dev/null
+          }
+          running_image=$(docker inspect -f '{{.Image}}' "$("${COMPOSE[@]}" ps -q geelark-worker 2>/dev/null)" 2>/dev/null || true)
+          new_image=$(docker image inspect -f '{{.Id}}' "$WORKER_IMAGE" 2>/dev/null || true)
+          if [ -n "$running_image" ] && [ -n "$new_image" ] && [ "$running_image" != "$new_image" ] && worker_api POST >/dev/null; then
+            for _ in $(seq 1 150); do
+              active=$(worker_api GET | sed -n 's/.*"active": *\([0-9][0-9]*\).*/\1/p')
+              active=${active:-0}
+              [ "$active" = "0" ] && break
+              echo "Esperando $active cadastro(s) do GeeLark terminar antes de atualizar o worker..."
+              sleep 10
+            done
+            [ "${active:-0}" = "0" ] || echo "Aviso: $active cadastro(s) ainda em andamento após 25 min; atualizando mesmo assim" >&2
+          fi
+
           edge_services=$("${COMPOSE[@]}" config --services | grep -- '-edge-' || true)
           if ! docker image inspect "$WORKER_IMAGE" >/dev/null 2>&1; then
             edge_services=$(printf '%s\n' "$edge_services" | grep -v '^socks-edge-' || true)

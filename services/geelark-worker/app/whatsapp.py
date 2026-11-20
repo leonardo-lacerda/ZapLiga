@@ -189,6 +189,9 @@ def build_screens(app: WhatsAppApp) -> tuple[tuple[Screen, tuple[dict, ...]], ..
     screens: list[tuple[Screen, tuple[dict, ...]]] = [
         (Screen.BANNED, ({"textMatches": BANNED_TEXT},)),
         (Screen.UNDER_REVIEW, ({"textMatches": UNDER_REVIEW_TEXT},)),
+        # A lista de métodos vem antes da espera: nela, "Receber SMS / Tente novamente em 3 horas"
+        # é só o SMS bloqueado, e a ligação de voz continua disponível.
+        (Screen.VERIFY_METHOD, ({"textMatches": SMS_METHOD_TEXT}, {"textMatches": CALL_METHOD_TEXT})),
         (Screen.WAIT_LIMIT, ({"textMatches": WAIT_LIMIT_TEXT},)),
         (Screen.NO_INTERNET, ({"textMatches": NO_INTERNET_TEXT},)),
         (Screen.PHONE_HINT, ({"textMatches": PHONE_HINT_TITLE}, {"textMatches": NONE_OF_ABOVE_TEXT})),
@@ -206,7 +209,6 @@ def build_screens(app: WhatsAppApp) -> tuple[tuple[Screen, tuple[dict, ...]], ..
         screens.append((Screen.USE_OTHER_NUMBER, ({"textMatches": OTHER_NUMBER_TEXT},)))
     screens += [
         (Screen.PHONE_ENTRY, ({"resourceId": w + "registration_phone"},)),
-        (Screen.VERIFY_METHOD, ({"textMatches": SMS_METHOD_TEXT}, {"textMatches": CALL_METHOD_TEXT})),
         # Depois da lista de métodos: se a lista também oferecer "outra forma", escolhe o SMS nela.
         (Screen.MISSED_CALL_INTRO, ({"textMatches": OTHER_VERIFY_TEXT},)),
         (Screen.EULA, ({"resourceId": w + "eula_accept"}, {"textMatches": EULA_TEXT})),

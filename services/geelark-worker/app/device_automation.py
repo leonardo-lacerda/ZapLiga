@@ -34,6 +34,10 @@ from .geelark_api import (
 )
 from . import whatsapp as wa
 from .whatsapp import Screen
+from .copilot import Copilot
+from .screen_archive import ScreenArchive
+from .screen_learning import LearnedScreens, fingerprint, parse_elements
+from .screen_resolver import ScreenOps, ScreenResolver
 
 # Telas que só aparecem depois de o WhatsApp aceitar o código.
 AFTER_CODE_SCREENS = frozenset({Screen.PROFILE_NAME, Screen.CHATS, Screen.BUSINESS_CATEGORY,
@@ -95,8 +99,14 @@ FOREGROUND_ALLOWED = frozenset({
 MAX_RELAUNCHES = 3
 
 
+# Tela desconhecida com o copiloto ligado: espera só isso (transição) antes de chamar a IA.
+AI_GRACE_S = 8
+
+
 class GeeLarkAutomation:
-    def __init__(self, api: GeeLarkAPI, spec: JobSpec, ctx: JobContext):
+    def __init__(self, api: GeeLarkAPI, spec: JobSpec, ctx: JobContext,
+                 memory: LearnedScreens | None = None, copilot: Copilot | None = None,
+                 archive: ScreenArchive | None = None):
         self.api = api
         self.spec = spec
         self.ctx = ctx
@@ -111,6 +121,13 @@ class GeeLarkAutomation:
         self.egress_tool_missing = False           # sem curl/wget/nc: não dá para conferir o IP
         self._ip_tool_name: str | None = None
         self._reset_done = False  # "apagar o app" do cadastro já feito (não repete ao tentar de novo)
+        # Tela desconhecida: memória de telas e copiloto de IA antes de chamar o operador.
+        self.resolver = (ScreenResolver(memory, copilot, self.app.key, spec.job_id, note=ctx.note)
+                         if memory is not None or copilot is not None else None)
+        self._goal = ""  # objetivo da etapa atual (para a IA e para a memória)
+        self.archive = archive
+        self._archived_fp = ""
+        self._app_version: str | None = None
 
     # ----------------------------------------------------------------- utils
     def _pause(self, lo: float = 1.0, hi: float = 2.5) -> None:
@@ -364,11 +381,14 @@ class GeeLarkAutomation:
         """Detecta a tela em loop e age até chegar em uma das `targets`."""
         handlers = {**self._common_actions(), **(actions or {})}
         deadline = time.monotonic() + timeout
+        self._goal = (f"{what or 'continuar o cadastro'}. O robô segue sozinho quando aparecer uma destas telas: "
+                      + ", ".join(sorted(screen.value for screen in targets)))
         last, repeats, unknown_since, relaunches = None, 0, None, 0
         while True:
             self.ctx.check()
             self.ctx.check_takeover()
             screen = wa.detect_screen(self.d, self.app)
+            self._archive_screen(screen)
             if screen in targets:
                 return screen
             now = time.monotonic()
@@ -388,11 +408,24 @@ class GeeLarkAutomation:
                 continue
 
             if screen in (Screen.UNKNOWN, Screen.INITIALIZING):
+                # Tela que a memória já sabe passar: age na hora, sem IA.
+                if screen == Screen.UNKNOWN and self.resolver and self.resolver.try_memory(self._ops(), self._goal):
+                    unknown_since = None
+                    continue
                 # Às vezes é só uma transição: espera um pouco antes de desistir.
                 unknown_since = unknown_since or now
                 grace = unknown_grace if screen == Screen.UNKNOWN else max(unknown_grace, 90)
+                if screen == Screen.UNKNOWN and self.resolver and self.resolver.copilot:
+                    grace = min(grace, AI_GRACE_S)
                 if now - unknown_since > grace:
-                    raise JobError("unknown_screen", f"Tela desconhecida enquanto esperava '{what}'.")
+                    reason = None
+                    if screen == Screen.UNKNOWN and self.resolver:
+                        reason = self.resolver.resolve(self._ops(), self._goal)
+                        if reason is None:
+                            unknown_since = None
+                            continue  # a IA passou da tela: o robô volta a reconhecer
+                    detail = f" A IA tentou e parou: {reason}" if reason and self.resolver and self.resolver.copilot else ""
+                    raise JobError("unknown_screen", f"Tela desconhecida enquanto esperava '{what}'.{detail}")
                 self.ctx.sleep(2)
                 continue
             unknown_since = None
@@ -407,6 +440,53 @@ class GeeLarkAutomation:
             log.info("[%s] tela: %s", self.spec.job_id, screen.value)
             handler()
             self._pause(1.5, 3)
+
+    @property
+    def app_version(self) -> str:
+        """versionName do WhatsApp instalado (vazio se não deu para ler)."""
+        if self._app_version is None:
+            try:
+                self._app_version = str((self.d.app_info(self.app.package) or {}).get("versionName") or "")
+            except Exception:
+                return ""
+        return self._app_version
+
+    def _archive_screen(self, screen: Screen) -> None:
+        """Grava cada tela diferente no arquivo de telas reais (uma vez por versão do app)."""
+        if self.archive is None:
+            return
+        try:
+            xml = self.d.dump_hierarchy()
+            fp = fingerprint(parse_elements(xml))
+            if fp == self._archived_fp:
+                return
+            self._archived_fp = fp
+            self.archive.save(self.app.key, self.app_version, screen.value, fp, wa.scrub_hierarchy(xml), self.screenshot)
+        except Exception as exc:
+            log.info("[%s] tela não arquivada (%s)", self.spec.job_id, type(exc).__name__)
+
+    def _ops(self) -> ScreenOps:
+        def check() -> None:
+            self.ctx.check()
+            self.ctx.check_takeover()
+
+        return ScreenOps(
+            dump=lambda: self.d.dump_hierarchy(),
+            screenshot=self.screenshot,
+            tap=lambda x, y: self.d.click(x, y),
+            back=lambda: self.d.press("back"),
+            scroll=self._scroll,
+            sleep=self.ctx.sleep,
+            check=check,
+            is_known=lambda: wa.detect_screen(self.d, self.app) != Screen.UNKNOWN,
+        )
+
+    def _scroll(self, direction: str) -> None:
+        width, height = self.d.window_size()
+        top, bottom = int(height * 0.3), int(height * 0.7)
+        # Ver o que está mais abaixo = arrastar o dedo de baixo para cima.
+        start, end = (bottom, top) if direction == "down" else (top, bottom)
+        self.d.swipe(width // 2, start, width // 2, end, duration=0.25)
 
     def _app_left(self) -> bool:
         """True quando outro app (não um diálogo do sistema) está na frente do WhatsApp."""
@@ -484,8 +564,18 @@ class GeeLarkAutomation:
                 self._number_submitted_at = time.monotonic()
 
     def _choose_verify_method(self) -> None:
-        # SMS tem preferência; número fixo no Business só recebe por ligação.
-        self._click({"textMatches": wa.SMS_METHOD_TEXT}, {"textMatches": wa.CALL_METHOD_TEXT})
+        # SMS tem preferência; número fixo no Business só recebe por ligação. Com o SMS bloqueado
+        # ("Tente novamente em 3 horas" embaixo dele), a ligação de voz ainda funciona.
+        sms = {"textMatches": wa.SMS_METHOD_TEXT}
+        call = {"textMatches": wa.CALL_METHOD_TEXT}
+        if self._exists({"textMatches": wa.WAIT_LIMIT_TEXT}):
+            if not self._exists(call):
+                self._fail_with_text("wait_limit", wa.WAIT_LIMIT_TEXT, "O WhatsApp bloqueou o SMS por um tempo.")
+            log.info("[%s] SMS bloqueado na lista de métodos; escolhendo a ligação de voz", self.spec.job_id)
+            self.ctx.note("O SMS está bloqueado por um tempo: o código vai chegar por ligação de voz.")
+            self._click(call)
+        else:
+            self._click(sms, call)
         self._click({"textMatches": wa.CONFIRM_TEXT}, timeout=3)
 
     def enter_number(self) -> None:
@@ -723,20 +813,39 @@ class GeeLarkAutomation:
         if kind == "tap":
             # O print aparece reduzido na página: ela manda a posição em proporção (0 a 1).
             width, height = self.d.window_size()
-            self.d.click(int(action["x"] * (width - 1)), int(action["y"] * (height - 1)))
+            x, y = int(action["x"] * (width - 1)), int(action["y"] * (height - 1))
+            before = self._unknown_screen_xml()
+            self.d.click(x, y)
+            if before is not None:
+                self._learn_operator_tap(before, x, y)
         elif kind == "key" and action.get("key") in ("back", "home"):
             self.d.press(action["key"])
         elif kind == "key" and action.get("key") in ("scroll_up", "scroll_down"):
-            width, height = self.d.window_size()
-            top, bottom = int(height * 0.3), int(height * 0.7)
-            # Ver o que está mais abaixo = arrastar o dedo de baixo para cima.
-            start, end = (bottom, top) if action["key"] == "scroll_down" else (top, bottom)
-            self.d.swipe(width // 2, start, width // 2, end, duration=0.25)
+            self._scroll("down" if action["key"] == "scroll_down" else "up")
         elif kind == "text":
             self._type(action["text"])
         else:
             raise JobError("invalid_action", "Ação manual desconhecida.")
         time.sleep(random.uniform(0.6, 1.2))  # deixa a tela reagir antes do próximo print
+
+    def _unknown_screen_xml(self) -> str | None:
+        """XML da tela antes do toque do operador, só se for uma tela que o robô não conhece."""
+        if self.resolver is None or self.resolver.memory is None:
+            return None
+        try:
+            if wa.detect_screen(self.d, self.app) != Screen.UNKNOWN:
+                return None
+            return self.d.dump_hierarchy()
+        except Exception:
+            return None
+
+    def _learn_operator_tap(self, before: str, x: int, y: int) -> None:
+        try:
+            time.sleep(1.5)  # a tela reage antes de conferir se andou
+            assert self.resolver is not None
+            self.resolver.learn_operator_tap(before, x, y, self.d.dump_hierarchy(), self._goal or "ajuda do operador")
+        except Exception as exc:
+            log.info("[%s] toque do operador não aprendido (%s)", self.spec.job_id, type(exc).__name__)
 
     def screenshot(self) -> bytes | None:
         if self.d is None:
@@ -772,7 +881,8 @@ def _safe_state(dev: Any) -> str | None:
         return None
 
 
-def make_factory(api: GeeLarkAPI):
+def make_factory(api: GeeLarkAPI, memory: LearnedScreens | None = None, copilot: Copilot | None = None,
+                 archive: ScreenArchive | None = None):
     def factory(spec: JobSpec, ctx: JobContext) -> GeeLarkAutomation:
-        return GeeLarkAutomation(api, spec, ctx)
+        return GeeLarkAutomation(api, spec, ctx, memory, copilot, archive)
     return factory
