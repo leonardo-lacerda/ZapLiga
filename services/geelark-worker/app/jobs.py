@@ -665,6 +665,14 @@ class JobManager:
         return (f"O PC está saindo normalmente (IP {pc_ip}), mas o phone não conseguiu usar o proxy até ele.{detail} "
                 "Tente de novo em 1 minuto; se repetir, o problema está entre o GeeLark e a VPS.")
 
+    def _check_blocked(self, job: Job, ip: str) -> None:
+        """Cadastro (não teste de rede nem sessão) por um IP que a API barrou: para antes do WhatsApp."""
+        if job.spec.mode != "register":
+            return
+        reason = dict(job.spec.blocked_egress_ips).get(ip)
+        if reason:
+            raise JobError("egress_limited", f"O PC está saindo pelo IP {ip}. {reason}")
+
     def _probe_pc_ip(self, job: Job) -> str:
         """IP do PC visto pelo probeProxy; sem resposta = egress_offline (contrato §4)."""
         spec = job.spec
@@ -688,6 +696,7 @@ class JobManager:
         if not expected_ips and spec.probe_proxy is not None:
             # Antes de mexer no phone: o PC está saindo para a internet? Por qual IP?
             expected_ips = (self._probe_pc_ip(job),)
+            self._check_blocked(job, expected_ips[0])
             ctx.check()
         auto.set_network()
         ctx.check()
@@ -709,6 +718,7 @@ class JobManager:
             raise JobError("no_internet", self._no_internet_message(job, auto))
         with self._lock:
             job.egress_ip = ip
+        self._check_blocked(job, ip)
         if expected_ips and ip not in expected_ips:
             raise JobError(
                 "egress_mismatch",
@@ -727,24 +737,41 @@ class JobManager:
             self._finish(job, "done", None, f"Internet ok: o phone sai pelo IP {ip}{same}.", step="network_ok")
             return
 
-        if not apps.get(spec.app):
-            self._set_step(job, "installing_app")
-            auto.install_app()
-            with self._lock:
-                self._apps.setdefault(spec.phone_id, {})[spec.app] = True
+        point = "restart"
+        if spec.resume and apps.get(spec.app):
+            self._set_step(job, "resuming", "Retomando o cadastro de onde o WhatsApp parou.")
+            point = auto.resume_point()
             ctx.check()
 
-        self._set_step(job, "opening_app")
-        self._with_help(job, ctx, auto, "opening_app", auto.open_app)
+        if point == "restart":
+            if not apps.get(spec.app):
+                self._set_step(job, "installing_app")
+                auto.install_app()
+                with self._lock:
+                    self._apps.setdefault(spec.phone_id, {})[spec.app] = True
+                ctx.check()
+
+            self._set_step(job, "opening_app")
+            self._with_help(job, ctx, auto, "opening_app", auto.open_app)
         version = getattr(auto, "app_version", "") or None
         if version:
             with self._lock:
                 job.app_version = str(version)[:40]
         ctx.check()
 
-        self._set_step(job, "entering_number")
-        self._with_help(job, ctx, auto, "entering_number", auto.enter_number)
+        if point == "restart":
+            self._set_step(job, "entering_number")
+            self._with_help(job, ctx, auto, "entering_number", auto.enter_number)
+        if point in ("restart", "code"):
+            self._sms_loop(job, ctx, auto)
+        elif point == "profile":
+            self._set_step(job, "verifying")
+            self._with_help(job, ctx, auto, "verifying", auto.finish_verification)
 
+        warning = self._profile(job, ctx, auto) if point != "chats" else None
+        self._link(job, ctx, auto, warning)
+
+    def _sms_loop(self, job: Job, ctx: JobContext, auto: PhoneAutomation) -> None:
         message = None
         attempts = 0
         while True:
@@ -792,6 +819,7 @@ class JobManager:
                 continue
             message = result.message or "Código incorreto. Confira o SMS e digite de novo."
 
+    def _profile(self, job: Job, ctx: JobContext, auto: PhoneAutomation) -> str | None:
         while (inp := self._wait_input(job, ctx, "waiting_profile", "profile"))["type"] == "take_over":
             self._operator_turn(job, ctx, auto, "waiting_profile")
         self._set_step(job, "saving_profile")
@@ -799,7 +827,9 @@ class JobManager:
         warning = self._with_help(job, ctx, auto, "saving_profile", lambda: auto.save_profile(name, photo, photo_mime))
         del photo
         del inp
+        return warning
 
+    def _link(self, job: Job, ctx: JobContext, auto: PhoneAutomation, warning: str | None) -> None:
         registered_msg = "Número cadastrado." + (f" {warning}" if warning else "")
         while (inp := self._wait_input(job, ctx, "registered", "link_decision", registered_msg))["type"] == "take_over":
             self._operator_turn(job, ctx, auto, "registered")

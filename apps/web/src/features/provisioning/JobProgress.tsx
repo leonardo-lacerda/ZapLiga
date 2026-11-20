@@ -8,6 +8,7 @@ import { createObjectUrl, revokeObjectUrl } from './objectUrl';
 import { cancelJob, fetchJobScreenshot, requestNewCode, resumeRobot, submitLinkDecision, submitProfile, submitSmsCode, takeOverJob } from './provisioning.api';
 import { appLabels, errorExplanation, formatPhone, isControl, isJobActive, isNetworkCheck, splitJobNumber, statusLabels, statusTone, stepLabel } from './provisioning.labels';
 import type { Job, WizardPrefill } from './provisioning.types';
+import { useDialog } from './useDialog';
 import { JOB_POLL_INTERVAL_MS, useProvisioningJob } from './useProvisioningJob';
 
 type Props = {
@@ -38,6 +39,7 @@ export function JobProgress({ tenantId, jobId, pollIntervalMs = JOB_POLL_INTERVA
   const [actionError, setActionError] = useState('');
   const [cancelling, setCancelling] = useState(false);
   const [takingOver, setTakingOver] = useState(false);
+  const [dialog, ask] = useDialog();
 
   const run = async (action: () => Promise<Job>) => {
     setActionError('');
@@ -46,7 +48,9 @@ export function JobProgress({ tenantId, jobId, pollIntervalMs = JOB_POLL_INTERVA
   };
 
   const cancel = async () => {
-    if (!window.confirm(isNetworkCheck(job ?? {}) ? 'Cancelar este teste? O phone é desligado.' : 'Cancelar este cadastro? O robô para e o phone é desligado.')) return;
+    const test = isNetworkCheck(job ?? {});
+    if (!(await ask({ title: test ? 'Cancelar este teste?' : 'Cancelar este cadastro?', confirmLabel: test ? 'Cancelar teste' : 'Cancelar cadastro', danger: true,
+      body: test ? 'O phone é desligado.' : 'O robô para e o phone é desligado.' }))) return;
     setCancelling(true);
     try { await run(() => cancelJob(tenantId, jobId)); } finally { setCancelling(false); }
   };
@@ -74,6 +78,7 @@ export function JobProgress({ tenantId, jobId, pollIntervalMs = JOB_POLL_INTERVA
     try { await run(() => takeOverJob(tenantId, jobId)); } finally { setTakingOver(false); }
   };
   return <div className="provisioning-progress-layout">
+    {dialog}
     <Panel className="provisioning-progress">
       <div className="detail-heading">
         <div>

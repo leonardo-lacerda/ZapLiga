@@ -33,11 +33,13 @@ const makeDb = () => {
   const numbers = new Map<string, any>();
   const assignments = new Map<string, string>();
   const users = new Map<string, string>([['user-ana', 'Ana'], [USER, 'Líder']]);
+  const ipRows: any[] = [];
   const query = jest.fn(async (sql: string, params: any[] = []) => {
     const text = sql.replace(/\s+/g, ' ').trim();
+    if (text.startsWith('SELECT egress_ip AS ip')) return { rows: ipRows };
     if (text.startsWith('INSERT INTO provisioning_jobs')) {
-      const [id, tenant_id, created_by, egress_node, geelark_phone_id, phone_name, mode, app, phone, power_off_when_done] = params;
-      const row = { id, tenant_id, created_by, egress_node, geelark_phone_id, phone_name, mode, app, phone, status: 'running', step: 'queued', awaiting: null, message: null, error_code: null, egress_ip: null, has_screenshot: false, history: [], linked: false, number_id: null, link_started_at: null, power_off_when_done, created_at: new Date(), updated_at: new Date(), finished_at: null };
+      const [id, tenant_id, created_by, egress_node, geelark_phone_id, phone_name, mode, app, phone, power_off_when_done, country_code] = params;
+      const row = { id, tenant_id, created_by, egress_node, geelark_phone_id, phone_name, mode, app, phone, country_code, resume_count: 0, status: 'running', step: 'queued', awaiting: null, message: null, error_code: null, egress_ip: null, has_screenshot: false, history: [], linked: false, number_id: null, link_started_at: null, power_off_when_done, created_at: new Date(), updated_at: new Date(), finished_at: null };
       jobs.set(id, row);
       return { rows: [{ ...row }] };
     }
@@ -76,6 +78,12 @@ const makeDb = () => {
       row.number_id = params[2];
       return { rows: [{ ...row }] };
     }
+    if (text.startsWith('UPDATE provisioning_jobs SET resume_count')) {
+      const row = jobs.get(params[0]);
+      if (!row || row.tenant_id !== params[1] || row.finished_at || row.resume_count !== params[2]) return { rows: [] };
+      row.resume_count += 1;
+      return { rows: [{ ...row }] };
+    }
     if (text.startsWith('DELETE FROM provisioning_jobs')) { jobs.delete(params[0]); return { rows: [] }; }
     if (text.startsWith('SELECT id, waxum_session_id')) {
       const row = numbers.get(params[0]);
@@ -90,7 +98,7 @@ const makeDb = () => {
     if (text.startsWith('DELETE FROM provisioning_egress_nodes')) { assignments.delete(`${params[0]}|${params[1]}`); return { rows: [] }; }
     throw new Error(`unexpected SQL: ${text.slice(0, 80)}`);
   });
-  return { query, jobs, numbers, assignments };
+  return { query, jobs, numbers, assignments, ipRows };
 };
 
 const makeService = (options: { tailscaleConnected?: boolean; pcs?: Pc[] } = {}) => {
@@ -274,7 +282,7 @@ describe('WhatsappProvisioningService — job creation', () => {
     expect(ctx.entitlement.assertAction).toHaveBeenCalledWith(TENANT, 'write', USER);
     expect(ctx.egress.pcExits).toHaveBeenCalledWith(PC_ID);
     expect(ctx.worker.createJob).toHaveBeenCalledWith({
-      jobId: job.id, phoneId: 'phone-1', mode: 'register', app: 'whatsapp', countryCode: '55', number: '11987654321', resetApp: false,
+      jobId: job.id, phoneId: 'phone-1', mode: 'register', app: 'whatsapp', countryCode: '55', number: '11987654321', resetApp: false, blockedEgressIps: {},
       proxy: { typeId: 1, server: '209.50.229.249', port: 1080, username: 'edge-1', password: 'gateway-secret' },
       probeProxy: { server: 'socks-gateway', port: 1080, username: 'edge-1', password: 'gateway-secret' },
       expectedEgressIps: [], powerOffWhenDone: true,
@@ -352,9 +360,40 @@ describe('WhatsappProvisioningService — sync', () => {
     expect(actions(ctx.audit).filter((action) => action === 'provisioning.registered')).toHaveLength(1);
   });
 
+  it('tells the worker which IPs a registration may not go out through', async () => {
+    const ctx = makeService();
+    ctx.db.ipRows.push(
+      { ip: '131.255.254.90', today: 1, banned_at: new Date(Date.now() - 3_600_000) },  // banido há 1 h
+      { ip: '45.172.112.163', today: 3, banned_at: null },                              // limite do dia
+      { ip: '200.1.1.1', today: 1, banned_at: new Date(Date.now() - 72 * 3_600_000) },  // quarentena acabou
+    );
+    await startJob(ctx);
+    const blocked = ctx.worker.createJob.mock.calls[0][0].blockedEgressIps;
+    expect(Object.keys(blocked).sort()).toEqual(['131.255.254.90', '45.172.112.163']);
+    expect(blocked['131.255.254.90']).toMatch(/quarentena por mais 47 h/);
+    expect(blocked['45.172.112.163']).toMatch(/3 cadastros nas últimas 24 h \(limite 3\)/);
+  });
+
+  it('resumes a registration the worker forgot (restart) from where WhatsApp stopped', async () => {
+    const ctx = makeService();
+    const id = await startJob(ctx);
+    ctx.worker.createJob.mockClear();
+    ctx.worker.getJob.mockResolvedValue(null);
+    ctx.worker.createJob.mockResolvedValue(workerJob({ jobId: id, status: 'running', step: 'resuming' }));
+
+    const job = await ctx.service.getJob(TENANT, USER, id);
+
+    expect(job).toMatchObject({ status: 'running', step: 'resuming' });
+    expect(ctx.worker.createJob).toHaveBeenCalledWith(expect.objectContaining({ jobId: id, resume: true, countryCode: '55', number: '11987654321', app: 'whatsapp' }));
+    expect(ctx.db.jobs.get(id).resume_count).toBe(1);
+    expect(ctx.worker.stopPhone).not.toHaveBeenCalled();
+    expect(actions(ctx.audit)).toContain('provisioning.resumed');
+  });
+
   it('marks an unfinished job the worker forgot as failed/worker_lost and stops the phone', async () => {
     const ctx = makeService();
     const id = await startJob(ctx);
+    ctx.db.jobs.get(id).resume_count = 2;  // já retomado o máximo de vezes
     ctx.worker.getJob.mockResolvedValue(null);
 
     const job = await ctx.service.getJob(TENANT, USER, id);
@@ -664,7 +703,7 @@ describe('WhatsappProvisioningService — link to ZapLiga', () => {
   it('the sweep powers off the phone of a job the worker lost, and only one API instance sweeps', async () => {
     const ctx = makeService();
     const id = await startJob(ctx);
-    ctx.db.jobs.get(id).updated_at = new Date(Date.now() - 60_000);
+    Object.assign(ctx.db.jobs.get(id), { updated_at: new Date(Date.now() - 60_000), resume_count: 2 });
     ctx.worker.getJob.mockResolvedValue(null);
 
     await ctx.service.sweepOpenJobs();

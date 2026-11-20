@@ -835,3 +835,61 @@ def test_control_session_ends_after_inactivity_but_touches_keep_it_open():
     job = finished(manager, "job-1")
     assert (job.status, job.step) == ("done", "control_ended") and "por tempo" in job.message
     assert "power_off" in factory.instances["job-1"].calls
+
+
+
+class ResumeFactory(FakeFactory):
+    """O worker reiniciou e a API recriou o cadastro: o WhatsApp está parado em `point`."""
+
+    def __init__(self, point):
+        super().__init__()
+        self.point = point
+
+    def __call__(self, spec, ctx):
+        auto = super().__call__(spec, ctx)
+        auto.resume_at = self.point
+        return auto
+
+
+@pytest.mark.parametrize("point, first_wait, skipped", [
+    ("code", "sms", {"open_app", "enter_number", "finish_verification"}),
+    ("profile", "profile", {"open_app", "enter_number", "submit_sms_code"}),
+    ("chats", "link_decision", {"open_app", "enter_number", "submit_sms_code", "save_profile"}),
+])
+def test_a_resumed_job_carries_on_where_whatsapp_stopped(point, first_wait, skipped):
+    factory = ResumeFactory(point)
+    manager = JobManager(factory, input_timeout_s=5, job_timeout_s=10)
+    manager.create(make_spec(resume=True))
+    awaiting(manager, "job-1", first_wait)
+    calls = factory.instances["job-1"].calls
+    assert "resume_point" in calls and not skipped & set(calls)
+    assert any(h["step"] == "resuming" for h in manager.get("job-1").history)
+    manager.cancel("job-1")
+
+
+def test_a_resume_that_finds_another_screen_starts_over():
+    factory = ResumeFactory("restart")
+    manager = JobManager(factory, input_timeout_s=5, job_timeout_s=10)
+    manager.create(make_spec(resume=True))
+    awaiting(manager, "job-1", "sms")
+    calls = factory.instances["job-1"].calls
+    assert calls.index("resume_point") < calls.index("open_app") < calls.index("enter_number")
+    manager.cancel("job-1")
+
+
+def test_a_blocked_ip_stops_the_registration_before_touching_the_phone():
+    factory = FakeFactory()
+    manager = JobManager(factory, input_timeout_s=5, job_timeout_s=10)
+    manager.create(make_spec(blocked_egress_ips=(("203.0.113.7", "Este IP já fez 3 cadastros nas últimas 24 h."),)))
+    wait_for(lambda: manager.get("job-1").terminal)
+    job = manager.get("job-1")
+    assert job.error_code == "egress_limited" and "203.0.113.7" in job.message and "3 cadastros" in job.message
+    assert "open_app" not in factory.instances["job-1"].calls
+
+
+def test_a_blocked_ip_does_not_stop_a_network_check():
+    factory = FakeFactory()
+    manager = JobManager(factory, input_timeout_s=5, job_timeout_s=10)
+    manager.create(make_spec(mode="network_check", app="", blocked_egress_ips=(("203.0.113.7", "x"),)))
+    wait_for(lambda: manager.get("job-1").terminal)
+    assert manager.get("job-1").status == "done"

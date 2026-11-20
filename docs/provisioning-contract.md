@@ -61,6 +61,8 @@ Base: `GEELARK_WORKER_URL` (ex.: `http://geelark-worker:8080`). Toda rota exige 
 |---|---|---|
 | `GET /health` | — | `{ "ok": true }` |
 | `GET /drain` | — | `{ draining, active }` |
+| — `POST /jobs` com `resume: true` | | Cadastro que o worker perdeu (reinício) recriado pela API: não desliga o phone nem troca o proxy, abre o WhatsApp sem apagar e continua de onde ele está (step `resuming`): tela do código **deste** número → espera o SMS; perfil → segue do perfil; conversas → decisão de conectar; qualquer outra → recomeça. A API retoma no máximo 2 vezes (`resume_count`) e nunca no pareamento; depois disso, `worker_lost` como antes |
+| — `POST /jobs` com `blockedEgressIps` | | `{ IP: motivo }`. O worker confere o IP do PC (probe) e o do phone; num IP barrado, um cadastro (não teste nem sessão) falha com `egress_limited` antes de abrir o WhatsApp. A API barra o IP com `PROVISIONING_MAX_JOBS_PER_IP_DAY` cadastros em 24 h (padrão 3) ou com número banido há menos de `PROVISIONING_IP_QUARANTINE_HOURS` (padrão 48); 0 desliga cada regra |
 | `POST /drain` | `?on=true\|false` | `{ draining, active }`. Deploy: com `draining`, `POST /jobs` responde `503 worker_draining` e os cadastros em andamento seguem até o fim; o deploy espera `active = 0` (até 25 min) antes de trocar a imagem |
 | `GET /phones` | — | `{ "items": [Phone] }` |
 | `GET /learned-screens` | — | `{ items: [{ key, app, action, source: ai\|operator, successes, failures, trusted, screen: [textos], goal, last_seen }], trusted, copilot }` (memória de telas desconhecidas; ver o README do worker) |

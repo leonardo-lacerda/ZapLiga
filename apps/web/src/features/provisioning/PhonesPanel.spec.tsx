@@ -23,7 +23,6 @@ it('mostra quem está ligado, o custo por hora e desliga com confirmação', asy
       return HttpResponse.json(phones.find((item) => item.id === params.id));
     }),
   );
-  const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true);
   render(<PhonesPanel tenantId="tenant-1" refreshMs={60_000} />);
 
   expect(await screen.findByText('2 telefones ligados')).toBeInTheDocument();
@@ -32,8 +31,10 @@ it('mostra quem está ligado, o custo por hora e desliga com confirmação', asy
   expect(screen.queryByRole('button', { name: 'Desligar WhatsApp 3' })).not.toBeInTheDocument();
 
   await userEvent.click(screen.getByRole('button', { name: 'Desligar WhatsApp 1' }));
-  expect(confirm).toHaveBeenCalledWith('Desligar WhatsApp 1?');
+  const dialog = screen.getByRole('dialog', { name: 'Desligar WhatsApp 1?' });
+  await userEvent.click(within(dialog).getByRole('button', { name: 'Desligar' }));
   expect(await screen.findByText('1 telefone ligado')).toBeInTheDocument();
+  expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
   expect(stopped).toEqual(['p1']);
 
   const row = screen.getByText('WhatsApp 1').closest('li')!;
@@ -52,12 +53,13 @@ it('avisa que desligar cancela o cadastro em andamento e desliga todos de uma ve
       return HttpResponse.json(phones.find((item) => item.id === params.id));
     }),
   );
-  const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true);
   render(<PhonesPanel tenantId="tenant-1" refreshMs={60_000} />);
 
   expect(await screen.findByText(/em uso agora/)).toBeInTheDocument();
   await userEvent.click(screen.getByRole('button', { name: 'Desligar todos' }));
-  expect(confirm.mock.calls[0][0]).toMatch(/WhatsApp 1 está no meio de um cadastro ou sessão, que será encerrado/);
+  const dialog = screen.getByRole('dialog', { name: 'Desligar 2 telefones?' });
+  expect(within(dialog).getByText(/WhatsApp 1 está no meio de um cadastro ou sessão, que será encerrado/)).toBeInTheDocument();
+  await userEvent.click(within(dialog).getByRole('button', { name: 'Desligar' }));
   expect(await screen.findByText('Nenhum telefone ligado: nada sendo cobrado agora.')).toBeInTheDocument();
 });
 
@@ -67,10 +69,11 @@ it('não desliga quando o usuário desiste', async () => {
     http.get(`${API}/phones`, () => HttpResponse.json({ items: [phone({ id: 'p1', name: 'WhatsApp 1', status: 'on' })] })),
     http.post(`${API}/phones/:id/stop`, () => { stop(); return HttpResponse.json({}); }),
   );
-  vi.spyOn(window, 'confirm').mockReturnValue(false);
   render(<PhonesPanel tenantId="tenant-1" refreshMs={60_000} />);
 
   await userEvent.click(await screen.findByRole('button', { name: 'Desligar WhatsApp 1' }));
+  await userEvent.keyboard('{Escape}');
+  expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
   expect(stop).not.toHaveBeenCalled();
   expect(screen.getByText('1 telefone ligado')).toBeInTheDocument();
 });
@@ -119,28 +122,32 @@ it('renomeia, gera aparelho novo com confirmação e apaga só com o nome digita
     http.post(`${API}/phones/:id/new-device`, ({ params }) => { calls.push(`new:${params.id}`); return HttpResponse.json(phones[0]); }),
     http.delete(`${API}/phones/:id`, ({ params }) => { calls.push(`delete:${params.id}`); phones = []; return HttpResponse.json({ ok: true }); }),
   );
-  const prompt = vi.spyOn(window, 'prompt');
-  const confirm = vi.spyOn(window, 'confirm');
   render(<PhonesPanel tenantId="tenant-1" refreshMs={60_000} />);
 
-  prompt.mockReturnValueOnce('WhatsApp 4');
   await userEvent.click(await screen.findByRole('button', { name: 'Renomear WhatsApp 3' }));
+  const field = within(screen.getByRole('dialog')).getByLabelText('Novo nome');
+  await userEvent.clear(field);
+  await userEvent.type(field, 'WhatsApp 4{Enter}');
   expect(await screen.findByText('WhatsApp 4')).toBeInTheDocument();
 
-  confirm.mockReturnValueOnce(false);
   await userEvent.click(screen.getByRole('button', { name: 'Gerar aparelho novo para WhatsApp 4' }));
-  expect(confirm.mock.calls[0][0]).toMatch(/troca a marca, o modelo e o número do SIM/);
-  confirm.mockReturnValueOnce(true);
+  let dialog = screen.getByRole('dialog');
+  expect(within(dialog).getByText(/troca a marca, o modelo e o número do SIM/)).toBeInTheDocument();
+  await userEvent.click(within(dialog).getByRole('button', { name: 'Voltar' }));
+  expect(calls).not.toContain('new:p3');
   await userEvent.click(screen.getByRole('button', { name: 'Gerar aparelho novo para WhatsApp 4' }));
+  await userEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Gerar aparelho novo' }));
   await vi.waitFor(() => expect(calls).toContain('new:p3'));
 
-  prompt.mockReturnValueOnce('outro nome');
+  // Apagar só libera com o nome exato digitado.
   await userEvent.click(screen.getByRole('button', { name: 'Apagar WhatsApp 4' }));
-  expect(await screen.findByText(/o nome digitado não confere; nada foi apagado/)).toBeInTheDocument();
-  expect(calls).not.toContain('delete:p3');
-
-  prompt.mockReturnValueOnce('WhatsApp 4');
-  await userEvent.click(screen.getByRole('button', { name: 'Apagar WhatsApp 4' }));
+  dialog = screen.getByRole('dialog');
+  const confirmDelete = within(dialog).getByRole('button', { name: 'Apagar de vez' });
+  await userEvent.type(within(dialog).getByLabelText('Para confirmar, digite WhatsApp 4'), 'outro nome');
+  expect(confirmDelete).toBeDisabled();
+  await userEvent.clear(within(dialog).getByLabelText('Para confirmar, digite WhatsApp 4'));
+  await userEvent.type(within(dialog).getByLabelText('Para confirmar, digite WhatsApp 4'), 'WhatsApp 4');
+  await userEvent.click(confirmDelete);
   expect(await screen.findByText(/Nenhum telefone no GeeLark ainda/)).toBeInTheDocument();
   expect(calls).toEqual(['rename:p3:WhatsApp 4', 'new:p3', 'delete:p3']);
 });

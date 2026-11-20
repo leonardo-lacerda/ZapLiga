@@ -33,7 +33,8 @@ const NODE_ID = /^[A-Za-z0-9][A-Za-z0-9-]{0,63}$/;
 export type ProvisioningJobRow = {
   id: string; tenant_id: string; created_by: string | null; egress_node: string; geelark_phone_id: string; phone_name: string | null;
   mode?: JobMode | null; app: 'whatsapp' | 'business' | null; phone: string | null; status: string; step: string; awaiting: string | null; message: string | null;
-  error_code: string | null; egress_ip: string | null; app_version?: string | null; has_screenshot: boolean; history: unknown; linked: boolean; number_id: string | null;
+  error_code: string | null; egress_ip: string | null; app_version?: string | null; has_screenshot: boolean;
+  resume_count?: number | null; country_code?: string | null; history: unknown; linked: boolean; number_id: string | null;
   link_started_at: Date | string | null; created_at: Date | string; updated_at: Date | string; finished_at: Date | string | null;
   power_off_when_done?: boolean | null;
 };
@@ -76,6 +77,14 @@ const registeredPhone = (row: ProvisioningJobRow) => {
   if (!row.phone) throw new ConflictException({ statusCode: 409, code: 'not_a_registration', message: 'Este job só testou a internet do telefone; não há número para conectar.' });
   return row.phone;
 };
+
+const envInt = (name: string, fallback: number) => {
+  const value = Number.parseInt(String(process.env[name] ?? ''), 10);
+  return Number.isFinite(value) && value >= 0 ? value : fallback;
+};
+
+// A registration the worker lost (restart) is recreated with `resume` at most this many times.
+const MAX_RESUMES = 2;
 
 const sanitizeHistory = (value: unknown) => (Array.isArray(value) ? value : []).slice(-100).map((entry: any) => ({
   step: String(entry?.step ?? '').slice(0, 60),
@@ -298,12 +307,13 @@ export class WhatsappProvisioningService implements OnModuleInit, OnModuleDestro
     // Always powered off at the end (also after linking): GeeLark bills every minute the phone is on.
     // `powerOffWhenDone` is still accepted from older clients but no longer honoured.
     const powerOffWhenDone = true;
-    const inserted = (await this.db.query(`INSERT INTO provisioning_jobs (id, tenant_id, created_by, egress_node, geelark_phone_id, phone_name, mode, app, phone, status, step, power_off_when_done)
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'running', 'queued', $10) RETURNING *`, [id, tenantId, actorUserId, pc.id, phone.id, phone.name || null, mode, app, fullNumber, powerOffWhenDone])).rows[0] as ProvisioningJobRow;
+    const inserted = (await this.db.query(`INSERT INTO provisioning_jobs (id, tenant_id, created_by, egress_node, geelark_phone_id, phone_name, mode, app, phone, status, step, power_off_when_done, country_code)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'running', 'queued', $10, $11) RETURNING *`, [id, tenantId, actorUserId, pc.id, phone.id, phone.name || null, mode, app, fullNumber, powerOffWhenDone, register ? countryCode : null])).rows[0] as ProvisioningJobRow;
     let snapshot: WorkerJob;
     try {
+      const blockedEgressIps = register ? await this.blockedEgressIps() : undefined;
       snapshot = await this.worker.createJob({
-        jobId: id, phoneId: phone.id, mode, ...(register ? { app: input.app, countryCode, number, resetApp: input.resetApp === true } : {}), proxy, probeProxy,
+        jobId: id, phoneId: phone.id, mode, ...(register ? { app: input.app, countryCode, number, resetApp: input.resetApp === true, blockedEgressIps } : {}), proxy, probeProxy,
         // Empty: the worker probes the PC's IP through probeProxy and expects the phone to see the same.
         expectedEgressIps: [], powerOffWhenDone,
       });
@@ -315,6 +325,35 @@ export class WhatsappProvisioningService implements OnModuleInit, OnModuleDestro
     }
     await this.audit.record({ actorUserId, tenantId, action: 'provisioning.started', entityType: 'provisioning_job', entityId: id, metadata: { mode, app, egressNode: pc.id, slot: pc.slot, geelarkPhoneId: phone.id, ...(register && input.resetApp === true ? { resetApp: true } : {}) } });
     return this.toJob(await this.applySnapshot(inserted, snapshot, actorUserId));
+  }
+
+  /**
+   * IPs por onde um cadastro novo não pode sair (o worker confere o IP real do PC antes de
+   * ligar o phone): quem já fez PROVISIONING_MAX_JOBS_PER_IP_DAY cadastros em 24 h, ou teve um
+   * número banido há menos de PROVISIONING_IP_QUARANTINE_HOURS. O IP é físico, então conta os
+   * cadastros de todas as empresas. 0 desliga cada regra.
+   */
+  async blockedEgressIps(): Promise<Record<string, string>> {
+    const perDay = envInt('PROVISIONING_MAX_JOBS_PER_IP_DAY', 3);
+    const quarantineHours = envInt('PROVISIONING_IP_QUARANTINE_HOURS', 48);
+    if (!perDay && !quarantineHours) return {};
+    const rows = (await this.db.query(`SELECT egress_ip AS ip,
+        count(*) FILTER (WHERE created_at > now() - interval '24 hours')::int AS today,
+        max(COALESCE(finished_at, updated_at)) FILTER (WHERE error_code = 'number_banned') AS banned_at
+      FROM provisioning_jobs WHERE COALESCE(mode, 'register') = 'register' AND egress_ip IS NOT NULL
+        AND created_at > now() - make_interval(hours => $1)
+      GROUP BY egress_ip`, [Math.max(24, quarantineHours)])).rows as Array<{ ip: string; today: number; banned_at: Date | string | null }>;
+    const blocked: Record<string, string> = {};
+    for (const row of rows) {
+      const bannedAt = row.banned_at ? new Date(row.banned_at).getTime() : null;
+      const freeAt = bannedAt === null ? null : bannedAt + quarantineHours * 3_600_000;
+      if (quarantineHours && freeAt !== null && freeAt > Date.now()) {
+        blocked[row.ip] = `Um número foi banido saindo por este IP; ele fica em quarentena por mais ${Math.ceil((freeAt - Date.now()) / 3_600_000)} h. Use outro PC.`;
+      } else if (perDay && row.today >= perDay) {
+        blocked[row.ip] = `Este IP já fez ${row.today} cadastros nas últimas 24 h (limite ${perDay}). Use outro PC ou espere.`;
+      }
+    }
+    return blocked;
   }
 
   /**
@@ -506,7 +545,7 @@ export class WhatsappProvisioningService implements OnModuleInit, OnModuleDestro
     if (row.finished_at) return row;
     if (row.step === 'linking') return this.checkLink(row, actorUserId);
     const snapshot = await this.worker.getJob(row.id);
-    if (!snapshot) return this.markWorkerLost(row, actorUserId);
+    if (!snapshot) return this.resumeOrLose(row, actorUserId);
     return this.applySnapshot(row, snapshot, actorUserId);
   }
 
@@ -515,7 +554,7 @@ export class WhatsappProvisioningService implements OnModuleInit, OnModuleDestro
     let snapshot: WorkerJob;
     try { snapshot = await call(); }
     catch (error) {
-      if (error instanceof GeelarkWorkerError && error.getStatus() === HttpStatus.NOT_FOUND) return this.markWorkerLost(row, actorUserId);
+      if (error instanceof GeelarkWorkerError && error.getStatus() === HttpStatus.NOT_FOUND) return this.resumeOrLose(row, actorUserId);
       throw error;
     }
     return this.applySnapshot(row, snapshot, actorUserId);
@@ -577,6 +616,37 @@ export class WhatsappProvisioningService implements OnModuleInit, OnModuleDestro
     return result.rows[0] as ProvisioningJobRow | undefined;
   }
 
+  /**
+   * The worker no longer knows an unfinished job (it restarted: deploy, crash). A registration
+   * is recreated with `resume` (the phone is still on and WhatsApp is parked on a screen), at
+   * most MAX_RESUMES times; anything else is lost as before. The resume_count update is the
+   * claim: when api-a and api-b both notice, only one recreates the job.
+   */
+  private async resumeOrLose(row: ProvisioningJobRow, actorUserId: string | null): Promise<ProvisioningJobRow> {
+    const count = Number(row.resume_count ?? 0);
+    const resumable = (row.mode ?? 'register') === 'register' && row.app && row.phone && row.country_code
+      && count < MAX_RESUMES && !['linking', 'entering_pair_code'].includes(row.step);
+    if (!resumable) return this.markWorkerLost(row, actorUserId);
+    const claimed = (await this.db.query(`UPDATE provisioning_jobs SET resume_count = resume_count + 1, updated_at = now()
+      WHERE id = $1 AND tenant_id = $2 AND finished_at IS NULL AND resume_count = $3 RETURNING *`, [row.id, row.tenant_id, count])).rows[0] as ProvisioningJobRow | undefined;
+    if (!claimed) return this.findRow(row.tenant_id, row.id);
+    try {
+      const { proxy, probeProxy } = await this.onlineEgress(row.egress_node);
+      const countryCode = String(row.country_code);
+      const snapshot = await this.worker.createJob({
+        jobId: row.id, phoneId: row.geelark_phone_id, mode: 'register', app: row.app!, countryCode,
+        number: String(row.phone).slice(countryCode.length), resume: true, proxy, probeProxy,
+        expectedEgressIps: [], powerOffWhenDone: true,
+      });
+      this.logger.log(`Provisioning job ${row.id} resumed after the worker lost it (${count + 1}/${MAX_RESUMES})`);
+      await this.audit.record({ actorUserId, tenantId: row.tenant_id, action: 'provisioning.resumed', entityType: 'provisioning_job', entityId: row.id, metadata: { step: row.step, attempt: count + 1 } });
+      return this.applySnapshot(claimed, snapshot, actorUserId);
+    } catch (error) {
+      this.logger.warn(`Could not resume provisioning job ${row.id}: ${errorMessage(error)}`);
+      return this.markWorkerLost(claimed, actorUserId);
+    }
+  }
+
   private async markWorkerLost(row: ProvisioningJobRow, actorUserId: string | null) {
     const next = await this.finish(row, { status: 'failed', errorCode: 'worker_lost', message: 'O cadastrador reiniciou e perdeu este cadastro. O telefone foi desligado; comece um novo cadastro.' });
     await this.stopPhone(row);
@@ -613,7 +683,7 @@ export class WhatsappProvisioningService implements OnModuleInit, OnModuleDestro
       if (Date.now() >= deadline) return this.failLink(current, actorUserId, 'O telefone não chegou à tela "Conectar com número de telefone" a tempo.');
       await new Promise((resolve) => setTimeout(resolve, this.timing.pollIntervalMs));
       const snapshot = await this.worker.getJob(current.id);
-      if (!snapshot) return this.markWorkerLost(current, actorUserId);
+      if (!snapshot) return this.resumeOrLose(current, actorUserId);
       current = await this.applySnapshot(current, snapshot, actorUserId);
     }
 

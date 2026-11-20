@@ -81,6 +81,12 @@ class FakeAutomation:
         self.calls.append("past_verification")
         return self.verified
 
+    resume_at = "restart"
+
+    def resume_point(self):
+        self.calls.append("resume_point")
+        return self.resume_at
+
     def enter_pair_code(self, code):
         self._do("enter_pair_code")
         self.received["pair_code"] = code

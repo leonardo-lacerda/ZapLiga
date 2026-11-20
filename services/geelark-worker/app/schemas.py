@@ -48,9 +48,13 @@ class CreateWorkerJob(_Body):
     proxy: ProxyIn
     probeProxy: ProbeProxyIn | None = None
     expectedEgressIps: list[str] = Field(default_factory=list, max_length=32)
+    # IPs que a API barrou (muitos cadastros no dia, número banido há pouco): IP -> motivo.
+    blockedEgressIps: dict[str, str] = Field(default_factory=dict, max_length=256)
     powerOffWhenDone: bool = True
     # Apagar o WhatsApp que já está no phone (desconecta a conta que estiver nele).
     resetApp: bool = False
+    # A API recriando um cadastro que o worker perdeu (reinício): continua de onde o WhatsApp está.
+    resume: bool = False
 
     @model_validator(mode="after")
     def register_needs_number(self) -> "CreateWorkerJob":
@@ -71,8 +75,10 @@ class CreateWorkerJob(_Body):
             number=(self.number or "") if register else "",
             proxy=ProxySpec(p.typeId, p.server, p.port, p.username, p.password),
             expected_egress_ips=tuple(ip.strip() for ip in self.expectedEgressIps if ip.strip()),
+            blocked_egress_ips=tuple((ip.strip(), str(why)[:300]) for ip, why in self.blockedEgressIps.items() if ip.strip()),
             power_off_when_done=self.powerOffWhenDone,
-            reset_app=self.resetApp,
+            reset_app=self.resetApp and not self.resume,
+            resume=self.resume and register,
             probe_proxy=(ProbeProxySpec(probe.server, probe.port, probe.username, probe.password)
                          if probe is not None else None),
         )

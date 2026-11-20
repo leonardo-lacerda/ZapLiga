@@ -8,6 +8,7 @@ export const stepLabels: Record<string, string> = {
   connecting_adb: 'Conectando ao phone',
   checking_network: 'Conferindo o IP de saída',
   installing_app: 'Instalando o app',
+  resuming: 'Retomando de onde o WhatsApp parou',
   opening_app: 'Abrindo o app',
   entering_number: 'Digitando o número',
   waiting_sms: 'Aguardando o código SMS',
@@ -69,6 +70,7 @@ export const appLabels: Record<ProvisioningApp, string> = { whatsapp: 'WhatsApp'
 export const errorExplanations: Record<string, { title: string; hint: string }> = {
   egress_offline: { title: 'O PC de saída ficou offline', hint: 'Não foi possível sair para a internet pelo PC escolhido. Confira se ele está ligado e com a Tailscale conectada e tente de novo.' },
   egress_mismatch: { title: 'O IP do phone não bate com o do PC escolhido', hint: 'Por segurança o WhatsApp não foi aberto. Confira a saída do PC escolhido em Admin → Saídas de internet e tente de novo.' },
+  egress_limited: { title: 'Este IP não pode cadastrar agora', hint: 'O IP do PC escolhido já fez cadastros demais hoje ou teve um número banido há pouco. Use outro PC ou espere o tempo indicado.' },
   no_internet: { title: 'O phone ficou sem internet', hint: 'O phone não conseguiu acessar a internet pelo PC escolhido. Confira a saída e tente de novo.' },
   phone_start_failed: { title: 'O phone não ligou', hint: 'O GeeLark não conseguiu ligar este cloud phone. Tente de novo ou escolha outro phone.' },
   adb_failed: { title: 'Não foi possível controlar o phone', hint: 'A conexão de controle (ADB) com o phone falhou. Tente de novo em alguns minutos.' },
@@ -80,7 +82,7 @@ export const errorExplanations: Record<string, { title: string; hint: string }> 
   timeout: { title: 'O cadastro demorou demais', hint: 'Uma etapa passou do tempo limite (ou ninguém respondeu a tempo). Tente de novo.' },
   pair_failed: { title: 'Não foi possível gerar o código de conexão', hint: 'O número foi registrado, mas a conexão por código falhou. Conecte pelo QR Code em Números.' },
   link_timeout: { title: 'A conexão com o ZapLiga não terminou a tempo', hint: 'O número foi registrado e a linha foi criada em Números. Conecte por lá usando o QR Code.' },
-  worker_lost: { title: 'O serviço de cadastro reiniciou', hint: 'O processo foi interrompido no meio e o phone foi desligado. Tente de novo.' },
+  worker_lost: { title: 'O serviço de cadastro reiniciou', hint: 'O processo foi interrompido no meio e não deu para retomar; o phone foi desligado. Tente de novo.' },
   cancelled: { title: 'Cadastro cancelado', hint: 'O processo foi interrompido e o phone foi desligado.' },
   internal: { title: 'Erro interno no cadastro', hint: 'Algo deu errado do nosso lado. Tente de novo; se repetir, avise o suporte.' },
 };

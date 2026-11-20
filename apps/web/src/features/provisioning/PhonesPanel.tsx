@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Badge, Button, Icon, Panel, SectionHeader } from '../../components/ui';
 import { createJob, deletePhone, fetchEgressNodes, fetchPhones, newDevicePhone, renamePhone, stopPhone } from './provisioning.api';
 import type { EgressNode, Phone } from './provisioning.types';
+import { useDialog } from './useDialog';
 
 /** GeeLark cobra por minuto ligado (plano Base: US$ 0,007/min, depois dos minutos grátis). */
 export const PRICE_PER_MINUTE_USD = 0.007;
@@ -32,6 +33,7 @@ export function PhonesPanel({ tenantId, refreshMs = PHONES_REFRESH_MS, onOpenJob
   const [pc, setPc] = useState('');
   const [error, setError] = useState('');
   const [busy, setBusy] = useState<Busy>({});
+  const [dialog, ask] = useDialog();
 
   const load = useCallback(async () => {
     try { setPhones(await fetchPhones(tenantId)); setError(''); }
@@ -71,10 +73,11 @@ export function PhonesPanel({ tenantId, refreshMs = PHONES_REFRESH_MS, onOpenJob
   const powerOff = async (targets: Phone[]) => {
     if (!targets.length) return;
     const inUse = targets.filter((phone) => phone.busyJobId);
-    const question = inUse.length
-      ? `${inUse.map((phone) => phone.name).join(', ')} está no meio de um cadastro ou sessão, que será encerrado. Desligar mesmo assim?`
-      : targets.length > 1 ? `Desligar ${targets.length} telefones?` : `Desligar ${targets[0].name}?`;
-    if (!window.confirm(question)) return;
+    const body = inUse.length
+      ? `${inUse.map((phone) => phone.name).join(', ')} está no meio de um cadastro ou sessão, que será encerrado.`
+      : 'O telefone para de cobrar assim que desligar.';
+    const title = targets.length > 1 ? `Desligar ${targets.length} telefones?` : `Desligar ${targets[0].name}?`;
+    if (!(await ask({ title, body, confirmLabel: 'Desligar', danger: inUse.length > 0 }))) return;
     track(targets.map((phone) => phone.id), 'Desligando…');
     setError('');
     for (const phone of targets) {
@@ -90,28 +93,26 @@ export function PhonesPanel({ tenantId, refreshMs = PHONES_REFRESH_MS, onOpenJob
     onOpenJob?.(job.id);
   });
 
-  const rename = (phone: Phone) => {
-    const name = window.prompt(`Novo nome para ${phone.name}:`, phone.name)?.trim();
+  const rename = async (phone: Phone) => {
+    const answer = await ask({ title: `Renomear ${phone.name}`, body: 'O nome aparece aqui e no GeeLark.', confirmLabel: 'Renomear',
+      input: { label: 'Novo nome', initial: phone.name } });
+    const name = typeof answer === 'string' ? answer : '';
     if (!name || name === phone.name) return;
     void act(phone, 'Renomeando…', async () => { patch(phone.id, await renamePhone(tenantId, phone.id, name)); });
   };
 
-  const newDevice = (phone: Phone) => {
-    if (!window.confirm(
-      `Gerar um aparelho novo para ${phone.name}?\n\n`
-      + 'O GeeLark troca a marca, o modelo e o número do SIM, como um celular novo. O WhatsApp que estiver nele é apagado; '
-      + 'se esse número estiver conectado ao ZapLiga, a linha cai. O telefone é desligado antes.',
-    )) return;
+  const newDevice = async (phone: Phone) => {
+    if (!(await ask({ title: `Gerar um aparelho novo para ${phone.name}?`, confirmLabel: 'Gerar aparelho novo', danger: true,
+      body: 'O GeeLark troca a marca, o modelo e o número do SIM, como um celular novo. O WhatsApp que estiver nele é apagado; '
+        + 'se esse número estiver conectado ao ZapLiga, a linha cai. O telefone é desligado antes.' }))) return;
     void act(phone, 'Gerando aparelho novo…', async () => { patch(phone.id, await newDevicePhone(tenantId, phone.id)); });
   };
 
-  const remove = (phone: Phone) => {
-    const typed = window.prompt(
-      `Apagar ${phone.name} de vez no GeeLark? Não dá para desfazer, e o WhatsApp que estiver nele perde o aparelho principal.\n\n`
-      + 'Para confirmar, digite o nome do telefone:',
-    );
-    if (typed === null) return;
-    if (typed.trim() !== phone.name) { setError(`${phone.name}: o nome digitado não confere; nada foi apagado.`); return; }
+  const remove = async (phone: Phone) => {
+    const typed = await ask({ title: `Apagar ${phone.name} de vez?`, confirmLabel: 'Apagar de vez', danger: true,
+      body: 'Não dá para desfazer, e o WhatsApp que estiver nele perde o aparelho principal.',
+      input: { label: `Para confirmar, digite ${phone.name}`, mustEqual: phone.name } });
+    if (typed !== phone.name) return;
     void act(phone, 'Apagando…', async () => {
       await deletePhone(tenantId, phone.id);
       setPhones((current) => current?.filter((item) => item.id !== phone.id) ?? current);
@@ -123,6 +124,7 @@ export function PhonesPanel({ tenantId, refreshMs = PHONES_REFRESH_MS, onOpenJob
   const anyBusy = Object.keys(busy).length > 0;
 
   return <Panel className="provisioning-phones">
+    {dialog}
     <SectionHeader
       title="Telefones no GeeLark"
       description="Abra, desligue, renomeie, gere um aparelho novo ou apague, sem sair do ZapLiga. Telefone ligado é cobrado por minuto; a lista atualiza a cada 15 segundos."
@@ -164,9 +166,9 @@ export function PhonesPanel({ tenantId, refreshMs = PHONES_REFRESH_MS, onOpenJob
             {isOn(phone)
               ? <Button variant="secondary" icon="close" onClick={() => void powerOff([phone])} disabled={Boolean(working)} aria-label={`Desligar ${phone.name}`}>Desligar</Button>
               : phone.status === 'off' && <Button icon="play" onClick={() => void open(phone)} disabled={locked || !pc} title={pc ? undefined : 'Nenhum PC online'} aria-label={`Abrir ${phone.name}`}>Abrir</Button>}
-            <Button variant="ghost" icon="note" onClick={() => rename(phone)} disabled={Boolean(working)} aria-label={`Renomear ${phone.name}`}>Renomear</Button>
-            <Button variant="ghost" icon="refresh" onClick={() => newDevice(phone)} disabled={locked || phone.status === 'expired'} aria-label={`Gerar aparelho novo para ${phone.name}`}>Aparelho novo</Button>
-            <Button variant="ghost" icon="trash" onClick={() => remove(phone)} disabled={locked} aria-label={`Apagar ${phone.name}`}>Apagar</Button>
+            <Button variant="ghost" icon="note" onClick={() => void rename(phone)} disabled={Boolean(working)} aria-label={`Renomear ${phone.name}`}>Renomear</Button>
+            <Button variant="ghost" icon="refresh" onClick={() => void newDevice(phone)} disabled={locked || phone.status === 'expired'} aria-label={`Gerar aparelho novo para ${phone.name}`}>Aparelho novo</Button>
+            <Button variant="ghost" icon="trash" onClick={() => void remove(phone)} disabled={locked} aria-label={`Apagar ${phone.name}`}>Apagar</Button>
           </div>
         </li>;
       })}

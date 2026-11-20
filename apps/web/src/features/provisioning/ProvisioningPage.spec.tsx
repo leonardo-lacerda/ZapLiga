@@ -13,6 +13,8 @@ beforeEach(() => {
   server.use(
     http.get(`${API}/jobs/:id/screen`, () => new HttpResponse(null, { status: 404 })),
     http.get(`${API}/phones`, () => HttpResponse.json({ items: [] })),
+    http.get(`${API}/egress`, () => HttpResponse.json({ items: [], configured: true })),
+    http.get(`${API}/stats`, () => HttpResponse.json({ days: 30, total: 0, done: 0, failed: 0, cancelled: 0, failuresByError: [], failuresByStep: [], byEgressIp: [], byAppVersion: [], stepDurations: [] })),
   );
 });
 
@@ -162,11 +164,11 @@ it('cancela um cadastro em andamento depois de confirmar', async () => {
     http.get(`${API}/jobs/job-1`, () => HttpResponse.json(cancelled ? job({ status: 'cancelled', step: 'cancelled', errorCode: 'cancelled' }) : job())),
     http.post(`${API}/jobs/job-1/cancel`, () => { cancelled = true; return HttpResponse.json(job({ status: 'cancelled', step: 'cancelled', errorCode: 'cancelled' })); }),
   );
-  const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true);
   render(<JobProgress tenantId="tenant-1" jobId="job-1" pollIntervalMs={POLL_MS} onBack={vi.fn()} onNewJob={vi.fn()} onOpenNumbers={vi.fn()} />);
 
   await userEvent.click(await screen.findByRole('button', { name: 'Cancelar cadastro' }));
-  expect(confirm).toHaveBeenCalled();
+  const dialog = screen.getByRole('dialog', { name: 'Cancelar este cadastro?' });
+  await userEvent.click(within(dialog).getByRole('button', { name: 'Cancelar cadastro' }));
   expect(await screen.findByText('Cadastro cancelado')).toBeInTheDocument();
   expect(cancelled).toBe(true);
 });

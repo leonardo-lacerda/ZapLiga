@@ -165,6 +165,10 @@ class GeeLarkAutomation:
             status = self.api.phone_status(self.phone_id)
             if status == PHONE_EXPIRED:
                 raise JobError("phone_start_failed", "O cloud phone expirou; renove no GeeLark.")
+            if status in (PHONE_STARTED, PHONE_STARTING) and self.spec.resume:
+                # Retomada: o proxy é o mesmo do cadastro e desligar faria o WhatsApp recomeçar a tela.
+                log.info("[%s] retomando com o phone ligado; proxy mantido", self.spec.job_id)
+                return
             if status in (PHONE_STARTED, PHONE_STARTING):
                 log.info("[%s] desligando o phone para trocar o proxy", self.spec.job_id)
                 self.api.stop_phone(self.phone_id)
@@ -621,6 +625,29 @@ class GeeLarkAutomation:
 
     def past_verification(self) -> bool:
         return wa.detect_screen(self.d, self.app) in AFTER_CODE_SCREENS
+
+    def resume_point(self) -> str:
+        self.d.app_start(self.app.package, wait=True)
+        self._pause(2, 4)
+        deadline = time.monotonic() + 40
+        screen = Screen.UNKNOWN
+        while time.monotonic() < deadline:
+            screen = wa.detect_screen(self.d, self.app)
+            if screen not in (Screen.UNKNOWN, Screen.INITIALIZING):
+                break
+            self.ctx.sleep(2)
+        if screen == Screen.VERIFY_CODE:
+            # Só continua se a tela é deste número (os dígitos do número aparecem nela).
+            texts = "".join(re.findall(r"\d", " ".join(e.text for e in parse_elements(self.d.dump_hierarchy()))))
+            point = "code" if self.spec.number[-8:] in texts else "restart"
+        elif screen in AFTER_CODE_SCREENS:
+            point = "profile"
+        elif screen == Screen.CHATS:
+            point = "chats"
+        else:
+            point = "restart"
+        log.info("[%s] retomada: tela %s -> %s", self.spec.job_id, screen.value, point)
+        return point
 
     def finish_verification(self) -> None:
         self._drive({Screen.PROFILE_NAME, Screen.CHATS, Screen.BUSINESS_CATEGORY},

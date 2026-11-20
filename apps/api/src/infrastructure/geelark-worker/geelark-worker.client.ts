@@ -31,9 +31,13 @@ export type CreateWorkerJob = {
   probeProxy?: WorkerProbeProxy;
   /** Empty with `probeProxy`: the worker then expects the IP the probe saw. */
   expectedEgressIps: string[];
+  /** IP -> reason: registrations never go out through these (daily limit, quarantine after a ban). */
+  blockedEgressIps?: Record<string, string>;
   powerOffWhenDone: boolean;
   /** Clear the app's data before opening it, even with an active account (operator's choice). */
   resetApp?: boolean;
+  /** Recreating a job the worker lost (restart): it carries on from where WhatsApp stopped. */
+  resume?: boolean;
 };
 
 export type WorkerJobInput =

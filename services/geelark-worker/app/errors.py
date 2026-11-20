@@ -5,7 +5,7 @@ from __future__ import annotations
 ERROR_CODES = frozenset({
     "egress_offline", "egress_mismatch", "no_internet", "phone_start_failed",
     "adb_failed", "install_failed", "unknown_screen", "number_banned", "sms_rejected", "wait_limit",
-    "timeout", "pair_failed", "link_timeout", "worker_lost", "cancelled", "internal",
+    "egress_limited", "timeout", "pair_failed", "link_timeout", "worker_lost", "cancelled", "internal",
     "manual_takeover",  # interno: o operador assumiu o controle (nunca vira errorCode de job)
 })
 

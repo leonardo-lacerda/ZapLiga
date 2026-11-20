@@ -48,12 +48,17 @@ class JobSpec:
     number: str
     proxy: ProxySpec = field(repr=False)
     expected_egress_ips: tuple[str, ...] = ()
+    # (IP, motivo): o cadastro não sai por estes IPs (limite por dia, quarentena depois de banimento).
+    blocked_egress_ips: tuple[tuple[str, str], ...] = ()
     power_off_when_done: bool = True
     probe_proxy: ProbeProxySpec | None = field(default=None, repr=False)
     # "register" = cadastro completo; "network_check" = só aplica a rede, liga e confere o IP.
     mode: str = "register"
     # Apaga os dados do app antes de abrir, mesmo com uma conta ativa nele (escolha do usuário).
     reset_app: bool = False
+    # Cadastro retomado depois de o worker reiniciar: o phone segue ligado e o WhatsApp parado
+    # numa etapa; o fluxo olha a tela e continua dali, sem pedir código de novo.
+    resume: bool = False
 
     @property
     def full_number(self) -> str:
@@ -139,6 +144,10 @@ class PhoneAutomation(Protocol):
 
     def past_verification(self) -> bool:
         """A tela atual já é de depois do código (o operador verificou na mão)?"""
+
+    def resume_point(self) -> str:
+        """Cadastro retomado: onde o WhatsApp está. "code" (esperando o código deste número),
+        "profile" (código já aceito), "chats" (cadastro pronto) ou "restart" (começa do zero)."""
 
     def request_code(self, method: str) -> str:
         """Na tela do código, pede outro por "sms" ou "voice" (ligação). Só a pedido do usuário:

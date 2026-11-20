@@ -104,6 +104,25 @@ telas gravadas e métricas.
 | **Outros cloud phones** (DuoPlus, VMOS, MoreLogin) | Cobrança por assinatura, mais controle de SIM/GPS | **Não é o gargalo.** Todos oferecem API + ADB parecidos. Trocar de fornecedor não resolve nenhum dos três defeitos principais. |
 | **MCP / CLI do GeeLark** | Assistente de IA cria e liga phones | Não mexe dentro do WhatsApp. Sem uso aqui. |
 
+## O que já foi feito (20/11/2026)
+
+| Item do plano | Situação |
+|---|---|
+| 1. Bug do `WAIT_LIMIT` na tela de método | Feito: a lista de métodos é reconhecida antes da espera; SMS bloqueado → ligação de voz |
+| 2. Gravar toda tela vista com a versão do app | Feito: `screen_archive.py`, em `/data/screens/{app}/{versão}/` |
+| 3. Eventos por etapa | Feito com o histórico que já existia + versão do app no job; painel "Como estão os cadastros" e `GET provisioning/stats` |
+| 4. Deploy que espera os cadastros | Feito: `POST /drain` + espera de até 25 min no deploy quando a imagem do worker muda |
+| 5. Volume, regra `is_trusted`, copiloto | Feito: volume `geelark_worker_data`; confia após 2 acertos da IA ou 1 do operador, sem falha; copiloto liga com `ANTHROPIC_API_KEY` |
+| 6. Estado do job no Postgres, retomável | Feito no essencial: a API (Postgres) recria o cadastro perdido com `resume` e o worker continua de onde o WhatsApp parou |
+| 7. Memória de telas no Postgres | Não feito: com um worker só, o arquivo no volume basta. Necessário só com vários workers |
+| 8. Contrato único | Feito em parte: teste que lê os códigos de erro e etapas do worker e exige rótulo na tela. Tipos ainda escritos à mão |
+| 9. Limite por IP e quarentena | Feito: `blockedEgressIps` (3 por dia, 48 h depois de banimento) |
+| 10. Vários workers e fila | Não feito: depende do item 7 e de decidir onde rodar os workers |
+| 11. Tela ao vivo por vídeo | Não feito: projeto à parte (ws-scrcpy atrás da API) |
+| 12. Modais no lugar de `prompt`/`confirm` | Feito no cadastro (`useDialog`) |
+| 13. Dividir arquivos grandes; UDP | Não feito: mexer só para dividir arrisca quebrar sem ganho imediato; o UDP fica desligado sem uso |
+| 14. Ambiente de teste | Não feito: precisa de um phone e um número só para teste |
+
 ## Plano por fases
 
 **Fase 1 — Base (1 a 2 semanas).** Sem isso, o resto não se sustenta.
