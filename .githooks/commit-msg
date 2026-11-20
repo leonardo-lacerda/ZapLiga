@@ -1,0 +1,47 @@
+#!/bin/sh
+# Every commit says what was done, what got better and what we expect to gain (README, "Commits").
+message_file="$1"
+
+# Lines git strips from the message (comments and the diff `commit -v` adds) do not count.
+message=$(sed -e '/^# -* >8 -*$/,$d' -e '/^#/d' "$message_file")
+subject=$(printf '%s\n' "$message" | sed -n '/[^[:space:]]/{p;q;}')
+
+# Messages git writes itself.
+case "$subject" in
+  Merge\ * | Revert\ * | fixup!\ * | squash!\ * | amend!\ *) exit 0 ;;
+esac
+
+missing=""
+for section in "O que foi feito:" "Melhorias:" "Ganhos esperados:"; do
+  # The heading on a line of its own, then at least one line of text before the next heading.
+  # Trailers such as Co-Authored-By do not count as text.
+  printf '%s\n' "$message" | awk -v heading="$section" '
+    $0 == heading { inside = 1; next }
+    inside && /^(O que foi feito|Melhorias|Ganhos esperados):$/ { exit }
+    inside && /^[A-Za-z-]+-[Bb]y: / { next }
+    inside && /[^[:space:]]/ { found = 1; exit }
+    END { exit !found }
+  ' || missing="$missing
+  - $section"
+done
+
+[ -z "$missing" ] && exit 0
+
+cat >&2 <<HELP
+Commit recusado: a mensagem precisa explicar a mudança em detalhes.
+Faltando (ou sem conteúdo):$missing
+
+Use este modelo:
+
+  tipo(escopo): resumo curto
+
+  O que foi feito:
+  - o que mudou e onde
+
+  Melhorias:
+  - o que ficou melhor para quem usa ou para quem mantém
+
+  Ganhos esperados:
+  - o resultado esperado (menos erros, mais rapidez, mais vendas...)
+HELP
+exit 1

@@ -63,6 +63,27 @@ docker compose up -d --build
 
 Nesse modo, o painel continua disponível em http://localhost:5173 e a API principal em http://localhost:3000.
 
+## Commits
+
+Todo commit precisa explicar em detalhes o que foi feito, o que melhorou e o que se espera ganhar com a mudança. Isso é obrigatório: o hook `commit-msg` (em `.githooks/commit-msg`; o `npm install` aponta o git para essa pasta) recusa a mensagem que não tiver as três seções abaixo, cada uma com pelo menos uma linha de conteúdo.
+
+```text
+tipo(escopo): resumo curto
+
+O que foi feito:
+- o que mudou e em quais partes do sistema
+
+Melhorias:
+- o que ficou melhor para quem usa ou para quem mantém
+
+Ganhos esperados:
+- o resultado esperado com a mudança (menos erros, mais rapidez, mais conversões...)
+```
+
+- O resumo segue o padrão Conventional Commits (`feat`, `fix`, `chore`, `refactor`...).
+- Escreva para quem vai ler o histórico sem ter acompanhado a conversa: diga o problema, a solução e o impacto, não só o nome do arquivo.
+- Mensagens geradas pelo próprio git (merge, revert, fixup) não passam pela verificação.
+
 ## Primeiro acesso
 
 1. Abra `/app/cadastro` — também disponível em `/cadastro` — e crie a empresa e o primeiro organizador (`leader`).
