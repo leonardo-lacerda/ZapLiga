@@ -11,7 +11,7 @@ const rootFiles = new Set([
 const entries = await readdir('.');
 const allowedDirectories = new Set([
   'apps', 'node_modules', 'scripts', 'docs', 'services', 'backups', 'infra',
-  'output', 'tmp', 'Nova pasta', '.git', '.github', '.claude', '.tmp-zapliga-hosting',
+  'output', 'tmp', 'Nova pasta', '.git', '.githooks', '.github', '.claude', '.tmp-zapliga-hosting',
 ]);
 const isTemporaryDeployArtifact = (entry) => entry.startsWith('.deploy-') || entry === '.tmp-waxum-diagnostics';
 const unexpected = entries.filter((entry) => (
