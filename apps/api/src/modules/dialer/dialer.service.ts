@@ -1860,8 +1860,10 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
           // Healthy call (audio/answer reached) — the line is fine; clear any
           // instant-failure streak.
           await this.redis.client.del(`zapcall:line-failures:${resource.numberId}`).catch((error) => this.logger.error(`Could not clear line failure streak for ${callId}: ${safeOperationalError(error)}`));
-        } else if (isInstantFailure(elapsed, this.FLAG_FAST_FAIL_MS)) {
-          // Opened then died instantly with no audio: reachout-block signature.
+        } else if (!resource.finishing && isInstantFailure(elapsed, this.FLAG_FAST_FAIL_MS)) {
+          // Opened then died instantly with no audio: reachout-block signature. A call we are
+          // already ending (the attendant hung up, a timeout) closes the socket itself and says
+          // nothing about the line.
           resource.rapidFailureBackoffSeconds = this.rapidFailureBackoffSeconds;
           await this.registerLineInstantFailure(resource.numberId, resource.tenantId, callId, resource)
             .catch((error) => this.logger.error(`Could not register line failure for ${callId}: ${safeOperationalError(error)}`));
