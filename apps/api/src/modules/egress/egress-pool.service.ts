@@ -19,6 +19,7 @@ const CONNECTED = ['connected', 'online', 'ready', 'authenticated'];
  *   max_numbers_per_pc;
  * - the lines of a PC that has been offline for offline_grace_seconds go to
  *   another online PC; with none, to the VPS if the PC's fallback is `vps`.
+ * Only connected lines move: a disconnected one has no session to hand over.
  * A line never returns on its own to the PC it left, so its IP does not flap.
  */
 @Injectable()
@@ -58,9 +59,12 @@ export class EgressPoolService implements OnModuleInit, OnModuleDestroy {
     const moves: Array<{ line: any; to: string }> = [];
     for (const line of lines) {
       if (moves.length >= MAX_MOVES_PER_TICK) break;
+      // Only a live session can be handed to another Waxum: moving a disconnected line fails
+      // on every tick and, being the oldest, kept the connected lines behind it from moving.
+      if (!CONNECTED.includes(line.status)) continue;
       let to: string | undefined;
       if (line.waxum_node === MAIN_WAXUM_NODE) {
-        if (CONNECTED.includes(line.status)) to = target();
+        to = target();
       } else {
         const pc = pcs.find((row) => row.slot === line.waxum_node);
         // A slot whose PC was removed, or a PC offline past the grace period.
