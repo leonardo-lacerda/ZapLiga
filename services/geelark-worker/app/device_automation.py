@@ -855,6 +855,15 @@ class GeeLarkAutomation:
             raise JobError("invalid_action", "Ação manual desconhecida.")
         time.sleep(random.uniform(0.6, 1.2))  # deixa a tela reagir antes do próximo print
 
+    def screen_elements(self) -> dict[str, Any]:
+        width, height = self.d.window_size()
+        elements = parse_elements(self.d.dump_hierarchy())
+        return {"width": width, "height": height, "elements": [
+            {"index": e.index, "class": e.cls, "text": e.text, "desc": e.desc, "id": e.rid,
+             "clickable": e.clickable, "scrollable": e.scrollable, "editable": e.editable,
+             "bounds": list(e.bounds), "blocked": e.forbidden}
+            for e in elements]}
+
     def _unknown_screen_xml(self) -> str | None:
         """XML da tela antes do toque do operador, só se for uma tela que o robô não conhece."""
         if self.resolver is None or self.resolver.memory is None:

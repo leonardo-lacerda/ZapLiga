@@ -71,18 +71,23 @@ class Decision:
     reason: str
 
 
+def to_jpeg(png: bytes, width: int) -> bytes:
+    """Print reduzido em JPEG (para a IA e para o MCP: cabe no contexto sem perder o legível)."""
+    from PIL import Image
+    img = Image.open(io.BytesIO(png)).convert("RGB")
+    if width and img.width > width:
+        img = img.resize((width, round(img.height * width / img.width)))
+    buf = io.BytesIO()
+    img.save(buf, format="JPEG", quality=70)
+    return buf.getvalue()
+
+
 def shrink_screenshot(png: bytes | None, width: int = SCREENSHOT_WIDTH) -> tuple[str, str] | None:
     """Print reduzido em JPEG (base64, media type), ou None se não der para ler."""
     if not png:
         return None
     try:
-        from PIL import Image
-        img = Image.open(io.BytesIO(png)).convert("RGB")
-        if img.width > width:
-            img = img.resize((width, round(img.height * width / img.width)))
-        buf = io.BytesIO()
-        img.save(buf, format="JPEG", quality=70)
-        return base64.standard_b64encode(buf.getvalue()).decode("ascii"), "image/jpeg"
+        return base64.standard_b64encode(to_jpeg(png, width)).decode("ascii"), "image/jpeg"
     except Exception as exc:
         log.info("print para a IA indisponível (%s)", type(exc).__name__)
         return None

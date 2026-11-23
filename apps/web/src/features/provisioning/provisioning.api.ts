@@ -1,5 +1,5 @@
 import { ApiError, apiFetch, json, refreshAccessToken } from '../../services/api';
-import type { CreateJob, CreatePhone, EgressList, EgressNode, Job, Phone, ProvisioningStats } from './provisioning.types';
+import type { CreateJob, CreatedMcpKey, CreatePhone, EgressList, EgressNode, Job, McpKey, Phone, ProvisioningStats } from './provisioning.types';
 
 const base = (tenantId: string) => `/api/tenants/${encodeURIComponent(tenantId)}/provisioning`;
 const jobPath = (tenantId: string, jobId: string) => `${base(tenantId)}/jobs/${encodeURIComponent(jobId)}`;
@@ -116,3 +116,15 @@ export const apiErrorCode = (error: unknown): string | undefined => {
 /** Números dos cadastros terminados nos últimos `days` dias. */
 export const fetchStats = (tenantId: string, days = 30): Promise<ProvisioningStats> =>
   json(`${base(tenantId)}/stats?days=${days}`);
+
+export const fetchMcpKeys = async (tenantId: string): Promise<McpKey[]> => {
+  const body = await json(`${base(tenantId)}/mcp-keys`);
+  return Array.isArray(body?.items) ? body.items : [];
+};
+
+/** A chave volta só nesta resposta (`apiKey`); depois, só o prefixo. */
+export const createMcpKey = (tenantId: string, input: { name: string; scopes: string[] }): Promise<CreatedMcpKey> =>
+  json(`${base(tenantId)}/mcp-keys`, { method: 'POST', body: JSON.stringify(input) });
+
+export const revokeMcpKey = (tenantId: string, id: string): Promise<McpKey> =>
+  json(`${base(tenantId)}/mcp-keys/${encodeURIComponent(id)}/revoke`, { method: 'POST' });

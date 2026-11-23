@@ -119,3 +119,10 @@ export type ProvisioningStats = {
   byAppVersion: StatsRate[];
   stepDurations: StatsDuration[];
 };
+
+/** Chave do MCP (o Claude opera telefones e linhas em nome de quem criou a chave). */
+export type McpKey = {
+  id: string; name: string; prefix: string; scopes: string[]; status: 'active' | 'revoked';
+  userId: string; userName: string | null; lastUsedAt: string | null; createdAt: string; revokedAt: string | null;
+};
+export type CreatedMcpKey = McpKey & { apiKey: string };

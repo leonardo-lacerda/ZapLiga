@@ -100,6 +100,12 @@ class FakeAutomation:
         self.calls.append("screenshot")
         return PNG
 
+    def screen_elements(self):
+        self.calls.append("screen_elements")
+        return {"width": 1080, "height": 2400, "elements": [
+            {"index": 0, "class": "Button", "text": "Agora não", "desc": "", "id": "skip", "clickable": True,
+             "scrollable": False, "editable": False, "bounds": [0, 900, 540, 1000], "blocked": False}]}
+
     def debug_dump(self):
         return "<hierarchy/>"
 

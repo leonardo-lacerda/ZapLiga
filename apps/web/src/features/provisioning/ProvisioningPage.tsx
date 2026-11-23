@@ -4,6 +4,7 @@ import { JobProgress } from './JobProgress';
 import { PhonesPanel } from './PhonesPanel';
 import { ProvisioningWizard } from './ProvisioningWizard';
 import { RecentJobs } from './RecentJobs';
+import { McpKeysPanel } from './McpKeysPanel';
 import { StatsPanel } from './StatsPanel';
 import type { WizardPrefill } from './provisioning.types';
 
@@ -44,5 +45,6 @@ export function ProvisioningPage({ tenantId, currentUserId, allowed, onOpenNumbe
       </>}
     <PhonesPanel tenantId={tenantId} onOpenJob={(jobId) => setView({ kind: 'job', jobId })} />
     {view.kind === 'wizard' && <StatsPanel tenantId={tenantId} />}
+    {view.kind === 'wizard' && <McpKeysPanel tenantId={tenantId} />}
   </div>;
 }

@@ -458,11 +458,19 @@ export class WhatsappProvisioningService implements OnModuleInit, OnModuleDestro
   }
 
   /** The phone screen right now, while the job is running (the operator watches the robot). */
-  async liveScreen(tenantId: string, id: string) {
+  async liveScreen(tenantId: string, id: string, jpegWidth?: number) {
     const row = await this.findRow(tenantId, id);
-    const png = row.finished_at ? null : await this.worker.liveScreen(row.id);
-    if (!png) throw new NotFoundException('A tela do telefone não está disponível agora.');
-    return png;
+    const image = row.finished_at ? null : await this.worker.liveScreen(row.id, jpegWidth);
+    if (!image) throw new NotFoundException('A tela do telefone não está disponível agora.');
+    return image;
+  }
+
+  /** What is on the phone screen right now: text, id, bounds and whether a tap there is blocked. */
+  async screenElements(tenantId: string, id: string) {
+    const row = await this.findRow(tenantId, id);
+    const found = row.finished_at ? null : await this.worker.screenElements(row.id);
+    if (!found) throw new NotFoundException('A tela do telefone não está disponível agora.');
+    return found;
   }
 
   async submitProfile(tenantId: string, actorUserId: string, id: string, rawName: string, photo?: UploadedPhoto) {

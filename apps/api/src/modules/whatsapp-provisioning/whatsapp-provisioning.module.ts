@@ -14,5 +14,7 @@ import { WhatsappProvisioningService } from './whatsapp-provisioning.service';
   imports: [AuditModule, BillingModule, DialerModule, EgressModule, NumbersModule],
   controllers: [WhatsappProvisioningController],
   providers: [WhatsappProvisioningService, GeelarkWorkerClient],
+  // The MCP module drives phones and registrations through the same service as the panel.
+  exports: [WhatsappProvisioningService],
 })
 export class WhatsappProvisioningModule {}

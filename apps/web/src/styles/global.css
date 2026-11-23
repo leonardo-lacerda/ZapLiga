@@ -1440,6 +1440,11 @@ input, select { min-height: 35px; min-width: 0; padding: 8px 10px; border: 1px s
 .provisioning-recent-list { margin: 10px 0 0; padding: 0; list-style: none; display: grid; gap: 6px; }
 .provisioning-recent-list li { padding: 10px 12px; border: 1px solid var(--border-subtle); border-radius: 9px; display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: 10px; }
 .provisioning-recent-list strong, .provisioning-recent-list small { display: block; }
+.provisioning-mcp-form { margin: 12px 0; display: flex; flex-wrap: wrap; align-items: flex-end; gap: 12px; }
+.provisioning-mcp-form .field { flex: 1 1 220px; }
+.provisioning-mcp-created { margin: 12px 0; align-items: flex-start; }
+.provisioning-mcp-created p { margin: 4px 0; }
+.provisioning-mcp-created code { display: block; margin: 6px 0 10px; padding: 8px 10px; border-radius: 8px; background: var(--surface-subtle); font-size: 11px; word-break: break-all; }
 .provisioning-stats-summary { margin: 12px 0; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
 .provisioning-stats-summary div { padding: 10px 12px; border: 1px solid var(--border-subtle); border-radius: 9px; }
 .provisioning-stats-summary dt { color: var(--muted); font-size: 10px; }

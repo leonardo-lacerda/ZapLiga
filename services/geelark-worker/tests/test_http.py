@@ -391,3 +391,23 @@ def test_drain_refuses_new_jobs_and_reports_the_running_ones(client):
     client.post(f"/jobs/{running}/cancel", headers=H)  # o que estava rodando segue até terminar
     wait_for(lambda: client.get("/drain", headers=H).json()["active"] == 0)
     assert client.post("/drain?on=false", headers=H).json()["draining"] is False
+
+
+def test_reduced_screen_and_elements_for_the_mcp(client, factory):
+    import io
+
+    from PIL import Image
+    buf = io.BytesIO()
+    Image.new("RGB", (1080, 2400), "white").save(buf, format="PNG")
+    assert client.post("/jobs", headers=H, json=job_body(jobId="live-2")).status_code == 201
+    wait_for(lambda: client.manager.get("live-2").awaiting == "sms")
+    factory.instances["live-2"].screenshot = lambda: buf.getvalue()
+    resp = client.get("/jobs/live-2/screen?w=540&format=jpeg", headers=H)
+    assert resp.status_code == 200 and resp.headers["content-type"] == "image/jpeg"
+    assert Image.open(io.BytesIO(resp.content)).size == (540, 1200)
+    elements = client.get("/jobs/live-2/elements", headers=H).json()
+    assert elements["width"] == 1080 and elements["elements"][0]["text"] == "Agora não"
+    assert client.get("/jobs/live-2/elements").status_code == 401
+    client.post("/jobs/live-2/cancel", headers=H)
+    wait_for(lambda: client.manager.get("live-2").finished.is_set())
+    assert client.get("/jobs/live-2/elements", headers=H).status_code == 404

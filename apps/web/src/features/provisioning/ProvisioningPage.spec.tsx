@@ -14,6 +14,7 @@ beforeEach(() => {
     http.get(`${API}/jobs/:id/screen`, () => new HttpResponse(null, { status: 404 })),
     http.get(`${API}/phones`, () => HttpResponse.json({ items: [] })),
     http.get(`${API}/egress`, () => HttpResponse.json({ items: [], configured: true })),
+    http.get(`${API}/mcp-keys`, () => HttpResponse.json({ items: [] })),
     http.get(`${API}/stats`, () => HttpResponse.json({ days: 30, total: 0, done: 0, failed: 0, cancelled: 0, failuresByError: [], failuresByStep: [], byEgressIp: [], byAppVersion: [], stepDurations: [] })),
   );
 });

@@ -168,6 +168,9 @@ class PhoneAutomation(Protocol):
 
     def screenshot(self) -> bytes | None: ...
 
+    def screen_elements(self) -> dict[str, Any]:
+        """{"width", "height", "elements": [...]}: elementos da tela de agora (MCP e IA)."""
+
     def debug_dump(self) -> str | None:
         """XML da tela atual sem o texto dos campos (diagnóstico de tela desconhecida)."""
 

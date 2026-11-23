@@ -303,6 +303,20 @@ class JobManager:
                 job.live_screen = (time.monotonic(), png)
             return png
 
+    def screen_elements(self, job_id: str) -> dict[str, Any] | None:
+        """Elementos da tela do phone agora (MCP: tocar pelo elemento, não pela coordenada)."""
+        with self._lock:
+            job = self._require(job_id)
+            auto = job.auto if not job.terminal else None
+        if auto is None:
+            return None
+        with job.screen_lock:
+            try:
+                return auto.screen_elements()
+            except Exception as exc:
+                log.info("[%s] sem elementos da tela (%s)", job_id, type(exc).__name__)
+                return None
+
     def manual_action(self, job_id: str, action: dict[str, Any]) -> None:
         """Toque, tecla ou texto do operador no phone. Só quando o robô está parado esperando
         alguém (status waiting_input): com o robô andando, os dois brigariam pela tela."""

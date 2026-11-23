@@ -498,4 +498,27 @@ test.describe.serial('Gate B - jornadas criticas', () => {
     expect(opening).toMatchObject({ count: 2, median_s: 35, max_s: 40 });
     await api.dispose();
   });
+
+  test('15. MCP: a chave do Claude lista ferramentas e le numeros pela API real', async () => {
+    const api = await context();
+    const created = await expectOk(await api.post(`/api/tenants/${tenantA}/provisioning/mcp-keys`, { headers: headers(leaderToken, tenantA), data: { name: 'Claude E2E' } }));
+    expect(created.apiKey).toMatch(/^zpl_mcp_/);
+    const mcp = (id: number, method: string, params: Record<string, unknown> = {}, key = created.apiKey) => api.post('/api/mcp', {
+      headers: { Authorization: `Bearer ${key}`, Accept: 'application/json, text/event-stream', 'Content-Type': 'application/json' },
+      data: { jsonrpc: '2.0', id, method, params },
+    });
+    const init = await mcp(1, 'initialize', { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'e2e', version: '1' } });
+    expect(init.status()).toBe(200);
+    expect((await init.json()).result.serverInfo.name).toBe('zapliga');
+    const tools = (await (await mcp(2, 'tools/list')).json()).result.tools.map((tool: any) => tool.name);
+    expect(tools).toEqual(expect.arrayContaining(['list_numbers', 'open_phone', 'tap', 'start_registration']));
+    expect(tools).not.toContain('delete_phone');
+    const listed = (await (await mcp(3, 'tools/call', { name: 'list_numbers', arguments: {} })).json()).result;
+    expect(listed.isError).toBeFalsy();
+    expect(JSON.parse(listed.content[0].text).items.map((item: any) => item.label)).toContain('Linha CI');
+    expect((await mcp(4, 'tools/list', {}, 'zpl_mcp_invalida')).status()).toBe(401);
+    await expectOk(await api.post(`/api/tenants/${tenantA}/provisioning/mcp-keys/${created.id}/revoke`, { headers: headers(leaderToken, tenantA) }));
+    expect((await mcp(5, 'tools/list')).status()).toBe(401);
+    await api.dispose();
+  });
 });

@@ -70,6 +70,12 @@ export type WorkerJob = {
   createdAt: string; updatedAt: string;
 };
 
+export type WorkerScreenElement = {
+  index: number; class: string; text: string; desc: string; id: string;
+  clickable: boolean; scrollable: boolean; editable: boolean; bounds: [number, number, number, number]; blocked: boolean;
+};
+export type WorkerScreenElements = { width: number; height: number; elements: WorkerScreenElement[] };
+
 /** HttpException carrying the worker's own error code (`phone_busy`, `not_found`...). */
 export class GeelarkWorkerError extends HttpException {
   constructor(readonly workerCode: string, message: string, status: number) {
@@ -189,12 +195,26 @@ export class GeelarkWorkerClient {
     return this.json<{ ok: boolean }>(`/jobs/${encodeURIComponent(jobId)}/manual`, { method: 'POST', body: action, timeoutMs: 30_000 });
   }
 
+  /** Elements on the phone screen right now (text, id, bounds, blocked), or `null` without a live phone. */
+  async screenElements(jobId: string) {
+    try {
+      return await this.json<WorkerScreenElements>(`/jobs/${encodeURIComponent(jobId)}/elements`, { timeoutMs: 20_000 });
+    } catch (error) {
+      if (error instanceof GeelarkWorkerError && error.getStatus() === HttpStatus.NOT_FOUND) return null;
+      throw error;
+    }
+  }
+
   async cancelJob(jobId: string) { return this.json<WorkerJob>(`/jobs/${encodeURIComponent(jobId)}/cancel`, { method: 'POST', timeoutMs: 30_000 }); }
 
-  /** PNG of the phone screen right now (short cache in the worker), or `null` when the job has no live phone. */
-  async liveScreen(jobId: string) {
+  /**
+   * The phone screen right now (short cache in the worker), or `null` when the job has no live phone.
+   * PNG by default; `jpegWidth` asks for a reduced JPEG (the MCP sends it to Claude).
+   */
+  async liveScreen(jobId: string, jpegWidth?: number) {
+    const query = jpegWidth ? `?format=jpeg&w=${Math.floor(jpegWidth)}` : '';
     try {
-      const response = await this.request(`/jobs/${encodeURIComponent(jobId)}/screen`, { timeoutMs: 20_000 });
+      const response = await this.request(`/jobs/${encodeURIComponent(jobId)}/screen${query}`, { timeoutMs: 20_000 });
       return Buffer.from(await response.arrayBuffer());
     } catch (error) {
       if (error instanceof GeelarkWorkerError && error.getStatus() === HttpStatus.NOT_FOUND) return null;

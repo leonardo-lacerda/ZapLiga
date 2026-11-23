@@ -16,7 +16,7 @@ from fastapi.responses import JSONResponse, Response
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from .config import Settings
-from .copilot import Copilot
+from .copilot import Copilot, to_jpeg
 from .device_automation import make_factory
 from .screen_archive import ScreenArchive
 from .screen_learning import LearnedScreens
@@ -288,11 +288,21 @@ def create_app(
         return manager.snapshot(manager.cancel(job_id))
 
     @app.get("/jobs/{job_id}/screen", dependencies=auth)
-    def live_screen(job_id: str) -> Response:
+    def live_screen(job_id: str, w: int = 0, format: str = "png") -> Response:
         png = manager.live_screen(job_id)
         if not png:
             raise ApiError(404, "not_found", "Sem tela ao vivo: o job ainda não conectou ao phone ou já terminou.")
+        if format == "jpeg":  # reduzido: o MCP manda o print para o Claude
+            return Response(content=to_jpeg(png, max(0, min(w, 1440))), media_type="image/jpeg",
+                            headers={"Cache-Control": "no-store"})
         return Response(content=png, media_type="image/png", headers={"Cache-Control": "no-store"})
+
+    @app.get("/jobs/{job_id}/elements", dependencies=auth)
+    def screen_elements(job_id: str) -> dict:
+        found = manager.screen_elements(job_id)
+        if found is None:
+            raise ApiError(404, "not_found", "Sem tela ao vivo: o job ainda não conectou ao phone ou já terminou.")
+        return found
 
     @app.post("/jobs/{job_id}/takeover", dependencies=auth)
     def take_over(job_id: str) -> dict:
