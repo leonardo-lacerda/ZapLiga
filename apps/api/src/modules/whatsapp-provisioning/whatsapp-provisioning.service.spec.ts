@@ -369,9 +369,9 @@ describe('WhatsappProvisioningService — sync', () => {
     );
     await startJob(ctx);
     const blocked = ctx.worker.createJob.mock.calls[0][0].blockedEgressIps;
-    expect(Object.keys(blocked).sort()).toEqual(['131.255.254.90', '45.172.112.163']);
+    // Sem limite diário por padrão (PROVISIONING_MAX_JOBS_PER_IP_DAY=0): só a quarentena barra.
+    expect(Object.keys(blocked)).toEqual(['131.255.254.90']);
     expect(blocked['131.255.254.90']).toMatch(/quarentena por mais 47 h/);
-    expect(blocked['45.172.112.163']).toMatch(/3 cadastros nas últimas 24 h \(limite 3\)/);
   });
 
   it('resumes a registration the worker forgot (restart) from where WhatsApp stopped', async () => {

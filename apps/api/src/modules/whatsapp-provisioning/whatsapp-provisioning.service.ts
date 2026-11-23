@@ -334,7 +334,7 @@ export class WhatsappProvisioningService implements OnModuleInit, OnModuleDestro
    * cadastros de todas as empresas. 0 desliga cada regra.
    */
   async blockedEgressIps(): Promise<Record<string, string>> {
-    const perDay = envInt('PROVISIONING_MAX_JOBS_PER_IP_DAY', 3);
+    const perDay = envInt('PROVISIONING_MAX_JOBS_PER_IP_DAY', 0);
     const quarantineHours = envInt('PROVISIONING_IP_QUARANTINE_HOURS', 48);
     if (!perDay && !quarantineHours) return {};
     const rows = (await this.db.query(`SELECT egress_ip AS ip,
