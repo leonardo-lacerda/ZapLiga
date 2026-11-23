@@ -2,12 +2,18 @@
 
 ## Versão em produção
 
-- Imagem: `zapliga-waxum:0.12.6-multirelay-v3` (construída por nós — **não** é a `fdciabdul/waxum`)
+- Imagem: `zapliga-waxum:0.12.6-multirelay-v4-opus` (construída por nós — **não** é a `fdciabdul/waxum`)
 - Base Waxum: `imtaqin/waxum` `v0.12.5` (`c673e9867216d3448339db90a0b16509a567dae1`)
 - Base whatsapp-rust: `oxidezap/whatsapp-rust` `9be10573aa47bc8dcae42918c553250879383d67` (main, 2026-09-01)
 - Patches e build reproduzível: [`infra/waxum/`](../infra/waxum/README.md)
 - Build e healthcheck da v3 em produção: `2026-09-09`; validação final de áudio exige uma chamada real com voz.
-- Rollback disponível no host: `zapliga-waxum:0.12.6-rollback`
+- v4-opus (`2026-11-18`): a v3 mais a escolha do codec por `WA_CALL_AUDIO_CODEC`
+  (`mlow`, padrão da biblioteca, ou `opus`). Produção usa `opus`: o decodificador MLow
+  só entende um modo e descartava os quadros de baixa taxa (`low_rate=1`) e de 10 ms que
+  o celular manda com internet fraca, o que o atendente ouvia como buracos na voz do
+  cliente (log: `mlow: dropping out-of-operating-point frame`). Com Opus, quem decodifica
+  é a libopus. Voltar ao MLow: `WA_CALL_AUDIO_CODEC: mlow` no compose, sem rebuild.
+- Rollback disponível no host: `zapliga-waxum:0.12.6-multirelay-v3` (a v3 continua carregada)
 
 ## Por que não a imagem oficial
 
