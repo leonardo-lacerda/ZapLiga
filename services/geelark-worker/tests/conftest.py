@@ -23,7 +23,7 @@ class FakeAutomation:
     def __init__(self, spec: JobSpec, ctx: JobContext, *, egress: str | None = "203.0.113.7",
                  apps: dict[str, bool] | None = None, sms: list[SmsResult] | None = None,
                  fail: dict[str, BaseException] | None = None, block: str | None = None,
-                 photo_warning: str | None = None):
+                 photo_warning: str | None = None, code_channel: str = "sms"):
         self.spec = spec
         self.ctx = ctx
         self.egress = egress
@@ -32,6 +32,7 @@ class FakeAutomation:
         self.fail = fail or {}
         self.block = block
         self.photo_warning = photo_warning
+        self.code_channel = code_channel  # "voice": o código vem numa ligação (linha fixa)
         self.calls: list[str] = []
         self.received: dict[str, Any] = {}
         self.verified = False  # past_verification(): o operador passou do código na mão

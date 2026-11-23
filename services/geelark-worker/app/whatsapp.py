@@ -61,10 +61,16 @@ class Screen(Enum):
     USE_OTHER_NUMBER = "escolher número (Business)"
     PHONE_ENTRY = "digitar número"
     VERIFY_METHOD = "escolher SMS/ligação"
+    SMS_FAILED = "SMS não enviado (use outro método)"
+    CONFIRM_SEND = "confirmar o envio do código"
+    PASSKEY = "senha de acesso (chave)"
     MISSED_CALL_INTRO = "verificar por ligação não atendida"
     EULA = "termos (concordar e continuar)"
     RESTORE_BACKUP = "restaurar backup"
+    BUSINESS_PROFILE_NEW = "perfil comercial (nome comercial)"
+    BUSINESS_NAME_REJECTED = "nome comercial recusado"
     BUSINESS_CATEGORY = "categoria da empresa"
+    BUSINESS_HOURS = "horário de atendimento"
     BUSINESS_WELCOME = "boas-vindas do Business (começar)"
     PROFILE_NAME = "perfil (nome e foto)"
     CHATS = "conversas (registrado)"
@@ -114,7 +120,10 @@ CONFIRM_NUMBER_TEXT = (
 NEXT_TEXT = r"(?i)^(next|avançar|próximo|done|concluir|salvar|save)$"
 OTHER_NUMBER_TEXT = r"(?i)^(use a different number|usar (um )?outro número)$"
 EULA_TEXT = r"(?i)^(agree and continue|concordar e continuar|aceitar e continuar)$"
-SMS_METHOD_TEXT = r"(?i)^(receive sms|receber (um |o c[oó]digo por )?sms|send sms|enviar sms|sms|text message|mensagem de texto)$"
+SMS_METHOD_TEXT = (
+    r"(?i)^(receive( a)?( new)? sms|receber (um |o c[oó]digo por |(um )?novo )?sms|send sms|enviar sms|sms"
+    r"|text message|mensagem de texto)$"
+)
 CALL_METHOD_TEXT = r"(?i)^(call me|me ligue|ligar|receber (uma )?liga[cç][aã]o( de voz)?|liga[cç][aã]o de voz|voice call|receive (a )?(voice )?call)$"
 # "Permitir acesso": o WhatsApp quer verificar ligando para o número e lendo o registro de
 # chamadas. O chip não está no phone da nuvem, então isso nunca funciona: pede outra forma.
@@ -122,6 +131,49 @@ OTHER_VERIFY_TEXT = (
     r"(?i)^(usar outra forma de verifica[cç][aã]o|outra forma de verifica[cç][aã]o|verificar de outra forma"
     r"|use (an)?other (verification )?(method|option)|verify another way|try another way|other verification options?)$"
 )
+
+# Linha fixa: "Não foi possível enviar um SMS para seu número / Confira o número de telefone. Se
+# estiver correto, tente novamente em 1 hora ou use outro método de verificação." (OK / Usar outro
+# método). Não é espera: a ligação de voz continua disponível. Vem antes de WAIT_LIMIT.
+SMS_FAILED_TEXT = (
+    r"(?is).*(n[aã]o (foi|é) poss[ií]vel enviar (um |o )?sms|couldn.?t send (an |the )?sms"
+    r"|could not send (an |the )?sms|unable to send (an |the )?sms).*"
+)
+USE_OTHER_METHOD_TEXT = r"(?i)^(usar outro m[eé]todo|use (an)?other method|try another method|outro m[eé]todo)$"
+# "Confirmar seu número / Enviaremos um código de 6 dígitos por SMS para +55 ..." com "Continuar"
+# (manda o SMS) e "Usar outra forma de verificação" (abre a lista de métodos).
+CONFIRM_SEND_TEXT = (
+    r"(?is).*(enviaremos (um|o) c[oó]digo|vamos enviar (um|o) c[oó]digo"
+    r"|we.?ll send (you )?(a|an|the) .*code|we will send (you )?(a|an|the) .*code).*"
+)
+# Lista de métodos (bottom sheet): título e nome de cada opção.
+METHOD_SHEET_TITLE = r"(?i)^(selecione o m[eé]todo de confirma[cç][aã]o|escolha (um|o) m[eé]todo.*|choose (a|how).*(verif|confirm).*)$"
+# Telas da tela do código que dizem que o código vem por ligação.
+VOICE_CODE_TEXT = r"(?is).*(liga[cç][aã]o|ligaremos|voice call|phone call|we.?ll call|calling).*"
+# Depois do código: "Não é possível criar a senha de acesso" (Ok) ou "Criar uma senha de acesso?"
+# (Agora não). A chave de acesso precisa de conta Google, que o phone da nuvem não tem.
+PASSKEY_TEXT = (
+    r"(?i)^(n[aã]o (é|foi) poss[ií]vel criar (a|uma|sua) (senha|chave) de acesso"
+    r"|criar (uma |sua )?(senha|chave) de acesso\??|can.?t create (a )?passkey|couldn.?t create (a )?passkey"
+    r"|create (a )?passkey\??)$"
+)
+
+# WhatsApp Business novo (Compose): assistente "Crie seu perfil comercial" depois do código.
+BUSINESS_PROFILE_NEW_TEXT = r"(?i)^(crie seu perfil comercial|criar (seu )?perfil comercial|create (your )?business profile)$"
+BUSINESS_NAME_REJECTED_TEXT = (
+    r"(?is).*(nome comercial n[aã]o segue|n[aã]o segue nossas diretrizes"
+    r"|name (doesn.?t|does not) (follow|meet) our (guidelines|policies)).*"
+)
+EDIT_BUTTON_TEXT = r"(?i)^(editar|edit)$"
+BUSINESS_HOURS_TEXT = (
+    r"(?i)^(adicionar (o )?hor[aá]rio de atendimento|hor[aá]rio de atendimento|add (your )?business hours"
+    r"|business hours)$"
+)
+ALWAYS_OPEN_TEXT = r"(?i)^(sempre aberta|sempre aberto|always open|aberta 24 horas|open 24 hours)$"
+# Abas da tela principal do Business (abre na aba "Ferramentas"; o ⋮ com "Dispositivos
+# conectados" fica na aba "Conversas").
+BUSINESS_HOME_TAB_TEXT = r"(?i)^(ferramentas|tools)$"
+CHATS_TAB_TEXT = r"(?i)^(conversas|chats)$"
 
 BANNED_TEXT = r"(?is).*(not allowed to use whatsapp|não (tem permissão|pode) usar o whatsapp|is banned|foi banido|banned from|banido).*"
 WAIT_LIMIT_TEXT = r"(?is).*(wait \d+|try again in \d|aguarde \d+|tente novamente (em|daqui a) \d).*"
@@ -150,12 +202,14 @@ PROFILE_TITLE = (
     r"(?i)^(profile info|informações do perfil|informações de perfil|business info"
     r"|business profile|informações da empresa|perfil comercial)$"
 )
-CATEGORY_OTHER = r"(?i)^(other|other business|outros?|outros negócios|outra empresa)$"
+CATEGORY_OTHER = r"(?i)^(other|other business(es)?|outros?|outros negócios|outras? empresas?)$"
 
 # Conectar aparelho (pareamento por código)
 MORE_OPTIONS = {"descriptionMatches": r"(?i)^(more options|mais opções)$"}
 LINKED_DEVICES = {"textMatches": r"(?i)^(linked devices|aparelhos conectados|dispositivos (conectados|vinculados))$"}
-LINK_A_DEVICE = {"textMatches": r"(?i)^(link a device|link device|conectar (um )?aparelho|vincular (um )?(aparelho|dispositivo))$"}
+LINK_A_DEVICE = {"textMatches": (
+    r"(?i)^(link a device|link device|conectar (um )?(aparelho|dispositivo)|vincular (um )?(aparelho|dispositivo))$"
+)}
 LINK_WITH_NUMBER = {"textMatches": (
     r"(?is).*(link with phone number|conectar com (o )?(número de telefone|telefone|número)"
     r"|vincular com (o )?número).*"
@@ -167,6 +221,12 @@ PAIR_ERROR_TEXT = (
     r"|incorrect code|código incorreto|code (has )?expired|código (expirou|expirado)).*"
 )
 DISMISS_OK_TEXT = r"(?i)^(ok|got it|entendi|ok, entendi)$"
+# Depois do código de pareamento aceito: "Nome do dispositivo" (campo + Salvar) e a lista
+# "1 de 4 dispositivos conectado".
+DEVICE_NAME_TEXT = r"(?i)^(nome do (dispositivo|aparelho)|device name|name (this|your) device|dar (um )?nome ao (dispositivo|aparelho))$"
+DEVICE_NAME = "ZapLiga"
+SAVE_TEXT = r"(?i)^(salvar|save|ok|concluir|done)$"
+LINKED_COUNT_TEXT = r"(?is).*(\d+ de \d+ (dispositivos?|aparelhos?) conectados?|\d+ of \d+ (devices? )?(linked|connected)).*"
 
 # Foto do perfil (melhor esforço; não verificado em aparelho real)
 GALLERY_TEXT = r"(?i)^(gallery|galeria|choose from gallery|escolher da galeria)$"
@@ -176,6 +236,80 @@ CROP_DONE_TEXT = r"(?i)^(done|concluir|ok|crop|cortar|salvar|save)$"
 
 def _app_ids(app: WhatsAppApp, *names: str) -> str:
     return re.escape(app.wid) + "(" + "|".join(names) + ")"
+
+
+def rid(app: WhatsAppApp, *names: str) -> dict:
+    """Seletor por resource-id com ou sem o pacote: as telas Compose do WhatsApp novo usam a
+    tag pura ("biz_name_field"), as antigas "com.whatsapp.w4b:id/next_button"."""
+    return {"resourceIdMatches": "(" + re.escape(app.wid) + ")?(" + "|".join(names) + ")"}
+
+
+def is_br_landline(country_code: str, number: str) -> bool:
+    """Número fixo no Brasil: DDD + 8 dígitos começando com 2 a 5 (celular: DDD + 9 dígitos
+    começando com 9). Fixo não recebe SMS: o WhatsApp só verifica por ligação de voz."""
+    digits = re.sub(r"\D", "", number)
+    if country_code != "55":
+        return False
+    if digits.startswith("55") and len(digits) in (12, 13):
+        digits = digits[2:]  # veio com o código do país
+    return len(digits) == 10 and digits[2] in "2345"
+
+
+def business_name_variants(name: str) -> list[str]:
+    """Nomes a tentar quando o WhatsApp diz que o nome comercial "não segue as diretrizes".
+    O caso real (23/11) foi tudo em maiúsculas: "PREVITAS" recusado, "Previtas" aceito."""
+    name = " ".join(name.split())
+    titled = " ".join(w[:1].upper() + w[1:].lower() for w in name.split(" "))
+    return list(dict.fromkeys(v for v in (name, titled) if v))
+
+
+@dataclass(frozen=True)
+class MethodRow:
+    """Uma opção da lista "Selecione o método de confirmação"."""
+    tap: tuple[int, int]          # centro da linha clicável (LinearLayout pai)
+    checked: bool | None          # estado do radio da linha (None: sem radio no dump)
+
+
+_BOUNDS_RE = re.compile(r"\[(-?\d+),(-?\d+)\]\[(-?\d+),(-?\d+)\]")
+
+
+def _center(node: Any) -> tuple[int, int] | None:
+    m = _BOUNDS_RE.match(node.get("bounds", ""))
+    if not m:
+        return None
+    x1, y1, x2, y2 = (int(v) for v in m.groups())
+    return (x1 + x2) // 2, (y1 + y2) // 2
+
+
+def find_method_row(xml: str, pattern: str) -> MethodRow | None:
+    """Acha a opção cujo `reg_method_name` casa `pattern` e devolve o centro da linha clicável
+    que a contém. Tocar no TextView do nome não selecionava a opção de forma confiável."""
+    import xml.etree.ElementTree as ET
+
+    try:
+        root = ET.fromstring(xml)
+    except ET.ParseError:
+        return None
+    best: MethodRow | None = None
+
+    def walk(node: Any, ancestors: list[Any]) -> bool:
+        nonlocal best
+        rid_ = node.get("resource-id", "")
+        text = (node.get("text") or "").strip()
+        if rid_.endswith("reg_method_name") and re.fullmatch(pattern, text):
+            row = next((a for a in reversed(ancestors) if a.get("clickable") == "true"), None)
+            target = row if row is not None else node
+            radio = None
+            for scope in ([row] if row is not None else ancestors[-1:]):
+                radio = next((n for n in scope.iter("node") if n.get("class", "").endswith("RadioButton")), None)
+            tap = _center(target)
+            if tap:
+                best = MethodRow(tap, None if radio is None else radio.get("checked") == "true")
+                return True
+        return any(walk(child, ancestors + [node]) for child in node.findall("node"))
+
+    walk(root, [])
+    return best
 
 
 @lru_cache(maxsize=None)
@@ -189,9 +323,14 @@ def build_screens(app: WhatsAppApp) -> tuple[tuple[Screen, tuple[dict, ...]], ..
     screens: list[tuple[Screen, tuple[dict, ...]]] = [
         (Screen.BANNED, ({"textMatches": BANNED_TEXT},)),
         (Screen.UNDER_REVIEW, ({"textMatches": UNDER_REVIEW_TEXT},)),
+        # "Não foi possível enviar um SMS... tente novamente em 1 hora ou use outro método": linha
+        # fixa. Antes da espera e da lista, senão vira "aguardar" e o cadastro para.
+        (Screen.SMS_FAILED, ({"textMatches": SMS_FAILED_TEXT},)),
         # A lista de métodos vem antes da espera: nela, "Receber SMS / Tente novamente em 3 horas"
         # é só o SMS bloqueado, e a ligação de voz continua disponível.
-        (Screen.VERIFY_METHOD, ({"textMatches": SMS_METHOD_TEXT}, {"textMatches": CALL_METHOD_TEXT})),
+        (Screen.VERIFY_METHOD, ({"textMatches": SMS_METHOD_TEXT}, {"textMatches": CALL_METHOD_TEXT},
+                                rid(app, "request_otp_code_bottom_sheet_title", "reg_method_name"),
+                                {"textMatches": METHOD_SHEET_TITLE})),
         (Screen.WAIT_LIMIT, ({"textMatches": WAIT_LIMIT_TEXT},)),
         (Screen.NO_INTERNET, ({"textMatches": NO_INTERNET_TEXT},)),
         (Screen.PHONE_HINT, ({"textMatches": PHONE_HINT_TITLE}, {"textMatches": NONE_OF_ABOVE_TEXT})),
@@ -201,6 +340,10 @@ def build_screens(app: WhatsAppApp) -> tuple[tuple[Screen, tuple[dict, ...]], ..
         )),
         (Screen.TWO_STEP_PIN, ({"textMatches": TWO_STEP_TEXT},)),
         (Screen.VERIFY_CODE, ({"resourceId": w + "verify_sms_code_input"}, {"resourceId": w + "code_input"})),
+        (Screen.PASSKEY, ({"textMatches": PASSKEY_TEXT},)),
+        # "Confirmar seu número / Enviaremos um código...": antes de CONFIRM_NUMBER ("Confirm your
+        # number" casaria lá) e de MISSED_CALL_INTRO (tem "Usar outra forma de verificação").
+        (Screen.CONFIRM_SEND, ({"textMatches": CONFIRM_SEND_TEXT},)),
         (Screen.CONFIRM_NUMBER, ({"textMatches": CONFIRM_NUMBER_TEXT},)),
     ]
     if app.is_business:
@@ -215,16 +358,26 @@ def build_screens(app: WhatsAppApp) -> tuple[tuple[Screen, tuple[dict, ...]], ..
         (Screen.RESTORE_BACKUP, ({"textMatches": RESTORE_TEXT},)),
     ]
     if app.is_business:
-        screens.append((Screen.BUSINESS_CATEGORY, (
-            {"textMatches": r"(?is).*((choose|select) (a )?(business )?category|(escolha|selecione) (uma )?categoria).*"},
-        )))
+        screens += [
+            # Diálogo por cima do campo de nome: vem antes do perfil comercial.
+            (Screen.BUSINESS_NAME_REJECTED, ({"textMatches": BUSINESS_NAME_REJECTED_TEXT},)),
+            (Screen.BUSINESS_PROFILE_NEW, (rid(app, "biz_name_field"), {"textMatches": BUSINESS_PROFILE_NEW_TEXT})),
+            # "Selecionar categoria" sozinho é o rótulo do campo no perfil antigo: aqui só o título da tela.
+            (Screen.BUSINESS_CATEGORY, ({"textMatches": (
+                r"(?is).*((choose|select) (a |your )?(business )?category|(escolha|selecione) (uma )?categoria"
+                r"|selecionar a categoria da (sua )?empresa).*")},)),
+            (Screen.BUSINESS_HOURS, (rid(app, "biz_hours_always_open_option"), {"textMatches": BUSINESS_HOURS_TEXT})),
+        ]
+    chats: tuple[dict, ...] = ({"resourceId": w + "fab"}, {"resourceId": w + "conversations_row_contact_name"})
+    if app.is_business:
+        chats += ({"textMatches": BUSINESS_HOME_TAB_TEXT},)  # Business abre na aba "Ferramentas"
     screens += [
         (Screen.PROFILE_NAME, (
             {"resourceId": w + "registration_name"},
             {"resourceId": w + "business_name"},
             {"textMatches": PROFILE_TITLE},
         )),
-        (Screen.CHATS, ({"resourceId": w + "fab"}, {"resourceId": w + "conversations_row_contact_name"})),
+        (Screen.CHATS, chats),
         (Screen.INITIALIZING, ({"textMatches": INITIALIZING_TEXT},)),
         (Screen.OPTIONAL_PROMPT, ({"textMatches": SKIP_TEXT},)),
     ]

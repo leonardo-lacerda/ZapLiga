@@ -55,6 +55,8 @@ class CreateWorkerJob(_Body):
     resetApp: bool = False
     # A API recriando um cadastro que o worker perdeu (reinício): continua de onde o WhatsApp está.
     resume: bool = False
+    # Como pedir o código: auto = linha fixa do Brasil por ligação de voz, celular por SMS.
+    verification: Literal["auto", "sms", "voice"] = "auto"
 
     @model_validator(mode="after")
     def register_needs_number(self) -> "CreateWorkerJob":
@@ -79,6 +81,7 @@ class CreateWorkerJob(_Body):
             power_off_when_done=self.powerOffWhenDone,
             reset_app=self.resetApp and not self.resume,
             resume=self.resume and register,
+            verification=self.verification,
             probe_proxy=(ProbeProxySpec(probe.server, probe.port, probe.username, probe.password)
                          if probe is not None else None),
         )

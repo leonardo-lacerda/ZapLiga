@@ -893,3 +893,41 @@ def test_a_blocked_ip_does_not_stop_a_network_check():
     manager.create(make_spec(mode="network_check", app="", blocked_egress_ips=(("203.0.113.7", "x"),)))
     wait_for(lambda: manager.get("job-1").terminal)
     assert manager.get("job-1").status == "done"
+
+
+# ------------------------------------------ 23/11: linha fixa e teto por atividade
+def test_voice_code_message_while_waiting_for_the_code():
+    manager = JobManager(FakeFactory(code_channel="voice"), input_timeout_s=5, job_timeout_s=10)
+    manager.create(make_spec(app="business", number="2731890428"))
+    awaiting(manager, "job-1", "sms")
+    assert "ligar" in manager.get("job-1").message and "SMS" not in manager.get("job-1").message
+    manager.cancel("job-1")
+
+
+def test_activity_pushes_the_job_timeout_forward():
+    # 23/11: o teto fixo de 20 min matou um cadastro com o código aceito enquanto alguém
+    # conduzia o phone na mão. Agora o teto conta da última atividade.
+    manager = JobManager(FakeFactory(), input_timeout_s=5, job_timeout_s=0.4, job_max_s=10)
+    manager.create(make_spec())
+    awaiting(manager, "job-1", "sms")
+    for _ in range(8):  # 0,8 s de toques: o dobro do teto sem atividade
+        manager.manual_action("job-1", {"type": "tap", "x": 0.5, "y": 0.5})
+        time.sleep(0.1)
+    assert manager.get("job-1").status == "waiting_input"
+    job = finished(manager, "job-1")  # parou de mexer: estoura o teto sem atividade
+    assert job.error_code == "timeout" and "sem avançar" in job.message
+
+
+def test_activity_never_passes_the_absolute_cap():
+    manager = JobManager(FakeFactory(), input_timeout_s=5, job_timeout_s=0.3, job_max_s=0.6)
+    manager.create(make_spec())
+    awaiting(manager, "job-1", "sms")
+    deadline = time.monotonic() + 3
+    while not manager.get("job-1").terminal and time.monotonic() < deadline:
+        try:
+            manager.manual_action("job-1", {"type": "tap", "x": 0.5, "y": 0.5})
+        except ApiError:
+            pass
+        time.sleep(0.05)
+    job = finished(manager, "job-1")
+    assert job.error_code == "timeout" and "teto de" in job.message

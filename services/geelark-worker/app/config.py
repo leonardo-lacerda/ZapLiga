@@ -22,7 +22,8 @@ class Settings:
     worker_token: str = field(default="", repr=False)
     max_jobs: int = 2
     input_timeout_s: float = 600.0   # espera por entrada humana (contrato: 10 min)
-    job_timeout_s: float = 1200.0    # teto do job inteiro (contrato: 20 min)
+    job_timeout_s: float = 1200.0    # teto do job sem atividade (contrato: 20 min)
+    job_max_s: float = 2700.0        # teto absoluto do cadastro, mesmo com atividade (45 min)
     rescue_window_s: float = 59.0    # depois de um erro: tempo para o operador assumir o phone
     debug_dir: str = "/tmp/geelark-worker-debug"
     # Memória de telas aprendidas: precisa de um volume para sobreviver ao deploy.

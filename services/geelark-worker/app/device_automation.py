@@ -41,7 +41,16 @@ from .screen_resolver import ScreenOps, ScreenResolver
 
 # Telas que só aparecem depois de o WhatsApp aceitar o código.
 AFTER_CODE_SCREENS = frozenset({Screen.PROFILE_NAME, Screen.CHATS, Screen.BUSINESS_CATEGORY,
-                                Screen.BUSINESS_WELCOME, Screen.RESTORE_BACKUP, Screen.INITIALIZING})
+                                Screen.BUSINESS_WELCOME, Screen.RESTORE_BACKUP, Screen.INITIALIZING,
+                                Screen.PASSKEY, Screen.BUSINESS_PROFILE_NEW, Screen.BUSINESS_NAME_REJECTED,
+                                Screen.BUSINESS_HOURS})
+# Código aceito: o WhatsApp chegou no perfil (antigo ou assistente novo do Business) ou depois.
+CODE_ACCEPTED_SCREENS = frozenset({Screen.PROFILE_NAME, Screen.CHATS, Screen.BUSINESS_CATEGORY,
+                                   Screen.BUSINESS_PROFILE_NEW, Screen.BUSINESS_NAME_REJECTED,
+                                   Screen.BUSINESS_HOURS})
+# Assistente "Crie seu perfil comercial" do Business novo (o resto dele são telas com "Pular").
+BUSINESS_WIZARD_SCREENS = frozenset({Screen.BUSINESS_PROFILE_NEW, Screen.BUSINESS_NAME_REJECTED,
+                                     Screen.BUSINESS_HOURS})
 
 log = logging.getLogger(__name__)
 
@@ -128,6 +137,12 @@ class GeeLarkAutomation:
         self.archive = archive
         self._archived_fp = ""
         self._app_version: str | None = None
+        # Verificação: "sms" ou "voice" (o código vem numa ligação). Linha fixa só recebe por voz.
+        self.code_channel = "sms"
+        self._sms_refused = False  # o WhatsApp disse que não conseguiu mandar SMS para o número
+        # Perfil comercial: nomes a tentar e qual está no campo (o WhatsApp pode recusar o nome).
+        self._biz_names: list[str] = []
+        self._biz_idx = 0
 
     # ----------------------------------------------------------------- utils
     def _pause(self, lo: float = 1.0, hi: float = 2.5) -> None:
@@ -329,6 +344,9 @@ class GeeLarkAutomation:
             Screen.RESTORE_BACKUP: self._skip_restore,
             Screen.TWO_STEP_PIN: self._ask_two_step_pin,
             Screen.BUSINESS_WELCOME: lambda: self._click({"textMatches": wa.GET_STARTED_TEXT}),
+            # Nunca o "Continuar" de criar a chave: só "Agora não" ou o "Ok" do aviso de que não dá.
+            Screen.PASSKEY: lambda: self._click({"textMatches": wa.SKIP_TEXT}, {"textMatches": wa.DISMISS_OK_TEXT},
+                                                timeout=3),
             Screen.OPTIONAL_PROMPT: lambda: self._click({"textMatches": wa.SKIP_TEXT}),
         }
 
@@ -434,8 +452,11 @@ class GeeLarkAutomation:
                 continue
             unknown_since = None
 
-            repeats = repeats + 1 if screen == last else 0
-            last = screen
+            # "Não avançou" = a MESMA tela (tipo e conteúdo): o assistente do Business tem várias
+            # telas "Pular" seguidas que caem todas em OPTIONAL_PROMPT.
+            current = (screen, self._screen_sig())
+            repeats = repeats + 1 if current == last else 0
+            last = current
             if repeats >= 4:
                 raise JobError("unknown_screen", f"A tela '{screen.value}' não avançou.")
             handler = handlers.get(screen)
@@ -444,6 +465,13 @@ class GeeLarkAutomation:
             log.info("[%s] tela: %s", self.spec.job_id, screen.value)
             handler()
             self._pause(1.5, 3)
+
+    def _screen_sig(self) -> str:
+        """Impressão digital da tela de agora ("" se não der para ler)."""
+        try:
+            return fingerprint(parse_elements(self.d.dump_hierarchy()))
+        except Exception:
+            return ""
 
     @property
     def app_version(self) -> str:
@@ -546,7 +574,8 @@ class GeeLarkAutomation:
             self.d.app_start(self.app.package, wait=True)
             self._pause(2, 4)
 
-        half_done = (Screen.VERIFY_CODE, Screen.CONFIRM_NUMBER, Screen.VERIFY_METHOD, Screen.MISSED_CALL_INTRO)
+        half_done = (Screen.VERIFY_CODE, Screen.CONFIRM_NUMBER, Screen.VERIFY_METHOD, Screen.MISSED_CALL_INTRO,
+                     Screen.CONFIRM_SEND, Screen.SMS_FAILED)
         self._drive({Screen.PHONE_ENTRY}, {Screen.CHATS: already_registered, Screen.BANNED: dead_account,
                                            Screen.UNDER_REVIEW: dead_account,
                                            **{s: mid_registration for s in half_done}},
@@ -567,31 +596,94 @@ class GeeLarkAutomation:
             if self._click({"resourceId": w + "registration_submit"}, {"textMatches": wa.NEXT_TEXT}):
                 self._number_submitted_at = time.monotonic()
 
+    def preferred_method(self) -> str:
+        """Como pedir o código: "voice" para linha fixa (não recebe SMS) ou depois de o WhatsApp
+        dizer que não conseguiu mandar o SMS; "sms" no resto. O job pode forçar um dos dois."""
+        if self._sms_refused:
+            return "voice"
+        if self.spec.verification in ("sms", "voice"):
+            return self.spec.verification
+        return "voice" if wa.is_br_landline(self.spec.country_code, self.spec.number) else "sms"
+
+    def _set_voice(self, why: str) -> None:
+        if self.code_channel != "voice":
+            self.code_channel = "voice"
+            log.info("[%s] código por ligação de voz (%s)", self.spec.job_id, why)
+            self.ctx.note("O código vai chegar por ligação de voz: o WhatsApp liga para o número e fala os 6 dígitos.")
+
+    def _confirm_send(self) -> None:
+        """"Confirmar seu número / Enviaremos um código por SMS": Continuar manda o SMS; para
+        ligação de voz, "Usar outra forma de verificação" abre a lista de métodos."""
+        if self.preferred_method() == "voice":
+            self._click(wa.rid(self.app, "secondary_button"), {"textMatches": wa.OTHER_VERIFY_TEXT})
+        else:
+            self._click(wa.rid(self.app, "primary_button"), {"textMatches": wa.CONFIRM_TEXT})
+
+    def _sms_failed(self) -> None:
+        """Linha fixa: "Não foi possível enviar um SMS..." -> "Usar outro método" (depois, voz)."""
+        self._sms_refused = True
+        log.info("[%s] o WhatsApp não conseguiu mandar SMS; indo para a ligação de voz", self.spec.job_id)
+        if not self._click({"textMatches": wa.USE_OTHER_METHOD_TEXT}, {"resourceId": "android:id/button1"}, timeout=3):
+            raise JobError("unknown_screen", 'O WhatsApp não mandou o SMS e não achei "Usar outro método".')
+
     def _choose_verify_method(self) -> None:
-        # SMS tem preferência; número fixo no Business só recebe por ligação. Com o SMS bloqueado
-        # ("Tente novamente em 3 horas" embaixo dele), a ligação de voz ainda funciona.
-        sms = {"textMatches": wa.SMS_METHOD_TEXT}
-        call = {"textMatches": wa.CALL_METHOD_TEXT}
+        """Lista "Selecione o método de confirmação": toca na LINHA da opção (o LinearLayout pai
+        do nome), confere o radio e só então "Continuar". SMS bloqueado ("Tente novamente em 3
+        horas" embaixo dele) ou linha fixa: ligação de voz."""
+        sms, call = wa.SMS_METHOD_TEXT, wa.CALL_METHOD_TEXT
+        want = self.preferred_method()
         if self._exists({"textMatches": wa.WAIT_LIMIT_TEXT}):
-            if not self._exists(call):
+            if not self._exists({"textMatches": call}):
                 self._fail_with_text("wait_limit", wa.WAIT_LIMIT_TEXT, "O WhatsApp bloqueou o SMS por um tempo.")
             log.info("[%s] SMS bloqueado na lista de métodos; escolhendo a ligação de voz", self.spec.job_id)
-            self.ctx.note("O SMS está bloqueado por um tempo: o código vai chegar por ligação de voz.")
-            self._click(call)
+            want = "voice"
+        order = [(call, "voice"), (sms, "sms")] if want == "voice" else [(sms, "sms"), (call, "voice")]
+        xml = self.d.dump_hierarchy()
+        chosen = None
+        for pattern, method in order:
+            row = wa.find_method_row(xml, pattern)
+            if row is not None:
+                chosen = (pattern, method, row)
+                break
+        if chosen is None:
+            # Lista antiga (opções com texto clicável, sem reg_method_name).
+            pattern, method = order[0] if self._exists({"textMatches": order[0][0]}) else order[1]
+            self._click({"textMatches": pattern})
         else:
-            self._click(sms, call)
-        self._click({"textMatches": wa.CONFIRM_TEXT}, timeout=3)
+            pattern, method, row = chosen
+            self.ctx.check()
+            self.d.click(*row.tap)
+            self._pause(0.6, 1.2)
+            after = wa.find_method_row(self.d.dump_hierarchy(), pattern)
+            if after is not None and after.checked is False:
+                self._click({"textMatches": pattern}, timeout=2)  # segunda tentativa: o próprio texto
+                self._pause(0.6, 1.2)
+        if method == "voice":
+            self._set_voice("escolhida na lista de métodos")
+        self._click(wa.rid(self.app, "continue_button"), {"textMatches": wa.CONFIRM_TEXT}, timeout=3)
+
+    def _read_code_channel(self) -> None:
+        """Tela do código: "Insira o código de 6 dígitos informado por ligação telefônica"."""
+        text = wa.first_text(self.d, wa.rid(self.app, "send_code_description")) or ""
+        if text and re.fullmatch(wa.VOICE_CODE_TEXT, text):
+            self._set_voice("a tela do código fala em ligação")
 
     def enter_number(self) -> None:
         actions = {
             Screen.PHONE_ENTRY: self._fill_number,
             Screen.CONFIRM_NUMBER: lambda: self._click({"resourceId": "android:id/button1"}, {"textMatches": wa.CONFIRM_TEXT}),
+            Screen.CONFIRM_SEND: self._confirm_send,
+            Screen.SMS_FAILED: self._sms_failed,
             Screen.VERIFY_METHOD: self._choose_verify_method,
             # Nunca "Continuar" aqui: daria permissão de ligações para uma verificação que não tem como passar.
             Screen.MISSED_CALL_INTRO: lambda: self._click({"textMatches": wa.OTHER_VERIFY_TEXT}),
         }
+        if self.preferred_method() == "voice":
+            forced = self.spec.verification == "voice"
+            self._set_voice("pedido no cadastro" if forced else "linha fixa")
         # Nunca pede um novo código sozinho: pedir repetidamente trava o número por horas.
         self._drive({Screen.VERIFY_CODE}, actions, what="digitar código", timeout=240, unknown_grace=45)
+        self._read_code_channel()
 
     def submit_sms_code(self, code: str) -> SmsResult:
         w = self.app.wid
@@ -609,9 +701,9 @@ class GeeLarkAutomation:
             self.ctx.sleep(3)
             self.ctx.check_takeover()
             if self._exists({"textMatches": wa.WRONG_CODE_TEXT}):
-                return SmsResult(False, "Código incorreto. Confira o SMS e digite de novo.")
+                return SmsResult(False, "Código incorreto. Confira o código (SMS ou ligação) e digite de novo.")
             screen = wa.detect_screen(self.d, self.app)
-            if screen in (Screen.PROFILE_NAME, Screen.CHATS, Screen.BUSINESS_CATEGORY):
+            if screen in CODE_ACCEPTED_SCREENS:
                 return SmsResult(True)
             if screen in (Screen.VERIFY_CODE, Screen.UNKNOWN, Screen.INITIALIZING):
                 continue  # ainda verificando
@@ -620,7 +712,7 @@ class GeeLarkAutomation:
                 raise JobError("unknown_screen", f"Tela inesperada '{screen.value}' depois do código SMS.")
             handler()
         if wa.detect_screen(self.d, self.app) == Screen.VERIFY_CODE:
-            return SmsResult(False, "O WhatsApp não aceitou o código. Confira o SMS e digite de novo.")
+            return SmsResult(False, "O WhatsApp não aceitou o código. Confira o código (SMS ou ligação) e digite de novo.")
         raise JobError("unknown_screen", "O WhatsApp não saiu da verificação do código.")
 
     def past_verification(self) -> bool:
@@ -650,8 +742,7 @@ class GeeLarkAutomation:
         return point
 
     def finish_verification(self) -> None:
-        self._drive({Screen.PROFILE_NAME, Screen.CHATS, Screen.BUSINESS_CATEGORY},
-                    what="perfil (depois do código)", timeout=120, unknown_grace=30)
+        self._drive(set(CODE_ACCEPTED_SCREENS), what="perfil (depois do código)", timeout=120, unknown_grace=30)
 
     def request_code(self, method: str) -> str:
         label = "uma ligação com o código" if method == "voice" else "um novo SMS"
@@ -673,14 +764,76 @@ class GeeLarkAutomation:
         log.info("[%s] código pedido de novo (%s) a pedido do usuário", self.spec.job_id, method)
         return f"Pedimos {label}. Aguarde e digite o código quando chegar."
 
+    def _next(self, timeout: float = 3) -> bool:
+        return self._click(wa.rid(self.app, "next_button"), {"textMatches": wa.NEXT_TEXT}, timeout=timeout)
+
     def _choose_category(self) -> None:
+        # Assistente novo: "Outras empresas" já vem marcada (CheckBox). Tocar de novo desmarcaria.
+        if self._exists({"className": "android.widget.CheckBox", "checked": True}):
+            self._next()
+            return
         pattern = wa.CATEGORY_OTHER
         if not self._exists({"textMatches": pattern}) and self._exists({"scrollable": True}):
             self.d(scrollable=True).scroll.to(textMatches=pattern)
         if not self._click({"textMatches": pattern}, timeout=3):
             raise JobError("unknown_screen", "O WhatsApp Business pediu a categoria e não encontrei a opção 'Outros'.")
         self._pause()
-        self._click({"textMatches": wa.NEXT_TEXT}, timeout=3)
+        self._next()
+
+    # ------------------------------------------- perfil comercial (Business novo)
+    def _fill_business_name(self) -> None:
+        """"Crie seu perfil comercial": nome no `biz_name_field` e Avançar. Com os nomes
+        esgotados (o WhatsApp recusou todos), o operador digitou o dele: só avança."""
+        if self._biz_idx < len(self._biz_names):
+            field = self.d(**wa.rid(self.app, "biz_name_field"))
+            if not field.exists:
+                field = self.d(**wa.EDIT_TEXT)
+            if not field.exists:
+                raise JobError("unknown_screen", "Não encontrei o campo do nome comercial.")
+            field.set_text(self._biz_names[self._biz_idx])  # set_text apaga o que estava no campo
+            self._pause(0.6, 1.2)
+        self._next()
+
+    def _business_name_rejected(self) -> None:
+        """"O nome comercial não segue nossas diretrizes" → Editar e tenta a próxima grafia."""
+        typed = self._biz_idx < len(self._biz_names)
+        rejected = f"\"{self._biz_names[self._biz_idx]}\"" if typed else "digitado"
+        self._click({"textMatches": wa.EDIT_BUTTON_TEXT}, {"resourceId": "android:id/button1"}, timeout=3)
+        self._biz_idx += 1
+        if self._biz_idx >= len(self._biz_names):
+            raise JobError("unknown_screen", f"O WhatsApp recusou o nome comercial {rejected} (não segue as "
+                                             "diretrizes). Digite outro nome no campo pela tela ao vivo e devolva ao robô.")
+        log.info("[%s] nome comercial recusado; tentando outra grafia", self.spec.job_id)
+        self.ctx.note(f"O WhatsApp recusou o nome {rejected}; tentando \"{self._biz_names[self._biz_idx]}\".")
+
+    def _business_hours(self) -> None:
+        """"Adicionar horário de atendimento" é obrigatório: "Sempre aberta" e Avançar. Na
+        segunda tela (Domingo…Sábado "Aberta 24 horas") só Avançar."""
+        self._click(wa.rid(self.app, "biz_hours_always_open_option"), {"textMatches": r"(?i)^(sempre aberta|always open)$"},
+                    timeout=2)
+        self._pause(0.6, 1.2)
+        self._next()
+
+    def _business_wizard(self, name: str, photo: bytes | None) -> str | None:
+        """Assistente do perfil comercial (23/11, WhatsApp Business novo): nome → categoria →
+        horário → foto, endereço, descrição, e-mail, catálogo (todos "Pular"/"Agora não") → abas."""
+        if not self._biz_names:
+            self._biz_names = wa.business_name_variants(name)
+        self._drive({Screen.CHATS}, {
+            Screen.BUSINESS_PROFILE_NEW: self._fill_business_name,
+            Screen.BUSINESS_NAME_REJECTED: self._business_name_rejected,
+            Screen.BUSINESS_CATEGORY: self._choose_category,
+            Screen.BUSINESS_HOURS: self._business_hours,
+        }, what="perfil comercial (até a tela principal)", timeout=300, unknown_grace=45)
+        notes = []
+        if self._biz_idx > 0:
+            final = (f"\"{self._biz_names[self._biz_idx]}\"" if self._biz_idx < len(self._biz_names)
+                     else "o que foi digitado na tela ao vivo")
+            notes.append(f"O WhatsApp recusou \"{self._biz_names[0]}\"; o nome comercial ficou {final}.")
+        if photo:
+            notes.append("A foto não foi aplicada (o assistente novo do WhatsApp Business é pulado); "
+                         "troque a foto pelo app.")
+        return " ".join(notes) or None
 
     def _fill_business_category(self) -> None:
         """No perfil comercial a categoria pode ser um campo da mesma tela: abre a lista e escolhe "Outros"."""
@@ -696,9 +849,11 @@ class GeeLarkAutomation:
 
     def save_profile(self, name: str, photo: bytes | None, photo_mime: str | None) -> str | None:
         w = self.app.wid
-        screen = self._drive({Screen.PROFILE_NAME, Screen.CHATS},
+        screen = self._drive({Screen.PROFILE_NAME, Screen.CHATS, *BUSINESS_WIZARD_SCREENS},
                              {Screen.BUSINESS_CATEGORY: self._choose_category},
                              what="perfil", timeout=120, unknown_grace=60)
+        if screen in BUSINESS_WIZARD_SCREENS:
+            return self._business_wizard(name, photo)
         if screen == Screen.CHATS:
             return "O WhatsApp não mostrou a tela de perfil; nome e foto não foram aplicados."
 
@@ -790,15 +945,19 @@ class GeeLarkAutomation:
             self.d.app_start(self.app.package, wait=True)
             self._pause(2, 3)
             self._drive({Screen.CHATS}, what="lista de conversas", timeout=60)
+        if self.app.is_business:
+            # O Business abre na aba "Ferramentas", cujo ⋮ não tem "Dispositivos conectados".
+            if self._click({"textMatches": wa.CHATS_TAB_TEXT}, timeout=3):
+                self._pause()
 
         def step(what: str, *selectors: dict, timeout: float = 10) -> None:
             if not self._click(*selectors, timeout=timeout):
-                raise JobError("pair_failed", f"Não encontrei '{what}' no WhatsApp.")
+                raise JobError("pair_failed", f"Não encontrei '{what}' no {self.app.label}.")
             self._pause()
 
         step("⋮ (mais opções)", wa.MORE_OPTIONS)
-        step("Aparelhos conectados", wa.LINKED_DEVICES)
-        step("Conectar um aparelho", wa.LINK_A_DEVICE, timeout=15)
+        step("Dispositivos conectados", wa.LINKED_DEVICES)
+        step("Conectar dispositivo", wa.rid(self.app, "link_device_button"), wa.LINK_A_DEVICE, timeout=15)
 
         deadline = time.monotonic() + 30
         while True:
@@ -825,14 +984,31 @@ class GeeLarkAutomation:
         self._type(code, clear=True)
 
         deadline = time.monotonic() + 60
+        named = False
         while time.monotonic() < deadline:
             self.ctx.sleep(2)
             if self._exists({"textMatches": wa.PAIR_ERROR_TEXT}):
                 text = wa.first_text(self.d, {"textMatches": wa.PAIR_ERROR_TEXT}) or ""
                 raise JobError("pair_failed", f"O WhatsApp recusou o código de pareamento. {text[:200]}".strip())
-            if self._exists(wa.LINKED_DEVICES) and not self._exists(wa.EDIT_TEXT):
-                return "Código aceito pelo WhatsApp. Aguardando a conexão no ZapLiga."
+            if not named and (self._exists(wa.rid(self.app, "save_device_name_btn"))
+                              or self._exists({"textMatches": wa.DEVICE_NAME_TEXT})):
+                named = self._name_device()
+                continue
+            if self._exists({"textMatches": wa.LINKED_COUNT_TEXT}) or (
+                    self._exists(wa.LINKED_DEVICES) and not self._exists(wa.EDIT_TEXT)):
+                suffix = f" Aparelho nomeado \"{wa.DEVICE_NAME}\"." if named else ""
+                return f"Código aceito pelo WhatsApp.{suffix} Aguardando a conexão no ZapLiga."
         return "Código digitado; o phone não confirmou na tela. Aguardando a conexão no ZapLiga."
+
+    def _name_device(self) -> bool:
+        """"Nome do dispositivo" depois do código aceito: "ZapLiga" e Salvar."""
+        field = self.d(**wa.EDIT_TEXT)
+        if field.exists:
+            field.set_text(wa.DEVICE_NAME)
+            self._pause(0.5, 1)
+        saved = self._click(wa.rid(self.app, "save_device_name_btn"), {"textMatches": wa.SAVE_TEXT}, timeout=3)
+        log.info("[%s] aparelho conectado nomeado (%s)", self.spec.job_id, "ok" if saved else "sem botão Salvar")
+        return saved
 
     # --------------------------------------------------------------- limpeza
     def manual(self, action: dict[str, Any]) -> None:

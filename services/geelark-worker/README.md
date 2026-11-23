@@ -82,6 +82,40 @@ Estado dos jobs só em memória: se o worker reiniciar, `GET /jobs/{id}` devolve
 marca `worker_lost`. `GET /phones` informa os apps instalados só para phones em que o worker
 já rodou um job desde que subiu (senão `null`).
 
+## WhatsApp Business com linha fixa (fluxo de 23/11)
+
+Telas reais (textos e ids lidos com `screen_elements`) que o robô conhece, na ordem em que
+aparecem num cadastro de número fixo no WhatsApp Business. Os testes em `tests/test_whatsapp.py`
+(`FlowDevice`) reproduzem cada uma.
+
+1. **Verificação.** "Confirmar seu número / Enviaremos um código de 6 dígitos por SMS"
+   (`CONFIRM_SEND`): número fixo do Brasil (`is_br_landline`) ou `verification: voice` →
+   "Usar outra forma de verificação"; celular → "Continuar" (SMS). Na lista "Selecione o método
+   de confirmação" (`VERIFY_METHOD`) o robô toca na **linha** da opção (o LinearLayout pai de
+   `reg_method_name`; tocar no texto não selecionava), confere o radio e toca "Continuar". O
+   diálogo "Não foi possível enviar um SMS para seu número... tente novamente em 1 hora"
+   (`SMS_FAILED`, reconhecido antes da espera `WAIT_LIMIT`) → "Usar outro método" → ligação de
+   voz. Na tela do código, `send_code_description` "informado por ligação telefônica" faz a
+   mensagem do job dizer que o código vem por ligação.
+2. **Depois do código.** "Não é possível criar a senha de acesso" (`PASSKEY`) → Ok (nunca o
+   "Continuar" de criar a chave); "Permitir acesso" (contatos e mídia) → Pular; "Restaurar um
+   backup" → Cancelar.
+3. **Perfil comercial novo** (telas Compose; ids sem pacote, por isso `whatsapp.rid()` aceita os
+   dois formatos): nome em `biz_name_field` → Avançar; "O nome comercial não segue nossas
+   diretrizes" → Editar e tenta a grafia com só a inicial maiúscula ("PREVITAS" → "Previtas"),
+   depois chama o operador; categoria "Outras empresas" já marcada → Avançar (tocar desmarcaria);
+   horário → "Sempre aberta" → Avançar → Avançar; foto, endereço/site, descrição, e-mail e
+   catálogo → "Pular"/"Agora não" (`OPTIONAL_PROMPT`); tela principal na aba "Ferramentas" (`CHATS`).
+4. **Pareamento.** Aba "Conversas" → ⋮ → "Dispositivos conectados" → `link_device_button`
+   "Conectar dispositivo" → "Conectar com número de telefone" → código no primeiro dos 8 campos →
+   "Nome do dispositivo": "ZapLiga" + `save_device_name_btn` → "1 de 4 dispositivos conectado".
+
+O `_drive` só desiste de uma tela "que não avançou" quando tipo **e** conteúdo (impressão digital)
+se repetem 4 vezes: as telas "Pular" do assistente são todas `OPTIONAL_PROMPT`.
+
+Teto do job: `job_timeout_s` (20 min) conta da última atividade (passo novo, entrada, toque do
+operador) e `job_max_s` (45 min) é o teto absoluto.
+
 ## Tela desconhecida: memória, IA e operador
 
 Quando o `_drive` vê uma tela que `whatsapp.py` não conhece:
@@ -90,8 +124,10 @@ Quando o `_drive` vê uma tela que `whatsapp.py` não conhece:
    trocados por `#`) já tem uma ação confiável (`is_trusted`), o robô repete a ação na hora.
 2. **Copiloto** (com `ANTHROPIC_API_KEY`): depois de 8 s na tela, pergunta ao Claude uma ação
    por vez (tocar num elemento, voltar, rolar, esperar, desistir), até 8 seguidas e 25 por
-   cadastro. Toque em botão bloqueado ("reenviar SMS", "me ligue", "excluir"...) é recusado no
-   código. Cada ação que faz a tela andar é gravada na memória.
+   cadastro. Toque em botão bloqueado ("reenviar SMS", "me ligue", "número errado", "excluir
+   conta", "sair"/"desconectar", "denunciar"/"bloquear") é recusado no código. "Ligação de voz"
+   (escolha legítima na lista de métodos) e as teclas do teclado (pacote do IME, ids `key_pos_*`)
+   não são bloqueadas. Cada ação que faz a tela andar é gravada na memória.
 3. **Operador**: se nada resolveu, o job pede ajuda como antes. O toque dele numa tela
    desconhecida também é gravado na memória (`source: operator`).
 

@@ -6,8 +6,8 @@ usam uma implementação falsa, sem aparelho.
 
 Regras para quem implementa:
 - Falhas esperadas viram `JobError(errorCode, mensagem em português)`.
-- Toda espera passa por `ctx.sleep()` / `ctx.check()`: é assim que o cancelamento e o teto
-  de 20 min interrompem o trabalho.
+- Toda espera passa por `ctx.sleep()` / `ctx.check()`: é assim que o cancelamento e o
+  teto do job (20 min sem atividade, 45 min no total) interrompem o trabalho.
 - Nunca logar o código SMS, o código de pareamento nem a senha do proxy.
 """
 
@@ -59,6 +59,8 @@ class JobSpec:
     # Cadastro retomado depois de o worker reiniciar: o phone segue ligado e o WhatsApp parado
     # numa etapa; o fluxo olha a tela e continua dali, sem pedir código de novo.
     resume: bool = False
+    # Como pedir o código: "auto" (linha fixa do Brasil -> ligação de voz; resto -> SMS), "sms" ou "voice".
+    verification: str = "auto"
 
     @property
     def full_number(self) -> str:
@@ -75,12 +77,21 @@ class JobContext:
     """Cancelamento e prazo do job, compartilhados com a automação."""
 
     def __init__(self, cancel_event: threading.Event, deadline: float, timeout_message: str,
-                 takeover: threading.Event | None = None, note: Callable[[str], None] | None = None):
+                 takeover: threading.Event | None = None, note: Callable[[str], None] | None = None,
+                 hard_deadline: float | None = None, hard_message: str | None = None):
         self._cancel = cancel_event
         self._takeover = takeover
         self._note = note
+        # `deadline` anda para frente a cada atividade (`extend`), até `hard_deadline`.
+        self.hard_deadline = max(deadline, hard_deadline if hard_deadline is not None else deadline)
         self.deadline = deadline
         self._timeout_message = timeout_message
+        self._hard_message = hard_message or timeout_message
+
+    def extend(self, seconds: float) -> None:
+        """Houve atividade (passo novo, entrada ou toque do operador): o prazo recomeça,
+        sem passar do teto absoluto."""
+        self.deadline = max(self.deadline, min(time.monotonic() + seconds, self.hard_deadline))
 
     @property
     def cancelled(self) -> bool:
@@ -93,7 +104,7 @@ class JobContext:
         if self._cancel.is_set():
             raise JobCancelled()
         if time.monotonic() >= self.deadline:
-            raise JobTimedOut(self._timeout_message)
+            raise JobTimedOut(self._hard_message if self.deadline >= self.hard_deadline else self._timeout_message)
 
     def check_takeover(self) -> None:
         """O operador clicou em "Assumir o controle": para a etapa (só entre uma tela e outra)."""
@@ -138,6 +149,9 @@ class PhoneAutomation(Protocol):
 
     def submit_sms_code(self, code: str) -> SmsResult:
         """Digita o código. Aceito = chegou na tela de perfil (ou depois)."""
+
+    # "sms" ou "voice": por onde o código vai chegar (a mensagem de `waiting_sms` muda).
+    code_channel: str
 
     def finish_verification(self) -> None:
         """Depois do código (e da ajuda do operador): passa as telas até o perfil."""

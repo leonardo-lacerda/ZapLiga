@@ -37,6 +37,12 @@ MAX_FINISHED_JOBS = 200
 # Phone deixado ligado para a API concluir o pareamento: se ela não desligar (fora do ar,
 # deploy...), o worker desliga depois disso. O pareamento leva no máximo ~2 min.
 HANDOFF_MAX_S = 600
+# Teto absoluto do cadastro. O teto "normal" (job_timeout_s, 20 min) conta da última atividade
+# (passo novo, entrada ou toque do operador): em 23/11 ele matou um cadastro com o código já
+# aceito enquanto alguém conduzia o phone na mão.
+JOB_MAX_S = 2700.0
+VOICE_CODE_MESSAGE = ("O WhatsApp vai ligar para o número e falar o código de 6 dígitos (linha fixa: atenda na "
+                      "central da linha). Digite o código aqui.")
 
 # awaiting -> tipos de JobInput aceitos
 ACCEPTED_INPUTS = {
@@ -130,6 +136,7 @@ class Job:
         self.finished = threading.Event()  # thread terminou (phone desligado e liberado)
         # Automação viva do job (para o print ao vivo); None antes de ligar e depois de terminar.
         self.auto: PhoneAutomation | None = None
+        self.ctx: JobContext | None = None  # prazo do job (cada atividade empurra o prazo)
         self.screen_lock = threading.Lock()
         self.live_screen: tuple[float, bytes] | None = None
 
@@ -171,6 +178,7 @@ class JobManager:
         handoff_max_s: float = HANDOFF_MAX_S,
         rescue_window_s: float = 0,
         control_timeout_s: float = CONTROL_TIMEOUT_S,
+        job_max_s: float = JOB_MAX_S,
     ):
         self._factory = factory
         self._stop_phone = stop_phone
@@ -182,7 +190,8 @@ class JobManager:
         # (o deploy espera `active_count()` chegar a 0 antes de trocar o contêiner).
         self.draining = False
         self.input_timeout_s = input_timeout_s
-        self.job_timeout_s = job_timeout_s
+        self.job_timeout_s = job_timeout_s  # sem atividade
+        self.job_max_s = max(job_max_s, job_timeout_s)  # teto absoluto
         # Depois de um erro numa etapa do app, o phone fica ligado este tempo para o operador
         # assumir. 0 = desliga na hora (padrão dos testes; produção usa 59 s via Settings).
         self.rescue_window_s = rescue_window_s
@@ -248,6 +257,7 @@ class JobManager:
             job.status = "running"
             job.awaiting = None
             job.updated_at = _now_iso()
+            self._touch_locked(job)
             job.wake.set()
             log.info("[%s] entrada recebida: %s", job_id, kind)  # nunca o conteúdo
             return job
@@ -325,6 +335,7 @@ class JobManager:
             auto = job.auto if job.status == "waiting_input" else None
             if auto is not None:
                 job.last_activity = time.monotonic()
+                self._touch_locked(job)
             if auto is not None and job.step == RESCUE_STEP:
                 self._claim_rescue_locked(job)
         if auto is None:
@@ -391,7 +402,13 @@ class JobManager:
             job.message = message
             job.updated_at = _now_iso()
             job.history.append({"step": step, "at": job.updated_at, "message": message})
+            self._touch_locked(job)
         log.info("[%s] %s/%s", job.spec.job_id, status, step)
+
+    def _touch_locked(self, job: Job) -> None:
+        """Atividade no cadastro: o teto de `job_timeout_s` recomeça (até `job_max_s`)."""
+        if job.ctx is not None and job.spec.mode == "register":
+            job.ctx.extend(self.job_timeout_s)
 
     def _note(self, job: Job, message: str) -> None:
         with self._lock:
@@ -445,11 +462,18 @@ class JobManager:
     # ----------------------------------------------------------------- fluxo
     def _run(self, job: Job) -> None:
         spec = job.spec
-        limit = self.control_timeout_s if spec.mode == "control" else self.job_timeout_s
-        minutes = max(1, round(limit / 60))
-        ctx = JobContext(job.cancel_event, job.started_mono + limit,
-                         f"O cadastro passou de {minutes} min e foi interrompido.", takeover=job.takeover,
-                         note=lambda message: self._note(job, message))
+        if spec.mode == "register":
+            idle, hard = self.job_timeout_s, self.job_max_s
+            message = f"O cadastro ficou {max(1, round(idle / 60))} min sem avançar e foi interrompido."
+            hard_message = f"O cadastro passou do teto de {max(1, round(hard / 60))} min e foi interrompido."
+        else:
+            idle = hard = self.control_timeout_s if spec.mode == "control" else self.job_timeout_s
+            message = hard_message = f"O cadastro passou de {max(1, round(idle / 60))} min e foi interrompido."
+        ctx = JobContext(job.cancel_event, job.started_mono + idle, message, takeover=job.takeover,
+                         note=lambda text: self._note(job, text),
+                         hard_deadline=job.started_mono + hard, hard_message=hard_message)
+        with self._lock:
+            job.ctx = ctx
         auto: PhoneAutomation | None = None
         outcome: tuple[str, str, str] | None = None  # (status, errorCode, message)
         try:
@@ -655,6 +679,7 @@ class JobManager:
             if job.status == "waiting_input":
                 return job  # já está com o operador (ajuda manual) ou no pareamento
             job.takeover.set()
+            self._touch_locked(job)
             job.message = "Pausando o robô: ele para assim que chegar na próxima tela do WhatsApp."
             job.updated_at = _now_iso()
         log.info("[%s] operador pediu o controle", job_id)
@@ -789,7 +814,8 @@ class JobManager:
         message = None
         attempts = 0
         while True:
-            inp = self._wait_input(job, ctx, "waiting_sms", "sms", message)
+            voice = getattr(auto, "code_channel", "sms") == "voice"
+            inp = self._wait_input(job, ctx, "waiting_sms", "sms", message or (VOICE_CODE_MESSAGE if voice else None))
             if inp["type"] == "take_over":
                 self._operator_turn(job, ctx, auto, "waiting_sms")
                 # O operador pode ter resolvido a verificação na mão (ligação, código digitado).
@@ -831,7 +857,7 @@ class JobManager:
                     raise rejected
                 attempts, message = 0, None  # depois da ajuda, espera um código novo
                 continue
-            message = result.message or "Código incorreto. Confira o SMS e digite de novo."
+            message = result.message or "Código incorreto. Confira o código (SMS ou ligação) e digite de novo."
 
     def _profile(self, job: Job, ctx: JobContext, auto: PhoneAutomation) -> str | None:
         while (inp := self._wait_input(job, ctx, "waiting_profile", "profile"))["type"] == "take_over":

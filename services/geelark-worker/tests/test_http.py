@@ -319,6 +319,14 @@ def test_probe_proxy_is_optional_and_reaches_the_job(geelark):
     assert CreateWorkerJob.model_validate(job_body()).to_spec().probe_proxy is None
 
 
+def test_verification_method_is_optional_and_validated(client):
+    from app.schemas import CreateWorkerJob
+    assert CreateWorkerJob.model_validate(job_body()).to_spec().verification == "auto"
+    assert CreateWorkerJob.model_validate(job_body(verification="voice")).to_spec().verification == "voice"
+    resp = client.post("/jobs", headers=H, json=job_body(verification="fax"))
+    assert resp.status_code == 400 and resp.json()["error"] == "invalid_request"
+
+
 def test_probe_proxy_validation_never_echoes_password(client):
     resp = client.post("/jobs", headers=H, json=job_body(probeProxy={"server": "", "port": 0,
                                                                       "password": "probe-pw-xyz"}))

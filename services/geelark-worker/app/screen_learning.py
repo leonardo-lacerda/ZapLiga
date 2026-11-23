@@ -34,13 +34,19 @@ _DIGITS = re.compile(r"\d+")
 _SPACES = re.compile(r"\s+")
 
 # Botões que nem a IA nem a memória tocam: pedir código de novo trava o número por horas,
-# e os outros mudam o número, apagam dados ou saem da conta. Quem decide é o operador.
+# e os outros mudam o número, apagam a conta ou saem dela. Quem decide é o operador.
+# "Ligação de voz" NÃO entra: na lista de métodos é a escolha certa para linha fixa (23/11).
 FORBIDDEN_TEXT = re.compile(
-    r"(?i)(reenviar|resend|enviar (o )?sms|send sms|me ligue|ligar para mim|call me|liga[çc][ãa]o de voz|voice call"
+    r"(?i)(reenviar|resend|send (sms|code) again|enviar (o )?(sms|c[óo]digo) (de )?novo|enviar (o )?sms novamente"
+    r"|me ligue|ligue-me|ligar para mim|call me"
     r"|n[úu]mero errado|wrong number|editar n[úu]mero|edit number|alterar n[úu]mero|change number"
-    r"|excluir|apagar|delete|remover conta|remove account|desconectar|log ?out|sair da conta"
-    r"|denunciar|report|bloquear|block|transferir|transfer)"
+    r"|(excluir|apagar|delete|remover|remove) (minha |a |sua |esta |my |your |this )?(conta|account)"
+    r"|\bsair\b|log ?out|sign out|desconectar|disconnect"
+    r"|denunciar|\breport\b|bloquear|\bblock\b|transferir|transfer)"
 )
+# Teclado do phone: "Tecla Delete", "Enter"... nunca são o botão perigoso de uma tela.
+IME_PACKAGE = re.compile(r"(?i).*(inputmethod|keyboard|\.ime\b|com\.github\.uiautomator).*")
+IME_KEY_ID = re.compile(r"^key_pos_")
 
 
 @dataclass(frozen=True)
@@ -64,6 +70,8 @@ class Element:
 
     @property
     def forbidden(self) -> bool:
+        if IME_PACKAGE.fullmatch(self.package) or IME_KEY_ID.match(self.rid):
+            return False
         return bool(FORBIDDEN_TEXT.search(f"{self.text} {self.desc}"))
 
     def describe(self) -> str:

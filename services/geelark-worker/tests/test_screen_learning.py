@@ -67,6 +67,27 @@ def test_buttons_that_burn_the_number_are_blocked():
     assert not close.forbidden
 
 
+@pytest.mark.parametrize("text", ["Reenviar SMS", "Reenviar SMS em 0:45", "Me ligue", "Ligar para mim", "Número errado?",
+                                  "Excluir conta", "Apagar minha conta", "Sair", "Desconectar", "Denunciar", "Bloquear",
+                                  "Resend code", "Call me", "Delete account", "Log out"])
+def test_dangerous_buttons_stay_blocked(text):
+    assert parse_elements(screen(node(text, cls="android.widget.Button", clickable=True)))[0].forbidden
+
+
+def test_legit_choices_and_keyboard_keys_are_not_blocked():
+    # 23/11: "Ligação de voz" na lista de métodos é a escolha certa para linha fixa, e a "Tecla
+    # Delete" do teclado apagava o nome comercial errado. Os dois estavam bloqueados.
+    xml = screen(
+        node("Ligação de voz", rid="com.whatsapp.w4b:id/reg_method_name", package="com.whatsapp.w4b"),
+        node("", rid="key_pos_del", desc="Tecla Delete", cls="android.widget.FrameLayout", clickable=True,
+             package="com.google.android.inputmethod.latin"),
+        node("", desc="Delete", cls="android.widget.FrameLayout", clickable=True, package="com.android.inputmethod.latin"),
+        node("Receber SMS", rid="com.whatsapp.w4b:id/reg_method_name", package="com.whatsapp.w4b"),
+        node("Pular", rid="com.whatsapp.w4b:id/secondary_button", cls="android.widget.Button", clickable=True),
+    )
+    assert [e.forbidden for e in parse_elements(xml)] == [False] * 5
+
+
 # --------------------------------------------------------------- memória
 def test_memory_counts_results_restarts_on_a_new_action_and_survives_a_restart(tmp_path):
     path = str(tmp_path / "data" / "learned.json")

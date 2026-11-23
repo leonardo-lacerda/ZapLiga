@@ -21,15 +21,15 @@ Todos os JSON usam camelCase. Datas em ISO-8601 UTC. O código SMS e o código d
 | `checking_network` | worker | IP público consultado **de dentro do phone**; precisa estar em `expectedEgressIps` (se a lista vier vazia, só exige internet) |
 | `installing_app` | worker | só se o app escolhido não estiver instalado |
 | `opening_app` | worker | abre o app e passa as telas iniciais |
-| `entering_number` | worker | país + número, confirma |
-| `waiting_sms` | worker | `status=waiting_input`, `awaiting=sms` |
+| `entering_number` | worker | país + número, confirma; escolhe SMS ou ligação de voz (`verification`, abaixo) |
+| `waiting_sms` | worker | `status=waiting_input`, `awaiting=sms`. Com o código por ligação (linha fixa), `message` diz que o WhatsApp vai ligar e falar os 6 dígitos; o `{type:'sms'}` é o mesmo |
 | `verifying` | worker | digitou o código, aguardando o WhatsApp aceitar (código errado volta para `waiting_sms` com `message`) |
 | `waiting_profile` | worker | `status=waiting_input`, `awaiting=profile` (tela "Profile info") |
-| `saving_profile` | worker | nome + foto |
+| `saving_profile` | worker | nome + foto. No WhatsApp Business novo, o assistente "Crie seu perfil comercial": nome comercial (se o WhatsApp recusar "não segue nossas diretrizes", tenta a grafia com só a inicial maiúscula e avisa o nome final em `message`), categoria "Outras empresas", horário "Sempre aberta", e pula foto, endereço, descrição, e-mail e catálogo até a tela principal. A foto não é aplicada nesse assistente (aviso em `message`) |
 | `registered` | worker | `status=waiting_input`, `awaiting=link_decision` |
-| `opening_link_screen` | worker | ⋮ → Aparelhos conectados → Conectar aparelho → Conectar com número de telefone |
+| `opening_link_screen` | worker | ⋮ → Aparelhos conectados → Conectar aparelho → Conectar com número de telefone. No Business: aba "Conversas" (o ⋮ da aba "Ferramentas" não tem a opção) → ⋮ → Dispositivos conectados → Conectar dispositivo |
 | `waiting_pair_code` | worker | `status=waiting_input`, `awaiting=pair_code` (quem responde é a API, não o usuário) |
-| `entering_pair_code` | worker | digitou o código de 8 caracteres |
+| `entering_pair_code` | worker | digitou o código de 8 caracteres; na tela "Nome do dispositivo" que vem depois, salva "ZapLiga" |
 | `linking` | API | worker terminou; a API espera a sessão Waxum ficar `connected` (máx. 120 s) |
 | `done` | ambos | fim. `linked=true/false` diz se a linha foi conectada ao ZapLiga |
 
@@ -49,7 +49,11 @@ Ao terminar (`done`, `failed`, `cancelled`), o worker desliga o phone se `powerO
 for `true` (padrão). **Exceção:** quando termina em `status=done, step=linking` (código de
 pareamento digitado), o worker deixa o phone ligado, porque o aparelho principal precisa estar
 online até o Waxum confirmar a conexão. Nesse caso é a API que desliga (`POST
-/phones/{id}/stop`) quando a conexão é confirmada, expira (`link_timeout`) ou é cancelada. Teto de duração do job: 20 min. Espera por entrada humana: 10 min.
+/phones/{id}/stop`) quando a conexão é confirmada, expira (`link_timeout`) ou é cancelada. Teto do job:
+20 min **sem atividade** (passo novo, entrada, "Assumir o controle" ou toque do operador em `/manual`
+recomeçam a contagem) e 45 min no total, mesmo com atividade (`job_max_s`). Antes era 20 min fixos,
+que interromperam um cadastro com o código já aceito enquanto o operador conduzia o phone.
+Espera por entrada humana: 10 min.
 
 ## 2. geelark-worker (HTTP interno, sem porta pública)
 
@@ -115,6 +119,10 @@ type CreateWorkerJob = {
   probeProxy?: { server: string; port: number; username: string; password: string };
   expectedEgressIps: string[];
   powerOffWhenDone: boolean;
+  // Como pedir o código (register). auto (padrão): número fixo do Brasil (DDD + 8 dígitos começando
+  // com 2 a 5) vai direto para a ligação de voz; celular, SMS. Se o WhatsApp responder "Não foi
+  // possível enviar um SMS para seu número", o worker toca "Usar outro método" e escolhe a ligação.
+  verification?: 'auto' | 'sms' | 'voice';
 };
 
 type JobInput =
@@ -226,6 +234,12 @@ Regras da API:
   usar a VPS.
 - Conectada a linha, ela fica 72 h em aquecimento (`flagged_until`), fora de todo o discador; o
   "Destravar" em Admin libera antes ([estudo](estudo-bloqueio-numero-geelark.md)).
+  **Só pelo cadastro:** uma linha conectada pela tela de Números (QR ou código, mesmo de um
+  telefone do GeeLark recém-cadastrado) não recebe o aquecimento, porque essa tela não sabe de
+  onde o número veio (`whatsapp_numbers` não guarda o cadastro nem o phone). Em 23/11 a linha
+  (27) 3189-0428 entrou assim. Para cobrir esse caminho, a API teria de cruzar o número com
+  `provisioning_jobs` concluídos nas últimas horas ao conectar; enquanto isso, quem
+  conecta pela tela de Números aplica a quarentena à mão, se quiser.
 - `connect=false` manda `{type:'finish'}`.
 
 ## 4. Túnel (IP de saída)

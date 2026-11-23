@@ -84,7 +84,8 @@ def test_each_app_uses_its_own_prefix():
 def test_business_only_screens():
     comum = {s for s, _ in wa.build_screens(WA)}
     business = {s for s, _ in wa.build_screens(BIZ)}
-    assert business - comum == {Screen.USE_OTHER_NUMBER, Screen.BUSINESS_CATEGORY, Screen.BUSINESS_WELCOME}
+    assert business - comum == {Screen.USE_OTHER_NUMBER, Screen.BUSINESS_CATEGORY, Screen.BUSINESS_WELCOME,
+                                Screen.BUSINESS_PROFILE_NEW, Screen.BUSINESS_NAME_REJECTED, Screen.BUSINESS_HOURS}
 
 
 def test_after_sms_screens():
@@ -482,15 +483,6 @@ def test_blocked_sms_on_the_method_list_is_not_a_wait():
     assert wa.detect_screen(FakeDevice(["Tente novamente em 5 minutos", "OK"]), WA) == Screen.WAIT_LIMIT
 
 
-def test_blocked_sms_chooses_the_voice_call():
-    auto = make_auto(mock.Mock())
-    auto.d = FakeDevice(["Receber SMS", "Tente novamente em 3 horas", "Ligação de voz", "Continuar"])
-    clicked = []
-    auto._click = lambda *sels, timeout=5: clicked.append(sels[0]["textMatches"]) or True
-    auto._choose_verify_method()
-    assert clicked == [wa.CALL_METHOD_TEXT, wa.CONFIRM_TEXT]
-
-
 def test_blocked_sms_without_voice_call_is_a_wait():
     auto = make_auto(mock.Mock())
     auto.d = FakeDevice(["Receber SMS", "Tente novamente em 3 horas"])
@@ -498,3 +490,450 @@ def test_blocked_sms_without_voice_call_is_a_wait():
             pytest.raises(JobError) as exc:
         auto._choose_verify_method()
     assert exc.value.code == "wait_limit" and "3 horas" in exc.value.message
+
+
+# ------------------------------------- 23/11: WhatsApp Business com linha fixa (telas reais)
+# Textos e resource-ids lidos com `screen_elements` no telefone "WhatsApp 3" durante o cadastro
+# de (27) 3189-0428. As telas Compose do assistente do perfil usam a tag pura como id.
+BIZ_ID = "com.whatsapp.w4b:id/"
+
+
+def n(text="", rid="", cls="android.widget.TextView", clickable=False, checked=None, desc="", key=None,
+      children=(), bare=False):
+    full = rid if (bare or not rid or ":" in rid) else BIZ_ID + rid
+    return {"text": text, "rid": full, "cls": cls, "clickable": clickable, "checked": checked, "desc": desc,
+            "key": key, "children": list(children)}
+
+
+def button(text, rid, bare=False):
+    return n(text, rid, "android.widget.Button", True, bare=bare)
+
+
+class FlowDevice:
+    """Aparelho falso que monta o XML de cada tela e muda de tela conforme o que é tocado.
+
+    `transitions[tela][chave]` diz a próxima tela (ou uma função do aparelho que a devolve); a
+    chave de um elemento é `key`, senão o texto, senão a descrição, senão o id curto. Tocar num
+    elemento sem transição deixa a tela como está. Digitar pelo teclado usa a chave "__keys__".
+    """
+
+    def __init__(self, screens, transitions, start):
+        self.screens, self.transitions, self.current = screens, transitions, start
+        self.taps, self.typed, self.fields, self.presses = [], [], {}, []
+
+    # --- elementos
+    def _flat(self):
+        out = []
+
+        def walk(node, top, parent_key):
+            key = node["key"] or parent_key or node["text"] or node["desc"] or node["rid"].rsplit("/", 1)[-1]
+            out.append((node, top, key))
+            for child in node["children"]:
+                walk(child, top, key)
+
+        for i, node in enumerate(self.screens[self.current]):
+            walk(node, i, None)
+        return out
+
+    @staticmethod
+    def _match(node, sel):
+        for k, v in sel.items():
+            if k == "textMatches":
+                ok = re.fullmatch(v, node["text"]) is not None
+            elif k == "resourceId":
+                ok = node["rid"] == v
+            elif k == "resourceIdMatches":
+                ok = bool(node["rid"]) and re.fullmatch(v, node["rid"]) is not None
+            elif k == "descriptionMatches":
+                ok = re.fullmatch(v, node["desc"]) is not None
+            elif k == "className":
+                ok = node["cls"] == v
+            elif k == "checked":
+                ok = node["checked"] is v
+            elif k in ("scrollable", "clickable"):
+                ok = node.get(k, False) == v
+            else:
+                raise AssertionError(f"seletor não suportado no teste: {k}")
+            if not ok:
+                return False
+        return True
+
+    def _go(self, key):
+        self.taps.append(key)
+        nxt = self.transitions.get(self.current, {}).get(key)
+        if nxt is not None:
+            self.current = nxt(self) if callable(nxt) else nxt
+
+    def __call__(self, **sel):
+        hit = next(((node, key) for node, _, key in self._flat() if self._match(node, sel)), None)
+        dev = self
+        obj = mock.Mock(exists=hit is not None)
+        obj.wait.return_value = hit is not None
+        obj.info = {"enabled": True}
+        if hit:
+            node, key = hit
+            obj.get_text.return_value = node["text"]
+            obj.click.side_effect = lambda: dev._go(key)
+
+            def set_text(value):
+                name = node["rid"].rsplit("/", 1)[-1] or key
+                dev.typed.append((name, value))
+                dev.fields[name] = value
+            obj.set_text.side_effect = set_text
+        return obj
+
+    # --- aparelho
+    def dump_hierarchy(self):
+        from xml.sax.saxutils import quoteattr
+
+        def render(node, top):
+            attrs = (f'text={quoteattr(node["text"])} resource-id={quoteattr(node["rid"])} class="{node["cls"]}" '
+                     f'package="com.whatsapp.w4b" content-desc={quoteattr(node["desc"])} '
+                     f'clickable="{str(node["clickable"]).lower()}" checked="{str(bool(node["checked"])).lower()}" '
+                     f'scrollable="false" bounds="[0,{top * 100}][1080,{top * 100 + 90}]"')
+            inner = "".join(render(c, top) for c in node["children"])
+            return f"<node {attrs}>{inner}</node>"
+
+        body = "".join(render(node, i) for i, node in enumerate(self.screens[self.current]))
+        return f'<?xml version="1.0"?><hierarchy rotation="0">{body}</hierarchy>'
+
+    def click(self, x, y):
+        top = y // 100
+        hit = next((key for node, t, key in self._flat() if t == top), None)
+        assert hit is not None, f"toque fora de qualquer elemento em ({x}, {y})"
+        self._go(hit)
+
+    def send_keys(self, text, clear=False):
+        self.typed.append(("teclado", text))
+        self._go("__keys__")
+
+    def current_ime(self):
+        return "com.google.android.inputmethod.latin/.LatinIME"
+
+    def press(self, key):
+        self.presses.append(key)
+
+    def app_current(self):
+        return {"package": "com.whatsapp.w4b"}
+
+    def window_size(self):
+        return 1080, 2400
+
+
+def method_row(name, key, checked):
+    return n(cls="android.widget.LinearLayout", clickable=True, key=key, children=[
+        n(cls="android.widget.RadioButton", checked=checked),
+        n(name, "reg_method_name"),
+        n("Enviar código para +55 27 3189-0428", "reg_method_details_container"),
+    ])
+
+
+def method_sheet(sms="Receber SMS", checked=None):
+    return [
+        n("Selecione o método de confirmação", "request_otp_code_bottom_sheet_title"),
+        method_row(sms, "sms", checked == "sms"),
+        method_row("Ligação de voz", "voice", checked == "voice"),
+        button("Continuar", "continue_button"),
+    ]
+
+
+BIZ_NAME_SCREEN = [
+    n("Crie seu perfil comercial"),
+    n("Nome comercial"),
+    n("", "biz_name_field", "android.widget.EditText", True, bare=True),
+    button("Avançar", "next_button", bare=True),
+]
+LANDLINE_SCREENS = {
+    "confirm_send": [
+        n("Confirmar seu número", "title"),
+        n("Enviaremos um código de 6 dígitos por SMS para +55 27 3189-0428", "description"),
+        button("Continuar", "primary_button"),
+        button("Usar outra forma de verificação", "secondary_button"),
+    ],
+    "sheet": method_sheet(),
+    "sheet_voice": method_sheet(checked="voice"),
+    "sheet_sms": method_sheet(checked="sms"),
+    "sms_failed": [
+        n("Não foi possível enviar um SMS para seu número", "android:id/alertTitle"),
+        n("Confira o número de telefone. Se estiver correto, tente novamente em 1 hora ou use outro método de "
+          "verificação.", "android:id/message"),
+        button("OK", "android:id/button2"),
+        button("Usar outro método", "android:id/button1"),
+    ],
+    "sheet_new_sms": method_sheet("Receber novo SMS"),
+    "sheet_new_sms_voice": method_sheet("Receber novo SMS", checked="voice"),
+    "code_voice": [
+        n("Insira o código de 6 dígitos informado por ligação telefônica para +55 27 3189-0428.",
+          "send_code_description"),
+        n("", "verify_sms_code_input", "android.widget.EditText", True),
+    ],
+    "passkey": [
+        n("Não é possível criar a senha de acesso", "title"),
+        n("Para criar uma senha de acesso, você precisa fazer login na sua Conta do Google neste aparelho.", "subtitle"),
+        button("Ok", "continue_button"),
+    ],
+    "allow_access": [
+        n("Permitir acesso", "headline"),
+        n("Permita o acesso aos seus contatos e à sua mídia para conversar e enviar fotos.", "description"),
+        button("Continuar", "primary_button"),
+        button("Pular", "secondary_button"),
+    ],
+    "restore": [
+        n("Restaurar um backup", "permission_title"),
+        n("Para localizar e restaurar o backup salvo no armazenamento do Google, permita que o WhatsApp acesse seus "
+          "contatos.", "permission_message"),
+        button("Cancelar", "cancel"),
+        button("Continuar", "submit"),
+    ],
+    "biz_name": BIZ_NAME_SCREEN,
+}
+
+
+def landline_auto(start, transitions, screens=LANDLINE_SCREENS, **spec):
+    auto = make_auto(mock.Mock())
+    auto.spec = make_spec(app="business", country_code="55", number=spec.pop("number", "2731890428"), **spec)
+    auto.app = BIZ
+    auto.d = FlowDevice(screens, transitions, start)
+    auto._shell = lambda *a, **k: ""
+    return auto
+
+
+@pytest.mark.parametrize("cc,number,landline", [
+    ("55", "2731890428", True),     # (27) 3189-0428, a linha da Fluke
+    ("55", "1133334444", True),
+    ("55", "5121212121", True),
+    ("55", "27981522584", False),   # celular: 9 dígitos começando com 9
+    ("55", "1199998888", False),    # 8 dígitos começando com 9: celular antigo, não fixo
+    ("55", "552731890428", True),   # veio com o código do país
+    ("1", "2731890428", False),
+])
+def test_br_landline(cc, number, landline):
+    assert wa.is_br_landline(cc, number) is landline
+
+
+@pytest.mark.parametrize("texts,expected", [
+    (["Confirmar seu número", "Enviaremos um código de 6 dígitos por SMS para +55 27 3189-0428", "Continuar",
+      "Usar outra forma de verificação"], Screen.CONFIRM_SEND),
+    (["Selecione o método de confirmação", "Receber SMS", "Enviar código para +55 27 3189-0428", "Ligação de voz",
+      "Continuar"], Screen.VERIFY_METHOD),
+    (["Receber novo SMS", "Ligação de voz", "Continuar"], Screen.VERIFY_METHOD),
+    # "tente novamente em 1 hora" casa a espera, mas o diálogo é o SMS recusado da linha fixa.
+    (["Não foi possível enviar um SMS para seu número", "Confira o número de telefone. Se estiver correto, tente "
+      "novamente em 1 hora ou use outro método de verificação.", "OK", "Usar outro método"], Screen.SMS_FAILED),
+    (["Não é possível criar a senha de acesso", "Para criar uma senha de acesso, você precisa fazer login na sua "
+      "Conta do Google...", "Ok"], Screen.PASSKEY),
+    (["Permitir acesso", "Permita o acesso aos seus contatos e à sua mídia.", "Continuar", "Pular"],
+     Screen.OPTIONAL_PROMPT),
+    (["Restaurar um backup", "Cancelar"], Screen.RESTORE_BACKUP),
+    (["Crie seu perfil comercial", "Nome comercial", "Avançar"], Screen.BUSINESS_PROFILE_NEW),
+    (["O nome comercial não segue nossas diretrizes. Edite o nome e tente de novo.", "Editar",
+      "Crie seu perfil comercial", "Avançar"], Screen.BUSINESS_NAME_REJECTED),
+    (["Selecionar a categoria da sua empresa", "Outras empresas", "Avançar"], Screen.BUSINESS_CATEGORY),
+    (["Adicionar horário de atendimento", "Sempre aberta", "Avançar"], Screen.BUSINESS_HOURS),
+    (["Adicionar uma foto do perfil", "Pular"], Screen.OPTIONAL_PROMPT),
+    (["Mais formas de encontrar sua empresa", "Endereço", "Site", "Pular"], Screen.OPTIONAL_PROMPT),
+    (["Adicionar descrição da empresa", "Pular"], Screen.OPTIONAL_PROMPT),
+    (["Adicione seu e-mail", "Pular"], Screen.OPTIONAL_PROMPT),
+    (["Crie seu catálogo", "Agora não"], Screen.OPTIONAL_PROMPT),
+    (["Ferramentas", "Conversas", "Ligações"], Screen.CHATS),
+])
+def test_business_landline_screens(texts, expected):
+    assert wa.detect_screen(FakeDevice(texts), BIZ) == expected
+
+
+def test_new_business_screens_by_compose_tag():
+    assert wa.detect_screen(FakeDevice(ids=["biz_name_field"]), BIZ) == Screen.BUSINESS_PROFILE_NEW
+    assert wa.detect_screen(FakeDevice(ids=["biz_hours_always_open_option"]), BIZ) == Screen.BUSINESS_HOURS
+    assert wa.detect_screen(FakeDevice(ids=[BIZ_ID + "request_otp_code_bottom_sheet_title"]), BIZ) == Screen.VERIFY_METHOD
+    # Perfil antigo: o rótulo "Selecionar categoria" do campo não pode virar a tela de categoria.
+    assert wa.detect_screen(FakeDevice(["Selecionar categoria"], [BIZ_ID + "business_name"]), BIZ) == Screen.PROFILE_NAME
+    # No WhatsApp comum, "Ferramentas" não é a tela principal.
+    assert wa.detect_screen(FakeDevice(["Ferramentas"]), WA) == Screen.UNKNOWN
+
+
+def test_find_method_row_returns_the_clickable_parent():
+    xml = FlowDevice(LANDLINE_SCREENS, {}, "sheet_voice").dump_hierarchy()
+    voice = wa.find_method_row(xml, wa.CALL_METHOD_TEXT)
+    sms = wa.find_method_row(xml, wa.SMS_METHOD_TEXT)
+    assert voice == wa.MethodRow((540, 245), True)  # a linha (LinearLayout) inteira, 3ª da tela
+    assert sms == wa.MethodRow((540, 145), False)
+    assert wa.find_method_row("<hierarchy/>", wa.SMS_METHOD_TEXT) is None
+
+
+def test_landline_goes_straight_to_the_voice_call():
+    auto = landline_auto("confirm_send", {
+        "confirm_send": {"Usar outra forma de verificação": "sheet", "Continuar": "sms_failed"},
+        "sheet": {"voice": "sheet_voice", "sms": "sheet_sms"},
+        "sheet_voice": {"Continuar": "code_voice"},
+    })
+    auto.enter_number()
+    assert auto.d.current == "code_voice"
+    assert auto.d.taps == ["Usar outra forma de verificação", "voice", "Continuar"]  # nunca o SMS
+    assert auto.code_channel == "voice"
+
+
+def test_refused_sms_dialog_switches_to_the_voice_call():
+    # O que aconteceu de verdade: SMS pedido, diálogo de SMS recusado, "Usar outro método" e voz.
+    auto = landline_auto("confirm_send", {
+        "confirm_send": {"Continuar": "sms_failed"},
+        "sms_failed": {"Usar outro método": "sheet_new_sms", "OK": "confirm_send"},
+        "sheet_new_sms": {"voice": "sheet_new_sms_voice"},
+        "sheet_new_sms_voice": {"Continuar": "code_voice"},
+    }, verification="sms")
+    auto.enter_number()
+    assert auto.d.taps == ["Continuar", "Usar outro método", "voice", "Continuar"]
+    assert auto.code_channel == "voice"
+
+
+def test_a_tap_that_does_not_select_the_row_falls_back_to_the_text():
+    auto = landline_auto("sheet", {
+        "sheet": {"voice": lambda d: "sheet_voice" if d.taps.count("voice") == 2 else "sheet"},
+        "sheet_voice": {"Continuar": "code_voice"},
+    })
+    auto._choose_verify_method()
+    assert auto.d.taps == ["voice", "voice", "Continuar"] and auto.d.current == "code_voice"
+
+
+def test_blocked_sms_chooses_the_voice_call():
+    # 18/11: "Receber SMS / Tente novamente em 3 horas" e "Ligação de voz" na mesma lista (celular).
+    screens = {**LANDLINE_SCREENS, "blocked": [*method_sheet(), n("Tente novamente em 3 horas")]}
+    auto = landline_auto("blocked", {"blocked": {"voice": "sheet_voice"}, "sheet_voice": {"Continuar": "code_voice"}},
+                         screens=screens, number="27981522584")
+    auto._choose_verify_method()
+    assert auto.d.taps == ["voice", "Continuar"] and auto.code_channel == "voice"
+
+
+def test_mobile_number_keeps_the_sms():
+    auto = landline_auto("confirm_send", {"confirm_send": {"Continuar": "code_voice"}}, number="27981522584")
+    assert auto.preferred_method() == "sms"
+    auto.enter_number()
+    assert auto.d.taps == ["Continuar"]
+    # A tela do código diz "informado por ligação telefônica": a mensagem do job acompanha.
+    assert auto.code_channel == "voice"
+
+
+def test_code_accepted_then_passkey_access_and_backup_screens():
+    auto = landline_auto("code_voice", {
+        "code_voice": {"__keys__": "passkey"},
+        "passkey": {"Ok": "allow_access"},
+        "allow_access": {"Pular": "restore"},
+        "restore": {"Cancelar": "biz_name"},
+    })
+    assert auto.submit_sms_code("123456").accepted
+    assert auto.d.taps == ["verify_sms_code_input", "__keys__", "Ok", "Pular", "Cancelar"]
+    assert auto.past_verification()
+
+
+WIZARD_SCREENS = {
+    "biz_name": BIZ_NAME_SCREEN,
+    "rejected": [
+        n("O nome comercial não segue nossas diretrizes. Edite o nome e tente de novo.", "android:id/message"),
+        button("Editar", "android:id/button1"),
+        *BIZ_NAME_SCREEN,
+    ],
+    "category": [
+        n("Selecionar a categoria da sua empresa"),
+        n("Outras empresas", cls="android.widget.CheckBox", clickable=True, checked=True),
+        button("Avançar", "next_button", bare=True),
+    ],
+    "hours": [
+        n("Adicionar horário de atendimento"),
+        n("Sempre aberta", "biz_hours_always_open_option", clickable=True, bare=True),
+        n("Horários específicos", clickable=True),
+        button("Avançar", "next_button", bare=True),
+    ],
+    "hours_days": [
+        n("Adicionar horário de atendimento"),
+        *[n(day) for day in ("Domingo", "Segunda-feira", "Terça-feira", "Quarta-feira", "Quinta-feira",
+                             "Sexta-feira", "Sábado")],
+        n("Aberta 24 horas"),
+        button("Avançar", "next_button", bare=True),
+    ],
+    "photo": [n("Adicionar uma foto do perfil"), button("Pular", "skip_button", bare=True)],
+    "more": [n("Mais formas de encontrar sua empresa"), n("Endereço"), n("Site"), button("Pular", "skip_button", bare=True)],
+    "description": [n("Adicionar descrição da empresa"), button("Pular", "skip_button", bare=True)],
+    "email": [n("Adicione seu e-mail", "toolbar_title_text_v2"), button("Pular", "register_email_skip")],
+    "catalog": [n("Crie seu catálogo", "top_container_title"), button("Agora não", "onboarding_decline_button")],
+    "home_tools": [n("Ferramentas", clickable=True), n("Conversas", clickable=True), n("Ligações", clickable=True)],
+}
+WIZARD_SCREENS["hours_chosen"] = WIZARD_SCREENS["hours"]
+WIZARD_FLOW = {
+    "biz_name": {"Avançar": lambda d: "rejected" if d.fields.get("biz_name_field") == "PREVITAS" else "category"},
+    "rejected": {"Editar": "biz_name"},
+    "category": {"Avançar": "hours"},
+    "hours": {"Sempre aberta": "hours_chosen"},  # sem escolher, "Avançar" não anda
+    "hours_chosen": {"Avançar": "hours_days"},
+    "hours_days": {"Avançar": "photo"},
+    "photo": {"Pular": "more"},
+    "more": {"Pular": "description"},
+    "description": {"Pular": "email"},
+    "email": {"Pular": "catalog"},
+    "catalog": {"Agora não": "home_tools"},
+}
+
+
+def test_business_profile_wizard_fixes_the_name_and_reaches_the_home_screen():
+    auto = landline_auto("biz_name", WIZARD_FLOW, screens=WIZARD_SCREENS)
+    warning = auto.save_profile("PREVITAS", None, None)
+    assert auto.d.current == "home_tools"
+    assert auto.d.typed == [("biz_name_field", "PREVITAS"), ("biz_name_field", "Previtas")]
+    assert "Outras empresas" not in auto.d.taps  # já vinha marcada: tocar desmarcaria
+    assert auto.d.taps.count("Pular") == 4 and "Agora não" in auto.d.taps
+    assert warning and '"PREVITAS"' in warning and '"Previtas"' in warning
+
+
+def test_business_name_rejected_twice_asks_the_operator():
+    flow = {**WIZARD_FLOW, "biz_name": {"Avançar": "rejected"}}
+    auto = landline_auto("biz_name", flow, screens=WIZARD_SCREENS)
+    with pytest.raises(JobError) as exc:
+        auto.save_profile("PREVITAS", None, None)
+    assert exc.value.code == "unknown_screen" and '"Previtas"' in exc.value.message
+    assert auto.d.typed == [("biz_name_field", "PREVITAS"), ("biz_name_field", "Previtas")]
+
+
+def test_business_name_variants():
+    assert wa.business_name_variants("PREVITAS") == ["PREVITAS", "Previtas"]
+    assert wa.business_name_variants("  ACME   SAÚDE ") == ["ACME SAÚDE", "Acme Saúde"]
+    assert wa.business_name_variants("Previtas") == ["Previtas"]
+
+
+PAIR_SCREENS = {
+    "home_tools": [n("Ferramentas", clickable=True), n("Conversas", clickable=True), n("Ligações", clickable=True),
+                   n(desc="Mais opções", cls="android.widget.ImageView", clickable=True, key="menu")],
+    "menu_tools": [n("Configurações"), n("Ajuda")],
+    "home_chats": [n("Ferramentas", clickable=True), n("Conversas", clickable=True), n("", "fab", clickable=True),
+                   n(desc="Mais opções", cls="android.widget.ImageView", clickable=True, key="menu")],
+    "menu_chats": [n("Novo grupo"), n("Dispositivos conectados"), n("Configurações")],
+    "linked": [n("Dispositivos conectados"), button("Conectar dispositivo", "link_device_button")],
+    "qr": [n("Escanear QR code"), n("Conectar com número de telefone", "bottom_banner", clickable=True)],
+    "enter_code": [n("Insira o código"), *[n("", cls="android.widget.EditText", desc=f"campo {i} de 8", clickable=True)
+                                           for i in range(1, 9)]],
+    "device_name": [n("Nome do dispositivo"), n("", "device_name_edit_text", "android.widget.EditText", True),
+                    button("Salvar", "save_device_name_btn")],
+    "linked_done": [n("Dispositivos conectados"), n("1 de 4 dispositivos conectado"), n("ZapLiga")],
+}
+
+
+def test_business_pairing_goes_through_the_chats_tab_and_names_the_device():
+    auto = landline_auto("home_tools", {
+        "home_tools": {"Conversas": "home_chats", "menu": "menu_tools"},
+        "home_chats": {"menu": "menu_chats"},
+        "menu_chats": {"Dispositivos conectados": "linked"},
+        "linked": {"Conectar dispositivo": "qr"},
+        "qr": {"Conectar com número de telefone": "enter_code"},
+        "enter_code": {"__keys__": "device_name"},
+        "device_name": {"Salvar": "linked_done"},
+    }, screens=PAIR_SCREENS)
+    auto.open_link_screen()
+    assert auto.d.current == "enter_code"
+    note = auto.enter_pair_code("ABCD1234")
+    assert auto.d.typed == [("teclado", "ABCD1234"), ("device_name_edit_text", "ZapLiga")]
+    assert auto.d.current == "linked_done" and "aceito" in note and "ZapLiga" in note
+
+
+def test_pairing_wrong_code_is_pair_failed():
+    screens = {**PAIR_SCREENS, "wrong": [n("Código incorreto"), button("OK", "android:id/button1")]}
+    auto = landline_auto("enter_code", {"enter_code": {"__keys__": "wrong"}}, screens=screens)
+    with pytest.raises(JobError) as exc:
+        auto.enter_pair_code("ABCD1234")
+    assert exc.value.code == "pair_failed"
