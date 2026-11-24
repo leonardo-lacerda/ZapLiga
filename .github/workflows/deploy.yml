@@ -306,6 +306,25 @@ jobs:
             # shellcheck disable=SC2086
             "${COMPOSE[@]}" up -d $edge_services </dev/null \
               || echo "Aviso: vagas de PC não subiram; seguindo o deploy" >&2
+            # The slot scripts are bind-mounted single files: the checkout replaces the file, the
+            # running container keeps the old one and `up -d` sees no config change. Recreate the
+            # slots whose script is out of date, with every service sharing the slot's network.
+            stale_slots=""
+            for service in $(printf '%s\n' "$edge_services" | grep '^tailscale-edge-' || true); do
+              slot=${service#tailscale-}
+              ts_id=$("${COMPOSE[@]}" ps -q "$service" 2>/dev/null || true)
+              wx_id=$("${COMPOSE[@]}" ps -q "waxum-$slot" 2>/dev/null || true)
+              if { [ -n "$ts_id" ] && ! docker exec "$ts_id" cat /usr/local/bin/edge-entrypoint.sh 2>/dev/null | cmp -s - infra/egress/edge-entrypoint.sh; } \
+                || { [ -n "$wx_id" ] && ! docker exec "$wx_id" cat /usr/local/bin/waxum-edge-guard.sh 2>/dev/null | cmp -s - infra/egress/waxum-edge-guard.sh; }; then
+                stale_slots="$stale_slots $(printf '%s\n' "$edge_services" | grep -E "^(tailscale|waxum|socks)-$slot\$" | tr '\n' ' ')"
+              fi
+            done
+            if [ -n "$stale_slots" ]; then
+              echo "Recriando vagas com script de saída desatualizado:$stale_slots"
+              # shellcheck disable=SC2086
+              "${COMPOSE[@]}" up -d --force-recreate --no-deps $stale_slots </dev/null \
+                || echo "Aviso: não consegui recriar as vagas desatualizadas; seguindo o deploy" >&2
+            fi
           fi
 
           # These references are explicit in docker-compose.yml. Keeping the
