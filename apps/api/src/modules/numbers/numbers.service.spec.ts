@@ -293,3 +293,83 @@ describe('NumbersService passCanary', () => {
     expect(crmEvents.recordLine).toHaveBeenCalledWith('t1', 'n1', 'number.updated');
   });
 });
+
+describe('NumbersService on a PC slot that is offline', () => {
+  const env = process.env.WAXUM_EDGE_NODES;
+  beforeAll(() => { process.env.WAXUM_EDGE_NODES = 'edge-1=http://edge-1:3451,edge-2=http://edge-2:3451'; });
+  afterAll(() => { process.env.WAXUM_EDGE_NODES = env; });
+
+  // edge-2's PC is offline; edge-1 is online (unless `freePc` is null).
+  const setup = (waxum: Record<string, jest.Mock>, freePc: string | null = 'edge-1') => {
+    const row: any = { id: 'n1', tenant_id: 't1', label: 'Telefone 1', status: 'waiting_for_qr', waxum_session_id: 's1', waxum_node: 'edge-2' };
+    const db = {
+      query: jest.fn(async (sql: string, params: any[] = []) => {
+        if (sql.includes('SELECT p.slot')) return { rows: freePc ? [{ slot: freePc }] : [] };
+        if (sql.includes('AS online')) return { rows: [{ online: params[0] === 'edge-1' }] };
+        if (sql.startsWith('UPDATE whatsapp_numbers SET waxum_node = $1,')) { Object.assign(row, { waxum_node: params[0], waxum_session_id: params[1], status: 'disconnected' }); return { rows: [{ ...row }] }; }
+        if (sql.startsWith('UPDATE whatsapp_numbers SET waxum_node')) { row.waxum_node = params[1]; return { rows: [{ ...row }] }; }
+        return { rows: [{ ...row }] };
+      }),
+    };
+    const redis = { client: { ttl: jest.fn(async () => -2) }, acquireLock: jest.fn(async () => true), releaseLock: jest.fn(async () => true) };
+    const audit = { record: jest.fn(async () => undefined) };
+    const entitlement = { assertAction: jest.fn(async () => undefined) };
+    const service = new NumbersService(db as any, waxum as any, audit as any, redis as any, entitlement as any, {} as any);
+    return { service, row };
+  };
+  const unreachable = () => Object.assign(new Error('fetch failed'), {});
+
+  it('moves a line without a session even when the source Waxum does not answer', async () => {
+    const waxum = {
+      releaseSession: jest.fn(async () => { throw unreachable(); }),
+      adoptSession: jest.fn(async () => { throw Object.assign(new Error('Waxum 500'), { statusCode: 500 }); }),
+      statusOn: jest.fn(),
+    };
+    const { service, row } = setup(waxum);
+
+    const moved = await service.moveToWaxumNode('t1', null, 'n1', 'edge-1');
+
+    expect(moved.waxum_node).toBe('edge-1');
+    expect(row.waxum_node).toBe('edge-1');
+    expect(waxum.statusOn).not.toHaveBeenCalled();
+  });
+
+  it('moves the line to the online PC before asking for the pairing code', async () => {
+    const waxum: Record<string, jest.Mock> = {
+      // A session that never logged in, so the pairing has to start over on the online PC.
+      getStatus: jest.fn(async () => ({ status: 'disconnected', is_logged_in: false })),
+      createSession: jest.fn(async () => ({ id: 's2' })),
+      deleteSession: jest.fn(async () => ({})),
+      pairCode: jest.fn(async () => ({ code: 'ABCD-EFGH', timeout_seconds: 60 })),
+    };
+    const { service, row } = setup(waxum);
+
+    const result = await service.pairCode('t1', 'u1', 'n1', '552731890428');
+
+    expect(result.code).toBe('ABCD-EFGH');
+    expect(row.waxum_node).toBe('edge-1');
+    expect((waxum.createSession.mock.calls[0] as unknown[])[1]).toBe('edge-1');
+    expect(waxum.pairCode).toHaveBeenCalledWith('s2', '552731890428');
+  });
+
+  it('answers a clear 503 instead of a 500 when no PC is online', async () => {
+    const waxum = { pairCode: jest.fn(), getStatus: jest.fn(async () => ({})) };
+    const { service } = setup(waxum, null);
+
+    const error = await service.pairCode('t1', 'u1', 'n1', '552731890428').catch((e) => e);
+
+    expect(error.getStatus()).toBe(503);
+    expect(error.message).toMatch(/PC desta linha está fora do ar/);
+    expect(waxum.pairCode).not.toHaveBeenCalled();
+  });
+
+  it('answers a clear 503 when the Waxum does not answer the pairing', async () => {
+    const waxum = { pairCode: jest.fn(async () => { throw unreachable(); }) };
+    const { service, row } = setup(waxum);
+    row.waxum_node = 'edge-1';
+
+    const error = await service.pairCode('t1', 'u1', 'n1', '552731890428').catch((e) => e);
+
+    expect(error.getStatus()).toBe(503);
+  });
+});

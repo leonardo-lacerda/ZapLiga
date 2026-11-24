@@ -65,3 +65,71 @@ describe('EgressPoolService', () => {
     expect(params).toEqual([30]);
   });
 });
+
+type Pc = { slot: string; fallback: string; online: boolean; gone: boolean; steady: boolean | null };
+type Line = { id: string; tenant_id: string; waxum_node: string; status: string };
+
+const build = (pcs: Pc[], lines: Line[]) => {
+  const db = {
+    query: jest.fn(async (sql: string) => {
+      if (sql.includes('FROM egress_settings')) return { rows: [{ pool_enabled: true, max_numbers_per_pc: 5, offline_grace_seconds: 60 }] };
+      if (sql.includes('FROM egress_pcs')) return { rows: pcs };
+      if (sql.includes('FROM whatsapp_numbers')) return { rows: lines };
+      return { rows: [] };
+    }),
+  };
+  const redis = { acquireLock: jest.fn(async () => true) };
+  const egress = { syncPcs: jest.fn(async () => undefined) };
+  const numbers = { moveToWaxumNode: jest.fn(async () => ({})) };
+  const service = new EgressPoolService(db as any, redis as any, egress as any, numbers as any);
+  return { service, numbers };
+};
+
+const pcGone: Pc = { slot: 'edge-2', fallback: 'vps', online: false, gone: true, steady: null };
+const pcOnline: Pc = { slot: 'edge-1', fallback: 'offline', online: true, gone: false, steady: true };
+
+describe('EgressPoolService.tick', () => {
+  it('moves a line waiting for the QR off a PC that is gone to the online PC', async () => {
+    const { service, numbers } = build([pcGone, pcOnline], [{ id: 'l1', tenant_id: 't1', waxum_node: 'edge-2', status: 'waiting_for_qr' }]);
+
+    await service.tick();
+
+    expect(numbers.moveToWaxumNode).toHaveBeenCalledWith('t1', null, 'l1', 'edge-1');
+  });
+
+  it('does not send a disconnected line to the VPS when no PC is online', async () => {
+    const { service, numbers } = build([pcGone, { ...pcOnline, online: false }], [{ id: 'l1', tenant_id: 't1', waxum_node: 'edge-2', status: 'disconnected' }]);
+
+    await service.tick();
+
+    expect(numbers.moveToWaxumNode).not.toHaveBeenCalled();
+  });
+
+  it('never moves a connected line of a gone PC to the VPS', async () => {
+    const { service, numbers } = build([pcGone], [{ id: 'l1', tenant_id: 't1', waxum_node: 'edge-2', status: 'connected' }]);
+
+    await service.tick();
+
+    expect(numbers.moveToWaxumNode).not.toHaveBeenCalled();
+  });
+
+  it('leaves a disconnected line on the VPS where it is', async () => {
+    const { service, numbers } = build([pcOnline], [{ id: 'l1', tenant_id: 't1', waxum_node: 'main', status: 'disconnected' }]);
+
+    await service.tick();
+
+    expect(numbers.moveToWaxumNode).not.toHaveBeenCalled();
+  });
+
+  it('keeps going after a move that fails', async () => {
+    const { service, numbers } = build([pcGone, pcOnline], [
+      { id: 'l1', tenant_id: 't1', waxum_node: 'edge-2', status: 'waiting_for_qr' },
+      { id: 'l2', tenant_id: 't1', waxum_node: 'edge-2', status: 'connected' },
+    ]);
+    numbers.moveToWaxumNode.mockRejectedValueOnce(new Error('boom'));
+
+    await service.tick();
+
+    expect(numbers.moveToWaxumNode).toHaveBeenCalledTimes(2);
+  });
+});

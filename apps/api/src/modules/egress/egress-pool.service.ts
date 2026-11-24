@@ -18,6 +18,8 @@ const RETRY_AFTER_FAILURE_MS = 10 * 60_000;
 // A line paired this recently stays where it was paired: WhatsApp judges the new device on
 // its first call, and a login from another place right before it is one more signal.
 const PAIRING_SETTLE_MINUTES = 30;
+// A line in one of these holds a live WhatsApp session that a move has to hand over.
+const CONNECTED = ['connected', 'online', 'ready', 'authenticated'];
 
 /**
  * Spreads the lines across the attendants' PCs (docs/saida-pelo-pc-do-atendente.md):
@@ -29,6 +31,9 @@ const PAIRING_SETTLE_MINUTES = 30;
  *   a datacenter IP is a ban signal.
  * Disconnected lines move too: a PC that goes away takes their connection with it, and
  * the device keys sit in the storage every Waxum shares, so the target reconnects them.
+ * A disconnected line only goes to another online PC (never to the VPS, where its pairing
+ * would come from the VPS IP): it has no live session, so it just changes Waxum and its
+ * next QR or code is born there (NumbersService.moveToWaxumNode).
  * Lines WhatsApp removed or locked stay put: they need a new QR or the phone, not a move.
  * A line never returns on its own to the PC it left, so its IP does not flap.
  */
@@ -57,7 +62,10 @@ export class EgressPoolService implements OnModuleInit, OnModuleDestroy {
     const pcs = (await this.db.query(`
       SELECT slot,
         route = 'pc' AND route_reported_at > now() - make_interval(secs => $1) AS online,
-        offline_since IS NOT NULL AND offline_since < now() - make_interval(secs => $2) AS gone,
+        -- Gone: reporting a route other than the PC past the grace period, or the slot itself
+        -- silent that long (it never set offline_since if its last report was still 'pc').
+        (offline_since IS NOT NULL AND offline_since < now() - make_interval(secs => $2))
+          OR route_reported_at IS NULL OR route_reported_at < now() - make_interval(secs => $1 + $2) AS gone,
         online_since < now() - make_interval(secs => $3) AS steady
       FROM egress_pcs WHERE slot IS NOT NULL
     `, [REPORT_STALE_SECONDS, settings.offline_grace_seconds, STEADY_ONLINE_SECONDS])).rows;
@@ -77,12 +85,16 @@ export class EgressPoolService implements OnModuleInit, OnModuleDestroy {
     for (const line of lines) {
       if (moves.length >= MAX_MOVES_PER_TICK) break;
       if ((this.failedUntil.get(line.id) ?? 0) > Date.now()) continue;
+      const connected = CONNECTED.includes(line.status);
       let to: string | undefined;
       if (line.waxum_node === MAIN_WAXUM_NODE) {
-        to = target();
+        // A disconnected line on the VPS stays: it is paired where it is.
+        if (connected) to = target();
       } else {
         const pc = pcs.find((row) => row.slot === line.waxum_node);
-        // A slot whose PC was removed, or a PC offline past the grace period.
+        // A slot whose PC was removed, or a PC offline past the grace period. A disconnected
+        // line there could never pair (the slot's Waxum does not run without its PC), and it
+        // never goes to the VPS: its pairing would come from the datacenter IP.
         if (!pc || (!pc.online && pc.gone)) to = target();
       }
       if (!to) continue;

@@ -35,6 +35,8 @@ export type UpdateNumberInput = { label?: string; maxConcurrentCalls?: number; c
  */
 // Seconds to wait for a moved line to log in on its new Waxum.
 const MOVE_CONNECT_CHECKS = 20;
+// A line in one of these holds a live WhatsApp session that a move has to hand over.
+const CONNECTED_STATUSES = ['connected', 'online', 'ready', 'authenticated'];
 // WhatsApp removes a device that calls minutes after being linked, so a line created here stays
 // out of the dialer for this long after its last pairing QR or code. Counts from the last one shown.
 const PAIRING_CALL_BLOCK_HOURS = 24;
@@ -49,6 +51,8 @@ const CANARY_MESSAGES = [
 // Lines never go out through the VPS: WhatsApp reads a datacenter IP as a ban signal.
 const NO_VPS_MESSAGE = 'Linhas não podem sair pela VPS. Escolha o PC de um atendente.';
 const NO_PC_MESSAGE = 'Nenhum PC online para conectar a linha. Ligue o PC de um atendente em Admin → Saídas de internet.';
+const NO_PC_FOR_LINE_MESSAGE = 'O PC desta linha está fora do ar e não há outro PC online com vaga (ou a distribuição automática está desligada). Ligue um PC em Admin → Saídas de internet e tente de novo.';
+const UNREACHABLE_WAXUM_MESSAGE = 'O WhatsApp desta linha não respondeu. Aguarde alguns segundos e tente de novo; se continuar, confira o PC da linha em Admin → Saídas de internet.';
 
 @Injectable()
 export class NumbersService {
@@ -185,14 +189,16 @@ export class NumbersService {
     if (digits.length < 10 || digits.length > 15) throw new BadRequestException('Informe o telefone com DDI e DDD, ex.: 5527999999999');
     let number = await this.pairOnHealthySlot(assertNotRetired(await this.find(id, tenantId)));
     let result: { code: string; timeout_seconds: number };
-    try { result = await this.waxum.pairCode(number.waxum_session_id, digits, sessionIdentity(number)); }
-    catch (error) {
-      const statusCode = (error as Error & { statusCode?: number }).statusCode;
-      if (statusCode === 409) throw new BadRequestException('Este número já está conectado ao WhatsApp');
-      if (statusCode !== 404) throw error;
-      number = await this.replaceMissingSession(number);
-      result = await this.waxum.pairCode(number.waxum_session_id, digits, sessionIdentity(number));
-    }
+    try {
+      try { result = await this.waxum.pairCode(number.waxum_session_id, digits, sessionIdentity(number)); }
+      catch (error) {
+        const statusCode = (error as Error & { statusCode?: number }).statusCode;
+        if (statusCode === 409) throw new BadRequestException('Este número já está conectado ao WhatsApp');
+        if (statusCode !== 404) throw error;
+        number = await this.replaceMissingSession(number);
+        result = await this.waxum.pairCode(number.waxum_session_id, digits, sessionIdentity(number));
+      }
+    } catch (error) { throw this.unreachableWaxum(error); }
     await this.markPairing(number);
     await this.audit.record({ actorUserId, tenantId, action: 'number.pair_code_requested', entityType: 'whatsapp_number', entityId: id });
     return { code: result.code, timeout_seconds: result.timeout_seconds };
@@ -236,6 +242,8 @@ export class NumbersService {
       if (number.waxum_node === node) return number;
       const target = await this.db.query(`SELECT ${slotOnlineSql('$1::text')} AS online`, [node]);
       if (!target.rows[0]?.online) throw new BadRequestException('Essa saída (PC ou proxy) não está online. Confira em Admin → Saídas de internet.');
+      // A line without a live session has nothing to hand over: it just changes Waxum.
+      if (!CONNECTED_STATUSES.includes(number.status)) return await this.rehomeIdleLine(number, actorUserId, node);
       // Out of the dialer first, then check for calls: none can start halfway through the move.
       await this.db.query("UPDATE whatsapp_numbers SET status = 'reconnecting' WHERE id = $1", [id]);
       const active = await this.db.query("SELECT 1 FROM calls WHERE number_id = $1 AND status IN ('reserved', 'dialing', 'media_active') LIMIT 1", [id]);
@@ -275,11 +283,30 @@ export class NumbersService {
   }
 
   /**
+   * A line without a live session has nothing to hand over: it just changes Waxum, so its next
+   * QR or code is born on the new one. The source is often down (that is why it moves), so it
+   * is only asked to let go, best-effort; the target opens the same session id from the shared
+   * storage, and if it cannot, the next QR or code creates a new session there (404 path).
+   */
+  private async rehomeIdleLine(number: any, actorUserId: string | null, node: string) {
+    const id = number.id;
+    const result = await this.db.query('UPDATE whatsapp_numbers SET waxum_node = $2 WHERE id = $1 RETURNING *', [id, node]);
+    await this.waxum.releaseSession(number.waxum_session_id, number.waxum_node).catch((error: Error) =>
+      this.logger.warn(`Waxum ${number.waxum_node} did not release idle line ${id}: ${String(error?.message ?? error).slice(0, 200)}`));
+    await this.waxum.adoptSession(number.waxum_session_id, number.label, node).catch((error: Error) =>
+      this.logger.warn(`Waxum ${node} did not open idle line ${id} yet: ${String(error?.message ?? error).slice(0, 200)}`));
+    await this.audit.record({ actorUserId, tenantId: number.tenant_id, action: 'number.waxum_node_changed', entityType: 'whatsapp_number', entityId: id, metadata: { from: number.waxum_node, to: node, connected: false } });
+    this.emitCrmLine(number.tenant_id, id, 'number.updated');
+    return result.rows[0];
+  }
+
+  /**
    * Pairing needs a slot that reaches WhatsApp. A line created on a PC that has since stopped
    * passing internet (its route is no longer `pc`) would wait for a QR that never comes, so a
    * session that never logged in starts over on the slot the distribution picks now. A session
    * that did log in keeps its session; the egress pool moves it. A line on the VPS never pairs
-   * there: WhatsApp would see the new device's first login from a datacenter IP.
+   * there: WhatsApp would see the new device's first login from a datacenter IP. With no PC
+   * online, the answer says what to do instead of a bare 500.
    */
   private async pairOnHealthySlot(number: any) {
     const online = await this.db.query(`SELECT ${slotOnlineSql('$1::text')} AS online`, [number.waxum_node]);
@@ -287,7 +314,7 @@ export class NumbersService {
     const status = normalizeWaxumStatus(await this.waxum.getStatus(number.waxum_session_id).catch(() => ({})));
     if (status.connected || status.phone) return number;
     const node = await this.pickPcSlot();
-    if (!node) throw new BadRequestException(NO_PC_MESSAGE);
+    if (!node) throw new HttpException(NO_PC_FOR_LINE_MESSAGE, HttpStatus.SERVICE_UNAVAILABLE);
     const session = await this.createWaxumSession(number.label, node, sessionIdentity(number));
     await this.waxum.deleteSession(number.waxum_session_id).catch((error) => this.logger.warn(`Old session of line ${number.id} not deleted on ${number.waxum_node}: ${String((error as Error)?.message ?? error).slice(0, 200)}`));
     const result = await this.db.query(`UPDATE whatsapp_numbers SET waxum_node = $1, waxum_session_id = $2, status = 'disconnected' WHERE id = $3 AND tenant_id = $4 RETURNING *`, [node, session.id, number.id, number.tenant_id]);
@@ -362,18 +389,21 @@ export class NumbersService {
   }
 
   private async loadQr(id: string, tenantId: string) {
-    let number = await this.pairOnHealthySlot(assertNotRetired(await this.find(id, tenantId)));
-    let payload: any;
-    try { payload = await this.loadQrFromSession(number); }
-    catch (error) {
-      if ((error as Error & { statusCode?: number }).statusCode !== 404) throw error;
-      number = await this.replaceMissingSession(number);
-      payload = await this.loadQrFromSession(number);
-    }
-    const status = await this.refreshNumberStatus(number);
-    if (status.connected) return { ...payload, status: 'connected', phone_number: status.phone };
-    await this.markPairing(number);
-    return payload;
+    const number = await this.pairOnHealthySlot(assertNotRetired(await this.find(id, tenantId)));
+    try {
+      let payload: any;
+      let current = number;
+      try { payload = await this.loadQrFromSession(current); }
+      catch (error) {
+        if ((error as Error & { statusCode?: number }).statusCode !== 404) throw error;
+        current = await this.replaceMissingSession(current);
+        payload = await this.loadQrFromSession(current);
+      }
+      const status = await this.refreshNumberStatus(current);
+      if (status.connected) return { ...payload, status: 'connected', phone_number: status.phone };
+      await this.markPairing(current);
+      return payload;
+    } catch (error) { throw this.unreachableWaxum(error); }
   }
 
   /**
@@ -457,6 +487,13 @@ export class NumbersService {
     await this.waxum.sendText(number.waxum_session_id, phone, CANARY_MESSAGES[Math.floor(Math.random() * CANARY_MESSAGES.length)]);
     await this.audit.record({ actorUserId, tenantId, action: 'number.canary_message_sent', entityType: 'whatsapp_number', entityId: id, metadata: { phone } });
     return { phone };
+  }
+
+  // A Waxum that does not answer at all (no HTTP status) is a container that is down, not a bug.
+  private unreachableWaxum(error: unknown) {
+    if (error instanceof HttpException || (error as { statusCode?: number })?.statusCode) return error;
+    this.logger.warn(`Waxum unreachable while pairing: ${String((error as Error)?.message ?? error).slice(0, 200)}`);
+    return new HttpException(UNREACHABLE_WAXUM_MESSAGE, HttpStatus.SERVICE_UNAVAILABLE);
   }
 
   private async refreshNumberStatus(number: any) {
