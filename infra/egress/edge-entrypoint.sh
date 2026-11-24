@@ -20,9 +20,16 @@ set -eu
 API_URLS="${EGRESS_API_URLS:-http://api-a:3000 http://api-b:3000}"
 ROUTE_FILE=/egress/route
 CHECK_SECONDS=10
-# Three missed pings in a row (~30 s) before giving up on the PC, so a short
+# Three missed checks in a row (~30 s) before giving up on the PC, so a short
 # Wi-Fi hiccup does not flip the line between two IPs.
 MISSES_BEFORE_FALLBACK=3
+# A PC can answer Tailscale pings and still not pass internet as an exit node
+# (exit node switched off, no internet on the PC). Each check also fetches this
+# through the PC; while it fails the slot is not `pc`, so the API gives it no new lines.
+PROBE_URL="${EGRESS_PROBE_URL:-http://connectivitycheck.gstatic.com/generate_204}"
+# With the `vps` fallback the exit node is cleared, so the PC can only be tested
+# by pointing the slot back at it: wait this long between such attempts.
+INTERNET_RETRY_SECONDS=120
 
 log() { echo "$(date -u '+%Y-%m-%dT%H:%M:%SZ') egress: $*"; }
 
@@ -49,6 +56,8 @@ fetch_config() {
 
 value() { printf '%s\n' "$config" | sed -n "s/^$1=//p"; }
 
+internet_through_pc() { wget -q -T 5 -O /dev/null "$PROBE_URL" 2>/dev/null; }
+
 set_exit_node() {
   [ "$1" = "$current_exit" ] && return 0
   tailscale set --exit-node="$1" --exit-node-allow-lan-access="$([ -n "$1" ] && echo true || echo false)" || return 1
@@ -57,6 +66,9 @@ set_exit_node() {
 
 route=""
 misses=0
+# Why the PC last failed a check: ping (no answer) or internet (answers, passes no traffic).
+failure=ping
+no_internet_at=0
 # Unknown until the first `tailscale set`: forces it.
 current_exit="unknown"
 while kill -0 "$daemon" 2>/dev/null; do
@@ -85,10 +97,24 @@ while kill -0 "$daemon" 2>/dev/null; do
     else
       # A pong through a DERP relay still exits 1 ("direct connection not established"): judge by the pong.
       if tailscale ping -c 1 --timeout 3s "$exit_node" 2>&1 | grep -q '^pong from'; then
-        misses=0
-        wanted=pc
+        # Only the traffic of a slot pointed at the PC tells whether the PC passes internet.
+        if [ "$current_exit" != "$exit_node" ] && [ $(( $(date +%s) - no_internet_at )) -ge "$INTERNET_RETRY_SECONDS" ]; then
+          set_exit_node "$exit_node" || true
+        fi
+        if [ "$current_exit" != "$exit_node" ]; then
+          wanted=$route
+        elif internet_through_pc; then
+          misses=0
+          wanted=pc
+        else
+          misses=$((misses + 1))
+          failure=internet
+          no_internet_at=$(date +%s)
+          if [ "$misses" -ge "$MISSES_BEFORE_FALLBACK" ]; then wanted=$fallback; else wanted=$route; fi
+        fi
       else
         misses=$((misses + 1))
+        failure=ping
         if [ "$misses" -ge "$MISSES_BEFORE_FALLBACK" ]; then wanted=$fallback; else wanted=$route; fi
       fi
       # Until a route is chosen, keep the exit node set: Tailscale drops the traffic.
@@ -97,10 +123,11 @@ while kill -0 "$daemon" 2>/dev/null; do
         case "$wanted" in
           pc|offline|vps)
             if [ "$wanted" != "$route" ]; then
+              if [ "$failure" = internet ]; then problem="responde mas não passa internet (veja se está como exit node e com internet)"; else problem="sem resposta"; fi
               case "$wanted" in
                 pc) log "saindo pelo PC $exit_node" ;;
-                offline) log "PC $exit_node sem resposta: números sem internet até ele voltar" ;;
-                vps) log "PC $exit_node sem resposta: saindo pela VPS" ;;
+                offline) log "PC $exit_node $problem: números sem internet até ele voltar" ;;
+                vps) log "PC $exit_node $problem: saindo pela VPS" ;;
               esac
             fi
             route=$wanted ;;
