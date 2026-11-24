@@ -5,6 +5,7 @@ import { RedisService } from '../../infrastructure/redis/redis.service';
 import { MAIN_WAXUM_NODE } from '../../infrastructure/waxum/waxum.client';
 import { NumbersService } from '../numbers/numbers.service';
 import { EgressService, REPORT_STALE_SECONDS } from './egress.service';
+import { STEADY_ONLINE_SECONDS } from './pc-network';
 
 const TICK_MS = 30_000;
 // A few moves per tick: each one drops the line for some seconds, and a burst
@@ -16,7 +17,8 @@ const CONNECTED = ['connected', 'online', 'ready', 'authenticated'];
 /**
  * Spreads the lines across the attendants' PCs (docs/saida-pelo-pc-do-atendente.md):
  * - a paired line on the VPS goes to the online PC with the fewest lines, up to
- *   max_numbers_per_pc;
+ *   max_numbers_per_pc; only a PC online without a break for STEADY_ONLINE_SECONDS
+ *   receives lines;
  * - the lines of a PC that has been offline for offline_grace_seconds go to
  *   another online PC; with none, to the VPS if the PC's fallback is `vps`.
  * Only connected lines move: a disconnected one has no session to hand over.
@@ -46,12 +48,13 @@ export class EgressPoolService implements OnModuleInit, OnModuleDestroy {
     const pcs = (await this.db.query(`
       SELECT slot, fallback,
         route = 'pc' AND route_reported_at > now() - make_interval(secs => $1) AS online,
-        offline_since IS NOT NULL AND offline_since < now() - make_interval(secs => $2) AS gone
+        offline_since IS NOT NULL AND offline_since < now() - make_interval(secs => $2) AS gone,
+        online_since < now() - make_interval(secs => $3) AS steady
       FROM egress_pcs WHERE slot IS NOT NULL
-    `, [REPORT_STALE_SECONDS, settings.offline_grace_seconds])).rows;
+    `, [REPORT_STALE_SECONDS, settings.offline_grace_seconds, STEADY_ONLINE_SECONDS])).rows;
     const lines = (await this.db.query(`SELECT id, tenant_id, waxum_node, status FROM whatsapp_numbers WHERE status <> 'removed' AND phone IS NOT NULL ORDER BY created_at`)).rows;
     const load = new Map<string, number>(pcs.map((pc) => [pc.slot, lines.filter((line) => line.waxum_node === pc.slot).length]));
-    const online = pcs.filter((pc) => pc.online);
+    const online = pcs.filter((pc) => pc.online && pc.steady);
     const target = () => online
       .filter((pc) => (load.get(pc.slot) ?? 0) < settings.max_numbers_per_pc)
       .sort((a, b) => (load.get(a.slot) ?? 0) - (load.get(b.slot) ?? 0))[0]?.slot as string | undefined;

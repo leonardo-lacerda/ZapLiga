@@ -7,6 +7,13 @@
 /** A PC slot that has not reported for this long no longer counts as online. */
 export const REPORT_STALE_SECONDS = 60;
 
+/**
+ * A PC only receives lines (new ones, or moved by the egress pool) after going out
+ * through it without a break for this long: a PC that keeps dropping would otherwise
+ * take back, seconds after answering again, the lines that just left it.
+ */
+export const STEADY_ONLINE_SECONDS = 600;
+
 /** SQL condition: the line `alias` sits on a PC slot that goes out through its PC right now. */
 export const onPcNetworkSql = (alias: string) =>
   `EXISTS (SELECT 1 FROM egress_pcs pc_net WHERE pc_net.slot = ${alias}.waxum_node AND pc_net.route = 'pc' AND pc_net.route_reported_at > now() - make_interval(secs => ${REPORT_STALE_SECONDS}))`;

@@ -8,6 +8,7 @@ import { RedisService } from '../../infrastructure/redis/redis.service';
 import { EntitlementService } from '../billing/entitlement.service';
 import { PlanLimitsService } from '../billing/plan-limits.service';
 import { CrmEventsService, CrmLineEventType } from '../crm-events/crm-events.service';
+import { STEADY_ONLINE_SECONDS } from '../egress/pc-network';
 
 const digits = (value: unknown) => String(value ?? '').replace(/\D/g, '');
 
@@ -257,9 +258,10 @@ export class NumbersService {
     const result = await this.db.query(`
       SELECT p.slot FROM egress_pcs p CROSS JOIN egress_settings s
       CROSS JOIN LATERAL (SELECT count(*)::int AS lines FROM whatsapp_numbers n WHERE n.waxum_node = p.slot AND n.status <> 'removed' AND n.phone IS NOT NULL) l
-      WHERE s.pool_enabled AND p.slot IS NOT NULL AND p.route = 'pc' AND p.route_reported_at > now() - interval '1 minute' AND l.lines < s.max_numbers_per_pc
+      WHERE s.pool_enabled AND p.slot IS NOT NULL AND p.route = 'pc' AND p.route_reported_at > now() - interval '1 minute'
+        AND p.online_since < now() - make_interval(secs => $1) AND l.lines < s.max_numbers_per_pc
       ORDER BY l.lines, p.created_at LIMIT 1
-    `);
+    `, [STEADY_ONLINE_SECONDS]);
     return result.rows[0]?.slot as string | undefined;
   }
 

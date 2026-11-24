@@ -206,7 +206,8 @@ export class EgressService {
     if (!this.slots().includes(slot)) throw new NotFoundException(`Vaga ${slot} não existe`);
     const result = await this.db.query(`
       UPDATE egress_pcs SET route = $2, route_reported_at = now(),
-        offline_since = CASE WHEN $2 = 'pc' THEN NULL ELSE COALESCE(offline_since, now()) END
+        offline_since = CASE WHEN $2 = 'pc' THEN NULL ELSE COALESCE(offline_since, now()) END,
+        online_since = CASE WHEN $2 = 'pc' THEN COALESCE(online_since, now()) END
       WHERE slot = $1 RETURNING tailscale_ip, fallback
     `, [slot, route]);
     const pc = result.rows[0];
