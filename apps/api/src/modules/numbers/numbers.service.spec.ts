@@ -64,4 +64,32 @@ describe('NumbersService QR code', () => {
     expect(waxum.reconnect).not.toHaveBeenCalled();
     expect(payload).toMatchObject({ status: 'connected', phone_number: '5527997096501' });
   });
+
+  it('starts the pairing over on a working PC when the PC of the line passes no internet', async () => {
+    const onDeadPc = { ...number, waxum_node: 'edge-3' };
+    const db = {
+      query: jest.fn(async (sql: string) => {
+        if (sql.includes('FROM egress_pcs WHERE slot')) return { rows: [] };
+        if (sql.includes('SELECT p.slot')) return { rows: [{ slot: 'edge-2' }] };
+        if (sql.startsWith('UPDATE whatsapp_numbers SET waxum_node')) return { rows: [{ ...onDeadPc, waxum_node: 'edge-2', waxum_session_id: 's2' }] };
+        return { rows: [onDeadPc] };
+      }),
+    };
+    const redis = { client: { ttl: jest.fn(async () => -2) }, acquireLock: jest.fn(async () => true), releaseLock: jest.fn(async () => undefined) };
+    const waxum = {
+      getStatus: jest.fn(async () => ({ status: 'waiting_for_qr', is_logged_in: false, socket_alive: true })),
+      createSession: jest.fn(async () => ({ id: 's2' })),
+      deleteSession: jest.fn(async () => ({})),
+      reconnect: jest.fn(),
+      getQr: jest.fn(async () => ({ status: 'waiting_for_qr', qr_codes: ['2@new'], timeout_seconds: 60 })),
+    };
+    const service = new NumbersService(db as any, waxum as any, {} as any, redis as any, {} as any, {} as any);
+
+    const payload = await service.qr('t1', 'n1');
+
+    expect(waxum.createSession).toHaveBeenCalledWith('numero 1', 'edge-2');
+    expect(waxum.deleteSession).toHaveBeenCalledWith('s1');
+    expect(waxum.getQr).toHaveBeenCalledWith('s2');
+    expect(payload.qr_codes).toEqual(['2@new']);
+  });
 });

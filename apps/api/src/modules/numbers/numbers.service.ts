@@ -132,7 +132,7 @@ export class NumbersService {
     await this.entitlement.assertAction(tenantId, 'write', actorUserId);
     const digits = phone.replace(/\D/g, '');
     if (digits.length < 10 || digits.length > 15) throw new BadRequestException('Informe o telefone com DDI e DDD, ex.: 5527999999999');
-    let number = await this.find(id, tenantId);
+    let number = await this.pairOnHealthySlot(await this.find(id, tenantId));
     let result: { code: string; timeout_seconds: number };
     try { result = await this.waxum.pairCode(number.waxum_session_id, digits); }
     catch (error) {
@@ -223,6 +223,26 @@ export class NumbersService {
     }
   }
 
+  /**
+   * Pairing needs a slot that reaches WhatsApp. A line created on a PC that has since stopped
+   * passing internet (its route is no longer `pc`) would wait for a QR that never comes, so a
+   * session that never logged in starts over on the slot the distribution picks now. A session
+   * that did log in keeps its session; the egress pool moves it.
+   */
+  private async pairOnHealthySlot(number: any) {
+    if (number.waxum_node === MAIN_WAXUM_NODE) return number;
+    const online = await this.db.query(`SELECT 1 FROM egress_pcs WHERE slot = $1 AND route = 'pc' AND route_reported_at > now() - interval '1 minute'`, [number.waxum_node]);
+    if (online.rows[0]) return number;
+    const status = normalizeWaxumStatus(await this.waxum.getStatus(number.waxum_session_id).catch(() => ({})));
+    if (status.connected || status.phone) return number;
+    const node = await this.pickPcSlot() ?? MAIN_WAXUM_NODE;
+    const session = await this.createWaxumSession(number.label, node);
+    await this.waxum.deleteSession(number.waxum_session_id).catch((error) => this.logger.warn(`Old session of line ${number.id} not deleted on ${number.waxum_node}: ${String((error as Error)?.message ?? error).slice(0, 200)}`));
+    const result = await this.db.query(`UPDATE whatsapp_numbers SET waxum_node = $1, waxum_session_id = $2, status = 'disconnected' WHERE id = $3 AND tenant_id = $4 RETURNING *`, [node, session.id, number.id, number.tenant_id]);
+    this.logger.log(`Line ${number.id} pairing moved from ${number.waxum_node} (PC without internet) to ${node}`);
+    return result.rows[0];
+  }
+
   private async replaceMissingSession(number: any) {
     const session = await this.createWaxumSession(number.label, number.waxum_node);
     const result = await this.db.query(`UPDATE whatsapp_numbers SET waxum_session_id = $1, status = 'disconnected' WHERE id = $2 AND tenant_id = $3 RETURNING *`, [session.id, number.id, number.tenant_id]);
@@ -288,7 +308,7 @@ export class NumbersService {
   }
 
   private async loadQr(id: string, tenantId: string) {
-    let number = await this.find(id, tenantId);
+    let number = await this.pairOnHealthySlot(await this.find(id, tenantId));
     let payload: any;
     try { payload = await this.loadQrFromSession(number.waxum_session_id); }
     catch (error) {
