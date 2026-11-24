@@ -10,6 +10,8 @@ import {
   toDeviceOptions,
   writeStoredDevice,
 } from './audioDevices';
+import type { PlayoutStats } from './callAudioDsp';
+import callAudioWorkletUrl from './callAudio.worklet.ts?worker&url';
 
 /** How playback reaches the chosen output device. */
 export type SinkMode = 'context' | 'element' | 'default';
@@ -43,22 +45,8 @@ const INBOUND_SIGNAL_THRESHOLD = 200;
 /** How long after the last audible frame the customer still counts as "being heard". */
 const INBOUND_RECEIVING_WINDOW_MS = 2500;
 const INBOUND_REPORT_INTERVAL_MS = 400;
-/**
- * Playout backlog bounds. Frames are scheduled back-to-back from the moment they arrive, so any
- * clock drift between the server's 16 kHz pacing and the output device (or a jitter burst that is
- * never repaid) accumulates as delay for the rest of the call -- 1.45 s was measured after four
- * minutes. Above the high mark, frames are dropped until the backlog is back under the low mark:
- * a brief skip once, instead of a conversation that lags more every minute.
- *
- * Waxum already runs a ~120-150 ms jitter buffer and emits paced 20 ms frames, so this second
- * buffer only has to absorb WebSocket/scheduler jitter. The old 0.45/0.2 marks let the backlog
- * park anywhere up to 450 ms for the whole call, which stacked with the upstream buffer, the
- * WhatsApp network and Bluetooth output into ~1 s of mouth-to-ear delay.
- */
-const PLAYBACK_BACKLOG_HIGH_S = 0.16;
-const PLAYBACK_BACKLOG_LOW_S = 0.08;
-/** Cushion when (re)starting playout after an underrun, so the next frame isn't already late. */
-const PLAYBACK_START_LEAD_S = 0.04;
+/** 16 kHz samples in one inbound frame (20 ms); the unit the playback diagnostics are reported in. */
+const INBOUND_FRAME_SAMPLES = 320;
 /** Frames queued before the AudioContext was ready are stale; replay only the most recent ones. */
 const PENDING_PLAYBACK_REPLAY_FRAMES = 4;
 
@@ -72,8 +60,9 @@ export class AudioBridge {
   private context?: AudioContext;
   private stream?: MediaStream;
   private source?: MediaStreamAudioSourceNode;
-  private processor?: ScriptProcessorNode;
+  private capture?: AudioWorkletNode;
   private silent?: GainNode;
+  private playout?: AudioWorkletNode;
   private playbackGain?: GainNode;
   private outputDestination?: MediaStreamAudioDestinationNode;
   private outputElement?: SinkableAudioElement;
@@ -84,24 +73,15 @@ export class AudioBridge {
   // Super admin only: dial with a silent input instead of a microphone (testing lines from a PC without one).
   private silentInput = readStoredDevice(STORAGE_SILENT_INPUT_KEY) === '1';
   private silentContext?: AudioContext;
-  private nextPlayTime = 0;
   private ringbackTimer?: number;
   private ringbackNodes?: { oscillator: OscillatorNode; envelope: GainNode };
-  private captureSampleRate = 16000;
-  private sourceBuffer: number[] = [];
-  private sourceCursor = 0;
-  private outgoingSamples: number[] = [];
-  private readonly frameSamples = 960;
   private muted = false;
   private pendingPlayback: ArrayBuffer[] = [];
   private activeCallId = '';
   private playbackFramesReceived = 0;
-  private playbackFramesScheduled = 0;
-  private playbackFramesEnded = 0;
-  private playbackFramesDropped = 0;
   private playbackPeak = 0;
-  /** True while the backlog is being drained by dropping frames (see PLAYBACK_BACKLOG_*). */
-  private shedding = false;
+  /** Latest counters from the playout processor (16 kHz samples). */
+  private playoutStats?: PlayoutStats;
 
   private readonly sinkMode: SinkMode = detectSinkMode();
   private deviceState: AudioDeviceState = {
@@ -287,7 +267,7 @@ export class AudioBridge {
    * after WhatsApp has already answered.
    */
   async prepare() {
-    if (this.context && this.processor && this.stream) {
+    if (this.context && this.capture && this.stream) {
       if (this.context.state === 'suspended') await this.context.resume();
       if (this.context.state !== 'running') throw new Error('O navegador bloqueou a reprodução de áudio. Clique novamente em Ligar agora.');
       return;
@@ -355,10 +335,21 @@ export class AudioBridge {
       await context.close();
       throw new Error('O navegador bloqueou a reprodução de áudio. Clique novamente em Ligar agora.');
     }
+    try {
+      await context.audioWorklet.addModule(callAudioWorkletUrl);
+    } catch (error) {
+      await context.close();
+      throw error;
+    }
     this.context = context;
-    this.captureSampleRate = context.sampleRate;
     this.playbackGain = context.createGain();
     this.playbackGain.gain.value = 1;
+    const playout = new AudioWorkletNode(context, 'zapliga-playout', { numberOfInputs: 0, outputChannelCount: [1] });
+    playout.port.onmessage = (event: MessageEvent) => {
+      if (event.data?.type === 'stats') this.playoutStats = event.data as PlayoutStats;
+    };
+    playout.connect(this.playbackGain);
+    this.playout = playout;
     if (this.sinkMode === 'element') {
       // No AudioContext.setSinkId here: route playback through a MediaStream into an <audio>
       // element, which can pick its output device on more browsers than the context can.
@@ -401,33 +392,22 @@ export class AudioBridge {
 
   private attachCapture(context: AudioContext, stream: MediaStream) {
     this.stream = stream;
-    this.sourceBuffer = [];
-    this.sourceCursor = 0;
-    this.outgoingSamples = [];
     const source = context.createMediaStreamSource(stream);
-    // ScriptProcessor is retained for this MVP, but its output is reframed
-    // below. Waxum/whatsapp-rust accepts exactly 960 mono samples per frame.
-    const processor = context.createScriptProcessor(1024, 1, 1);
-    processor.onaudioprocess = (event) => {
-      const input = event.inputBuffer.getChannelData(0);
-      const pcm = this.muted
-        ? new Int16Array(Math.max(1, Math.round(input.length * 16000 / this.captureSampleRate)))
-        : this.resampleToPcm16(input);
-      this.outgoingSamples.push(...pcm);
-      while (this.outgoingSamples.length >= this.frameSamples) {
-        const frame = new Int16Array(this.outgoingSamples.splice(0, this.frameSamples));
-        if (this.socket?.readyState === WebSocket.OPEN) this.socket.send(frame.buffer);
-      }
+    // Filtering, resampling to 16 kHz and framing run on the audio thread (callAudio.worklet.ts);
+    // the frames only cross to this thread to be sent.
+    const capture = new AudioWorkletNode(context, 'zapliga-capture', { numberOfInputs: 1, numberOfOutputs: 1, channelCount: 1, channelCountMode: 'explicit' });
+    capture.port.onmessage = (event: MessageEvent) => {
+      if (event.data instanceof ArrayBuffer && this.socket?.readyState === WebSocket.OPEN) this.socket.send(event.data);
     };
-    // A ScriptProcessor only runs while connected to the destination; the zero gain keeps the
-    // microphone from being played back to the SDR.
+    capture.port.postMessage({ type: 'mute', muted: this.muted });
+    // Keep the node pulled by the graph; the zero gain keeps the microphone out of the SDR's ears.
     const silent = context.createGain();
     silent.gain.value = 0;
-    source.connect(processor);
-    processor.connect(silent);
+    source.connect(capture);
+    capture.connect(silent);
     silent.connect(context.destination);
     this.source = source;
-    this.processor = processor;
+    this.capture = capture;
     this.silent = silent;
     stream.getAudioTracks().forEach((track) => { track.enabled = !this.muted; });
     const activeInputId = stream.getAudioTracks()[0]?.getSettings().deviceId ?? '';
@@ -439,11 +419,12 @@ export class AudioBridge {
   }
 
   private detachCapture() {
-    this.processor?.disconnect();
+    if (this.capture) this.capture.port.onmessage = null;
+    this.capture?.disconnect();
     this.source?.disconnect();
     this.silent?.disconnect();
     this.stream?.getTracks().forEach((track) => track.stop());
-    this.processor = undefined;
+    this.capture = undefined;
     this.source = undefined;
     this.silent = undefined;
     this.stream = undefined;
@@ -514,6 +495,7 @@ export class AudioBridge {
   setMuted(muted: boolean) {
     this.muted = muted;
     this.stream?.getAudioTracks().forEach((track) => { track.enabled = !muted; });
+    this.capture?.port.postMessage({ type: 'mute', muted });
   }
 
   isMuted() {
@@ -556,37 +538,17 @@ export class AudioBridge {
   }
 
   private enqueuePlayback(raw: ArrayBuffer) {
-    if (!this.context || !this.playbackGain || raw.byteLength < 2 || this.context.state === 'closed') return;
+    if (!this.playout || raw.byteLength < 2 || this.context?.state === 'closed') return;
     const sampleCount = Math.floor(raw.byteLength / 2);
-    const pcm = new Int16Array(sampleCount);
     const view = new DataView(raw);
     let peak = 0;
-    for (let i = 0; i < sampleCount; i++) {
-      pcm[i] = view.getInt16(i * 2, true);
-      peak = Math.max(peak, Math.abs(pcm[i]));
-    }
+    for (let i = 0; i < sampleCount; i++) peak = Math.max(peak, Math.abs(view.getInt16(i * 2, true)));
     this.playbackFramesReceived += 1;
     this.playbackPeak = Math.max(this.playbackPeak, peak);
     this.noteInbound(peak);
-    const backlog = this.nextPlayTime - this.context.currentTime;
-    if (backlog > PLAYBACK_BACKLOG_HIGH_S) this.shedding = true;
-    else if (backlog < PLAYBACK_BACKLOG_LOW_S) this.shedding = false;
-    if (this.shedding) {
-      this.playbackFramesDropped += 1;
-      return;
-    }
-    const buffer = this.context.createBuffer(1, sampleCount, 16000);
-    const channel = buffer.getChannelData(0);
-    for (let i = 0; i < pcm.length; i++) channel[i] = pcm[i] / 0x7fff;
-    const source = this.context.createBufferSource();
-    source.buffer = buffer;
-    source.connect(this.playbackGain);
-    source.onended = () => { this.playbackFramesEnded += 1; };
-    if (this.nextPlayTime < this.context.currentTime) this.nextPlayTime = this.context.currentTime + PLAYBACK_START_LEAD_S;
-    source.start(this.nextPlayTime);
-    this.nextPlayTime += buffer.duration;
-    this.playbackFramesScheduled += 1;
-    if (this.playbackFramesScheduled === 1 || this.playbackFramesScheduled % 100 === 0) this.reportPlaybackStatus();
+    // Copy, not transfer: the buffer is aligned to whole samples for the processor's Int16Array.
+    this.playout.port.postMessage(raw.slice(0, sampleCount * 2));
+    if (this.playbackFramesReceived === 1 || this.playbackFramesReceived % 100 === 0) this.reportPlaybackStatus();
   }
 
   /**
@@ -616,7 +578,8 @@ export class AudioBridge {
 
   private reportPlaybackStatus(force = false) {
     if (!this.socket || this.socket.readyState !== WebSocket.OPEN || !this.activeCallId) return;
-    if (!force && this.playbackFramesScheduled === 0) return;
+    if (!force && this.playbackFramesReceived === 0) return;
+    const stats = this.playoutStats;
     try {
       this.socket.send(JSON.stringify({
         type: 'audio_playback_status',
@@ -624,11 +587,12 @@ export class AudioBridge {
         contextState: this.context?.state ?? 'missing',
         outputSampleRate: this.context?.sampleRate ?? 0,
         framesReceived: this.playbackFramesReceived,
-        framesScheduled: this.playbackFramesScheduled,
-        framesEnded: this.playbackFramesEnded,
-        framesDropped: this.playbackFramesDropped,
+        framesScheduled: this.playbackFramesReceived,
+        framesEnded: stats ? Math.floor(stats.played / INBOUND_FRAME_SAMPLES) : 0,
+        framesDropped: stats ? Math.floor(stats.skipped / INBOUND_FRAME_SAMPLES) : 0,
+        underruns: stats?.underruns ?? 0,
         peak: this.playbackPeak,
-        queuedSeconds: this.context ? Math.max(0, this.nextPlayTime - this.context.currentTime) : 0,
+        queuedSeconds: stats ? stats.depth / 16000 : 0,
         outputDevice: this.deviceState.activeOutputLabel,
         sinkMode: this.deviceState.sinkMode,
         inputDevice: this.deviceState.activeInputLabel,
@@ -645,71 +609,25 @@ export class AudioBridge {
     this.inboundWindowPeak = 0;
     this.inboundListener?.({ receiving: false, peak: 0, updatedAt: Date.now() });
     this.detachCapture();
+    if (this.playout) this.playout.port.onmessage = null;
+    this.playout?.disconnect();
     this.playbackGain?.disconnect();
     this.outputDestination?.disconnect();
     if (this.outputElement) { this.outputElement.pause(); this.outputElement.srcObject = null; }
     await this.context?.close();
+    this.playout = undefined;
     this.playbackGain = undefined;
     this.outputDestination = undefined;
     this.outputElement = undefined;
     this.context = undefined;
     this.resuming = undefined;
     this.socket = undefined;
-    this.nextPlayTime = 0;
-    this.captureSampleRate = 16000;
-    this.sourceBuffer = [];
-    this.sourceCursor = 0;
-    this.outgoingSamples = [];
     this.muted = false;
     this.pendingPlayback = [];
     this.activeCallId = '';
     this.playbackFramesReceived = 0;
-    this.playbackFramesScheduled = 0;
-    this.playbackFramesEnded = 0;
-    this.playbackFramesDropped = 0;
     this.playbackPeak = 0;
-    this.shedding = false;
+    this.playoutStats = undefined;
     this.patchDeviceState({ activeOutputId: '', activeOutputLabel: '' });
-  }
-
-  /** Waxum expects mono PCM16 at exactly 16 kHz. Browsers may run the
-   * AudioContext at 48 kHz even when 16 kHz was requested. */
-  private resampleToPcm16(input: Float32Array) {
-    if (this.captureSampleRate === 16000) return this.toPcm16(input);
-
-    this.sourceBuffer.push(...input);
-    const step = this.captureSampleRate / 16000;
-    const output: number[] = [];
-
-    // Keep one source sample at the end of each chunk for continuous
-    // interpolation when the next ScriptProcessor event arrives.
-    while (this.sourceCursor + 1 < this.sourceBuffer.length) {
-      const index = Math.floor(this.sourceCursor);
-      const fraction = this.sourceCursor - index;
-      const current = this.sourceBuffer[index];
-      const next = this.sourceBuffer[index + 1];
-      output.push(current + (next - current) * fraction);
-      this.sourceCursor += step;
-    }
-
-    // Never consume the final source sample: it is the interpolation anchor
-    // for the next chunk. The cursor can be slightly past the buffer after
-    // producing the last available output sample.
-    const consumed = Math.min(Math.floor(this.sourceCursor), Math.max(0, this.sourceBuffer.length - 1));
-    if (consumed > 0) {
-      this.sourceBuffer = this.sourceBuffer.slice(consumed);
-      this.sourceCursor -= consumed;
-    }
-
-    return this.toPcm16(output);
-  }
-
-  private toPcm16(input: ArrayLike<number>) {
-    const pcm = new Int16Array(input.length);
-    for (let i = 0; i < input.length; i++) {
-      const sample = Math.max(-1, Math.min(1, input[i]));
-      pcm[i] = sample < 0 ? sample * 0x8000 : sample * 0x7fff;
-    }
-    return pcm;
   }
 }
