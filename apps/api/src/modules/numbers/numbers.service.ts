@@ -21,6 +21,9 @@ export type UpdateNumberInput = { label?: string; maxConcurrentCalls?: number; c
  */
 // Seconds to wait for a moved line to log in on its new Waxum.
 const MOVE_CONNECT_CHECKS = 20;
+// WhatsApp removes a device that calls minutes after being linked, so a line created here stays
+// out of the dialer for this long after its last pairing QR or code. Counts from the last one shown.
+const PAIRING_CALL_BLOCK_HOURS = 24;
 
 @Injectable()
 export class NumbersService {
@@ -59,7 +62,7 @@ export class NumbersService {
       const result = await this.db.transaction(async (client) => {
         // Keep the advisory lock, count and INSERT on one transaction.
         await this.planLimits.assertCanAddNumbers(tenantId, client, 1);
-        return client.query(`INSERT INTO whatsapp_numbers (id,tenant_id,label,phone,waxum_session_id,max_concurrent_calls,cooldown_seconds,max_calls_per_window,call_window_seconds,waxum_node) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING *`, [randomUUID(), tenantId, label, digits(body.phone) || null, session.id, Number(body.maxConcurrentCalls ?? 1), Number(body.cooldownSeconds ?? defaultCooldownSeconds), Number(body.maxCallsPerWindow ?? 3), Number(body.callWindowSeconds ?? 180), waxumNode]);
+        return client.query(`INSERT INTO whatsapp_numbers (id,tenant_id,label,phone,waxum_session_id,max_concurrent_calls,cooldown_seconds,max_calls_per_window,call_window_seconds,waxum_node,block_calls_after_pairing) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,true) RETURNING *`, [randomUUID(), tenantId, label, digits(body.phone) || null, session.id, Number(body.maxConcurrentCalls ?? 1), Number(body.cooldownSeconds ?? defaultCooldownSeconds), Number(body.maxCallsPerWindow ?? 3), Number(body.callWindowSeconds ?? 180), waxumNode]);
       });
       persisted = true;
       await this.audit.record({ actorUserId, tenantId, action: 'number.created', entityType: 'whatsapp_number', entityId: result.rows[0].id });
@@ -143,6 +146,7 @@ export class NumbersService {
       number = await this.replaceMissingSession(number);
       result = await this.waxum.pairCode(number.waxum_session_id, digits);
     }
+    await this.blockCallsAfterPairing(number);
     await this.audit.record({ actorUserId, tenantId, action: 'number.pair_code_requested', entityType: 'whatsapp_number', entityId: id });
     return { code: result.code, timeout_seconds: result.timeout_seconds };
   }
@@ -319,7 +323,16 @@ export class NumbersService {
       payload = await this.loadQrFromSession(number.waxum_session_id);
     }
     const status = await this.refreshNumberStatus(number);
-    return status.connected ? { ...payload, status: 'connected', phone_number: status.phone } : payload;
+    if (status.connected) return { ...payload, status: 'connected', phone_number: status.phone };
+    await this.blockCallsAfterPairing(number);
+    return payload;
+  }
+
+  // Only lines created with the block (see migration 076). Keeps a longer quarantine, e.g. the
+  // 72 h of a PC registration, instead of shortening it.
+  private async blockCallsAfterPairing(number: any) {
+    if (!number.block_calls_after_pairing) return;
+    await this.db.query(`UPDATE whatsapp_numbers SET flagged_until = GREATEST(flagged_until, now() + make_interval(hours => $1)) WHERE id = $2 AND tenant_id = $3`, [PAIRING_CALL_BLOCK_HOURS, number.id, number.tenant_id]);
   }
 
   private async refreshNumberStatus(number: any) {

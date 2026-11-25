@@ -72,6 +72,7 @@ export function NumbersPage({ numbers, numbersTotal, numbersOffset, onNumbersPag
         <h3>{number.label}</h3><p>{number.phone || 'Telefone não informado'}</p>
         <div className="resource-meta"><span>Limite de chamadas</span><strong>{number.max_concurrent_calls}</strong></div>
         <div className="resource-meta"><span>Cadência protegida</span><strong>{number.max_calls_per_window ?? 3} / {number.call_window_seconds ?? 180}s</strong></div>
+        <CallBlock flaggedUntil={number.flagged_until} />
         <VerificationOnlyToggle number={number} canManage={canManageNumbers} />
         {canManageNumbers && <div className="card-actions">{!connectedStatuses.includes(String(number.status).toLowerCase()) && <><Button variant="secondary" icon="qr" disabled={qrLoading} onClick={() => void showQr(number.id)}>Abrir QR</Button><Button variant="secondary" icon="phone" disabled={qrLoading} onClick={() => setPairNumber(number)}>Conectar por código</Button></>}<Button variant="ghost" icon="refresh" disabled={qrLoading} onClick={() => void reconnectNumber(number.id)}>Reconectar</Button><Button variant="danger" icon="close" disabled={qrLoading} onClick={() => void removeNumber(number.id, number.label)}>Remover</Button></div>}
       </div>)}
@@ -81,6 +82,13 @@ export function NumbersPage({ numbers, numbersTotal, numbersOffset, onNumbersPag
     {qr && <QrModal qr={qr} closeQr={closeQr} numberId={qrNumberId} defaultPhone={numbers.find((number: AnyRow) => number.id === qrNumberId)?.phone ?? ''} />}
     {pairNumber && <PairCodeModal number={pairNumber} onClose={() => setPairNumber(null)} />}
   </>;
+}
+
+// Quarentena da linha (24 h após cada pareamento, ou proteção contra bloqueio): o discador não a usa.
+function CallBlock({ flaggedUntil }: { flaggedUntil?: string | null }) {
+  if (!flaggedUntil || new Date(flaggedUntil).getTime() <= Date.now()) return null;
+  const until = new Date(flaggedUntil).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+  return <div className="resource-meta"><span>Ligações</span><Badge tone="warning">Bloqueadas até {until}</Badge></div>;
 }
 
 /**
