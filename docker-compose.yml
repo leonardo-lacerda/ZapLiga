@@ -278,10 +278,17 @@ services:
 
   waxum-edge-1:
     <<: *edge-waxum
+    # Rollout of the call-signal image (docs/waxum-version.md, "Sinais de chamada"): edge-1 (the
+    # owner's PC) first, then the other edges and the main waxum once a real call checks out.
+    image: zapliga-waxum:0.12.6-multirelay-v5-signal
     network_mode: service:tailscale-edge-1
     environment:
       <<: *edge-waxum-environment
       EGRESS_SLOT: edge-1
+      # A browser companion with the operation's locale (registration and handshake).
+      WA_DEVICE_PLATFORM: chrome
+      WA_DEVICE_OS: Windows
+      WA_CLIENT_LOCALE: pt_BR
     volumes:
       - waxum_data:/app/whatsapp_sessions
       - waxum_edge_1_data:/app/registry
