@@ -12,7 +12,9 @@ const TICK_MS = 30_000;
 // of logins from one IP is what WhatsApp should not see.
 const MAX_MOVES_PER_TICK = 2;
 const LEADER_LOCK = 'zapcall:global:lock:egress-pool';
-const CONNECTED = ['connected', 'online', 'ready', 'authenticated'];
+// A line whose move failed waits this long before the next try, so it does not hold
+// back, tick after tick, the lines behind it.
+const RETRY_AFTER_FAILURE_MS = 10 * 60_000;
 
 /**
  * Spreads the lines across the attendants' PCs (docs/saida-pelo-pc-do-atendente.md):
@@ -21,13 +23,15 @@ const CONNECTED = ['connected', 'online', 'ready', 'authenticated'];
  *   receives lines;
  * - the lines of a PC that has been offline for offline_grace_seconds go to
  *   another online PC; with none, to the VPS if the PC's fallback is `vps`.
- * Only connected lines move: a disconnected one has no session to hand over.
+ * Disconnected lines move too: a PC that goes away takes their connection with it, and
+ * the device keys sit in the storage every Waxum shares, so the target reconnects them.
  * A line never returns on its own to the PC it left, so its IP does not flap.
  */
 @Injectable()
 export class EgressPoolService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(EgressPoolService.name);
   private timer?: NodeJS.Timeout;
+  private readonly failedUntil = new Map<string, number>();
 
   constructor(private readonly db: DatabaseService, private readonly redis: RedisService, private readonly egress: EgressService, private readonly numbers: NumbersService) {}
 
@@ -62,9 +66,7 @@ export class EgressPoolService implements OnModuleInit, OnModuleDestroy {
     const moves: Array<{ line: any; to: string }> = [];
     for (const line of lines) {
       if (moves.length >= MAX_MOVES_PER_TICK) break;
-      // Only a live session can be handed to another Waxum: moving a disconnected line fails
-      // on every tick and, being the oldest, kept the connected lines behind it from moving.
-      if (!CONNECTED.includes(line.status)) continue;
+      if ((this.failedUntil.get(line.id) ?? 0) > Date.now()) continue;
       let to: string | undefined;
       if (line.waxum_node === MAIN_WAXUM_NODE) {
         to = target();
@@ -82,8 +84,10 @@ export class EgressPoolService implements OnModuleInit, OnModuleDestroy {
     for (const { line, to } of moves) {
       try {
         await this.numbers.moveToWaxumNode(line.tenant_id, null, line.id, to);
+        this.failedUntil.delete(line.id);
         this.logger.log(`Line ${line.id} moved from ${line.waxum_node} to ${to}`);
       } catch (error) {
+        this.failedUntil.set(line.id, Date.now() + RETRY_AFTER_FAILURE_MS);
         this.logger.warn(`Line ${line.id} not moved to ${to}: ${String((error as Error)?.message ?? error).slice(0, 300)}`);
       }
     }

@@ -34,4 +34,16 @@ describe('EgressPoolService', () => {
     await service.tick();
     expect(numbers.moveToWaxumNode).toHaveBeenCalledWith('t1', null, 'l1', 'edge-2');
   });
+
+  it('also moves the lines that lost their connection when their PC went away', async () => {
+    const { service, numbers } = pool(
+      [
+        { slot: 'edge-2', fallback: 'offline', online: false, gone: true, steady: null },
+        { slot: 'edge-1', fallback: 'vps', online: true, gone: false, steady: true },
+      ],
+      [{ id: 'l1', tenant_id: 't1', waxum_node: 'edge-2', status: 'waiting_for_qr' }],
+    );
+    await service.tick();
+    expect(numbers.moveToWaxumNode).toHaveBeenCalledWith('t1', null, 'l1', 'edge-1');
+  });
 });

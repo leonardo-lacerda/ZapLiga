@@ -7,6 +7,8 @@ export const statusNames: Record<string, string> = {
   connected: 'Conectado', disconnected: 'Desconectado', completed: 'Concluída', no_answer: 'Não atendeu', failed: 'Falhou',
   online: 'Online', ready: 'Pronto', authenticated: 'Autenticado', offline: 'Offline', available: 'Disponível', in_call: 'Em chamada',
   post_call: 'Pós-atendimento', paused: 'Pausado', cancelled: 'Cancelada', manual: 'Discagem manual',
+  // Waxum line states: waiting_for_qr is also what a linked line shows while it cannot reach WhatsApp (its PC is off).
+  connecting: 'Conectando', waiting_for_qr: 'Aguardando conexão', waiting_for_pair_code: 'Aguardando código', reconnecting: 'Trocando de saída',
 };
 
 export const labelStatus = (value: unknown) => statusNames[String(value)] ?? String(value ?? '—');
