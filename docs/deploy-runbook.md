@@ -55,6 +55,35 @@ curl -fsS http://127.0.0.1:3001/health
 
 Isso reverte só o código da API. Se o deploy problemático também trouxe uma migration nova, reverter a imagem sozinho não desfaz o schema — veja a seção seguinte.
 
+## Backup antes de cada deploy
+
+Desde 25/11/2026, o deploy faz um backup logo depois de subir o banco e **antes** de mexer em
+qualquer coisa (vagas dos PCs, imagens, migrations). Se o backup falhar ou não puder ser lido de
+volta, o deploy para ali, sem alterar nada. Tudo fica no volume `postgres_backups`, em
+`/backups/pre-deploy/`, com a data e o commit no nome:
+
+- `zapcall-<data>-<commit>.dump`: o banco inteiro (`pg_dump -Fc`), conferido com `pg_restore -l`.
+  Ficam os 10 últimos.
+- `waxum-sessions-<data>-<commit>.tar.gz`: o armazenamento das sessões do WhatsApp (volume
+  `waxum_data`), conferido com `tar tzf`. Ficam os 5 últimos. A cópia é feita com os Waxums
+  rodando: uma sessão que estava gravando bem naquele instante pode precisar de QR novo.
+
+Para listar:
+```bash
+docker run --rm -v zapliga_postgres_backups:/backups alpine ls -lh /backups/pre-deploy
+```
+
+Para restaurar o banco a partir de um `.dump` (com as APIs paradas, como na seção seguinte):
+```bash
+docker compose stop api-a api-b
+docker compose exec -T postgres-backup sh -c 'PGPASSWORD="$POSTGRES_PASSWORD" pg_restore -h "$POSTGRES_HOST" -U "$POSTGRES_USER" -d "$POSTGRES_DB" --clean --if-exists /backups/pre-deploy/zapcall-<data>-<commit>.dump'
+```
+
+Para restaurar as sessões (com todos os Waxums parados):
+```bash
+docker run --rm -v zapliga_waxum_data:/sessions -v zapliga_postgres_backups:/backups alpine sh -c 'tar xzf /backups/pre-deploy/waxum-sessions-<data>-<commit>.tar.gz -C /sessions'
+```
+
 ## Recuperação de uma migration ruim
 
 As migrations (`apps/api/src/database/migrations/*.sql`) são **só de ida** — não existe `down.sql`, e não vamos criar um sistema de reversão retroativo para elas (é um projeto grande e desproporcional ao problema; a rota real de recuperação é o backup).

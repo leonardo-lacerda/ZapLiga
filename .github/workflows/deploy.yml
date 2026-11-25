@@ -233,6 +233,30 @@ jobs:
 
           "${COMPOSE[@]}" up -d postgres postgres-backup redis nats waxum
 
+          # Backup before anything changes (PC slots, images, migrations): a dump of the
+          # database and a copy of the WhatsApp session storage, kept in the postgres_backups
+          # volume under pre-deploy/ (docs/deploy-runbook.md, "Backup antes de cada deploy").
+          # The deploy stops here if either one fails or does not read back. The sessions are
+          # copied while the Waxums run, so a session written mid-copy may need its own QR.
+          backup_tag="$(date -u +%Y%m%d-%H%M%S)-${GITHUB_SHA:0:7}"
+          "${COMPOSE[@]}" exec -T postgres-backup sh -ec '
+            mkdir -p /backups/pre-deploy
+            dump="/backups/pre-deploy/zapcall-'"$backup_tag"'.dump"
+            PGPASSWORD="$POSTGRES_PASSWORD" pg_dump -h "$POSTGRES_HOST" -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Fc -f "$dump"
+            pg_restore -l "$dump" >/dev/null
+            ls -lh "$dump"
+            ls -1t /backups/pre-deploy/zapcall-*.dump | tail -n +11 | xargs -r rm --
+          ' </dev/null
+          backup_image=$(awk '/^  waxum:/ { found = 1 } found && /image:/ { print $2; exit }' docker-compose.yml)
+          docker run --rm -v zapliga_waxum_data:/sessions:ro -v zapliga_postgres_backups:/backups --entrypoint sh "$backup_image" -ec '
+            archive="/backups/pre-deploy/waxum-sessions-'"$backup_tag"'.tar.gz"
+            tar czf "$archive" -C /sessions .
+            tar tzf "$archive" >/dev/null
+            ls -lh "$archive"
+            ls -1t /backups/pre-deploy/waxum-sessions-*.tar.gz | tail -n +6 | xargs -r rm --
+          ' </dev/null
+          echo "Backup pré-deploy: pre-deploy/zapcall-$backup_tag.dump e pre-deploy/waxum-sessions-$backup_tag.tar.gz"
+
           # HTTP alone is insufficient: Waxum previously reported /livez while
           # its NATS integration was permanently disabled. The guarded
           # healthcheck only becomes healthy after NATS lists the Rust client.
