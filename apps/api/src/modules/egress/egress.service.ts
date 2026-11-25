@@ -112,7 +112,7 @@ export class EgressService {
   async listPcs() {
     await this.syncPcs();
     const result = await this.db.query(`
-      SELECT p.id, p.name, p.slot, p.tailscale_ip, p.fallback, p.route, p.route_reported_at, p.offline_since, p.created_at,
+      SELECT p.id, p.name, p.slot, p.tailscale_ip, p.route, p.route_reported_at, p.offline_since, p.created_at,
         EXTRACT(EPOCH FROM (now() - p.route_reported_at))::int AS report_age_seconds,
         (SELECT count(*)::int FROM whatsapp_numbers n WHERE p.slot IS NOT NULL AND n.waxum_node = p.slot AND n.status <> 'removed') AS number_count
       FROM egress_pcs p ORDER BY p.created_at
@@ -155,19 +155,31 @@ export class EgressService {
     for (const [index, pc] of waiting.entries()) await this.db.query('UPDATE egress_pcs SET slot = $2 WHERE id = $1', [pc.id, free[index]]);
   }
 
-  async updatePc(actorUserId: string, id: string, changes: { name?: string; fallback?: 'offline' | 'vps' }) {
+  async updatePc(actorUserId: string, id: string, changes: { name?: string }) {
     const pc = await this.findPc(id);
-    const result = await this.db.query('UPDATE egress_pcs SET name = COALESCE($2, name), fallback = COALESCE($3, fallback) WHERE id = $1 RETURNING *', [id, changes.name ?? null, changes.fallback ?? null]);
-    await this.audit.record({ actorUserId, action: 'egress.pc_updated', entityType: 'egress_pc', entityId: id, metadata: { from: { name: pc.name, fallback: pc.fallback }, to: changes } });
+    const result = await this.db.query('UPDATE egress_pcs SET name = COALESCE($2, name) WHERE id = $1 RETURNING *', [id, changes.name ?? null]);
+    await this.audit.record({ actorUserId, action: 'egress.pc_updated', entityType: 'egress_pc', entityId: id, metadata: { from: { name: pc.name }, to: changes } });
     return result.rows[0];
   }
 
-  /** Moves the PC's lines to the VPS, takes it out of Tailscale and frees its slot. */
+  /**
+   * Moves the PC's lines to the online PC with the fewest lines, takes it out of Tailscale
+   * and frees its slot. Lines never go to the VPS, so a PC with lines and no other online
+   * PC to take them cannot be removed.
+   */
   async removePc(actorUserId: string, id: string) {
     const pc = await this.findPc(id);
     if (pc.slot) {
-      const lines = await this.db.query("SELECT id, tenant_id FROM whatsapp_numbers WHERE waxum_node = $1 AND status <> 'removed'", [pc.slot]);
-      for (const line of lines.rows) await this.numbers.moveToWaxumNode(line.tenant_id, actorUserId, line.id, MAIN_WAXUM_NODE);
+      const lines = (await this.db.query("SELECT id, tenant_id FROM whatsapp_numbers WHERE waxum_node = $1 AND status <> 'removed'", [pc.slot])).rows;
+      if (lines.length) {
+        const target = (await this.db.query(`
+          SELECT p.slot FROM egress_pcs p
+          WHERE p.slot IS NOT NULL AND p.slot <> $1 AND p.route = 'pc' AND p.route_reported_at > now() - make_interval(secs => $2)
+          ORDER BY (SELECT count(*) FROM whatsapp_numbers n WHERE n.waxum_node = p.slot AND n.status <> 'removed') LIMIT 1
+        `, [pc.slot, REPORT_STALE_SECONDS])).rows[0]?.slot as string | undefined;
+        if (!target) throw new BadRequestException('Nenhum outro PC online para receber os números deste PC. Ligue outro PC antes de remover.');
+        for (const line of lines) await this.numbers.moveToWaxumNode(line.tenant_id, actorUserId, line.id, target);
+      }
     }
     if (pc.tailscale_device_id) await this.call(`/device/${pc.tailscale_device_id}`, { method: 'DELETE' }).catch((error) => {
       if ((error as { status?: number }).status !== 404) throw error;
@@ -178,10 +190,10 @@ export class EgressService {
     return { removed: true };
   }
 
-  // The exits a line can be moved to: the VPS plus every slot with a PC.
+  // The exits a line can be moved to: every slot with a PC. Never the VPS.
   async nodes() {
     const pcs = await this.pcExits();
-    return { items: [{ node: MAIN_WAXUM_NODE, label: 'VPS', online: true }, ...pcs.map((pc) => ({ node: pc.slot, label: pc.name, online: pc.online }))] };
+    return { items: pcs.map((pc) => ({ node: pc.slot, label: pc.name, online: pc.online })) };
   }
 
   /**
@@ -208,14 +220,14 @@ export class EgressService {
       UPDATE egress_pcs SET route = $2, route_reported_at = now(),
         offline_since = CASE WHEN $2 = 'pc' THEN NULL ELSE COALESCE(offline_since, now()) END,
         online_since = CASE WHEN $2 = 'pc' THEN COALESCE(online_since, now()) END
-      WHERE slot = $1 RETURNING tailscale_ip, fallback
+      WHERE slot = $1 RETURNING tailscale_ip
     `, [slot, route]);
     const pc = result.rows[0];
     // Not answering: the PC may have rejoined Tailscale with a new IP.
     if (pc && route !== 'pc') await this.syncPcs(false);
-    if (!pc?.tailscale_ip) return 'exit_node=\nfallback=\nauth_key=\n';
+    if (!pc?.tailscale_ip) return 'exit_node=\nauth_key=\n';
     const authKey = loggedIn ? '' : await this.edgeKey(slot);
-    return `exit_node=${pc.tailscale_ip}\nfallback=${pc.fallback}\nauth_key=${authKey}\n`;
+    return `exit_node=${pc.tailscale_ip}\nauth_key=${authKey}\n`;
   }
 
   private async edgeKey(slot: string) {

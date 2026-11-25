@@ -4,12 +4,10 @@
 # Everything in this container's network namespace — the slot's Waxum shares it —
 # goes out through the attendant's PC while it answers. Every 10 s the watcher
 # asks the API which PC the slot serves (Admin → Saídas de internet), reports its
-# route and keeps the exit node in line. When the PC stops answering, its
-# fallback decides:
-#   offline  the exit node stays set and Tailscale drops the traffic: the lines go
-#            offline until the PC is back;
-#   vps      the exit node is cleared and the traffic goes out through the VPS
-#            until the PC is back.
+# route and keeps the exit node in line. When the PC stops answering, or the slot
+# loses its PC, the exit node stays set and Tailscale drops the traffic: the lines
+# go offline until a PC is back. They never go out through the VPS: WhatsApp
+# reads a datacenter IP as a ban signal.
 # The route goes to /egress/route; the slot's Waxum only starts once it names
 # a PC route (infra/egress/waxum-edge-guard.sh), so it never starts going out
 # through the VPS by accident.
@@ -27,8 +25,8 @@ MISSES_BEFORE_FALLBACK=3
 # (exit node switched off, no internet on the PC). Each check also fetches this
 # through the PC; while it fails the slot is not `pc`, so the API gives it no new lines.
 PROBE_URL="${EGRESS_PROBE_URL:-http://connectivitycheck.gstatic.com/generate_204}"
-# With the `vps` fallback the exit node is cleared, so the PC can only be tested
-# by pointing the slot back at it: wait this long between such attempts.
+# When the slot is pointed at another exit node (a new PC), wait this long between
+# attempts to point it at a PC that answers but passes no internet.
 INTERNET_RETRY_SECONDS=120
 
 log() { echo "$(date -u '+%Y-%m-%dT%H:%M:%SZ') egress: $*"; }
@@ -77,13 +75,13 @@ while kill -0 "$daemon" 2>/dev/null; do
   # Without the API (a deploy, say) the slot keeps its current route.
   if config=$(fetch_config "$li"); then
     exit_node=$(value exit_node)
-    fallback=$(value fallback)
     auth_key=$(value auth_key)
 
     if [ -z "$exit_node" ]; then
-      # No PC on this slot (or it is not installed yet).
+      # No PC on this slot (or it is not installed yet). The exit node of a PC that left
+      # stays set, so a running Waxum goes offline instead of out through the VPS.
       if [ "$route" != idle ]; then
-        { [ "$li" = 0 ] || set_exit_node ""; } && route=idle && misses=0 && log "nenhum PC nesta vaga"
+        route=idle && misses=0 && log "nenhum PC nesta vaga: números sem internet"
       fi
     elif [ "$li" = 0 ]; then
       if [ -n "$auth_key" ] && tailscale up --auth-key="$auth_key" --hostname="zapliga-$EGRESS_SLOT" \
@@ -110,24 +108,22 @@ while kill -0 "$daemon" 2>/dev/null; do
           misses=$((misses + 1))
           failure=internet
           no_internet_at=$(date +%s)
-          if [ "$misses" -ge "$MISSES_BEFORE_FALLBACK" ]; then wanted=$fallback; else wanted=$route; fi
+          if [ "$misses" -ge "$MISSES_BEFORE_FALLBACK" ]; then wanted=offline; else wanted=$route; fi
         fi
       else
         misses=$((misses + 1))
         failure=ping
-        if [ "$misses" -ge "$MISSES_BEFORE_FALLBACK" ]; then wanted=$fallback; else wanted=$route; fi
+        if [ "$misses" -ge "$MISSES_BEFORE_FALLBACK" ]; then wanted=offline; else wanted=$route; fi
       fi
-      # Until a route is chosen, keep the exit node set: Tailscale drops the traffic.
-      case "$wanted" in vps) exit_wanted="" ;; *) exit_wanted=$exit_node ;; esac
-      if set_exit_node "$exit_wanted"; then
+      # The exit node always stays set: while the PC is away Tailscale drops the traffic.
+      if set_exit_node "$exit_node"; then
         case "$wanted" in
-          pc|offline|vps)
+          pc|offline)
             if [ "$wanted" != "$route" ]; then
               if [ "$failure" = internet ]; then problem="responde mas não passa internet (veja se está como exit node e com internet)"; else problem="sem resposta"; fi
               case "$wanted" in
                 pc) log "saindo pelo PC $exit_node" ;;
                 offline) log "PC $exit_node $problem: números sem internet até ele voltar" ;;
-                vps) log "PC $exit_node $problem: saindo pela VPS" ;;
               esac
             fi
             route=$wanted ;;

@@ -40,6 +40,9 @@ const activityCopy = (activity: AnyRow | null) => {
   if (activity.kind === 'call_started') return { title: 'Lead atendido', detail: activity.leadName ? `${activity.leadName} · conversa em andamento` : 'Uma conversa começou' };
   if (activity.kind === 'post_call_started') return { title: 'Pós-atendimento iniciado', detail: activity.leadName ? `${activity.leadName} · aguardando registro` : 'Um SDR precisa registrar o resultado' };
   if (activity.kind === 'number_flagged') return { title: 'Número pausado', detail: 'Uma linha foi protegida após atingir o limite do WhatsApp' };
+  if (activity.kind === 'number_lost') return { title: activity.retired ? 'Linha aposentada' : activity.lossReason === 'account_locked' ? 'Conta travada pelo WhatsApp' : 'Linha removida pelo WhatsApp', detail: activity.retired ? `${activity.label ?? 'A linha'} caiu pela segunda vez e não volta a parear` : activity.lossReason === 'account_locked' ? `${activity.label ?? 'A linha'}: resolva no celular antes de um QR novo` : `${activity.label ?? 'A linha'}: precisa de QR novo e descanso` };
+  if (activity.kind === 'canary_passed') return { title: 'Canário aprovado', detail: `${activity.label ?? 'A linha'} já pode ligar para leads` };
+  if (activity.kind === 'canary_failed') return { title: 'Canário reprovado', detail: `${activity.label ?? 'A linha'} descansa 48 h antes de tentar de novo` };
   return null;
 };
 

@@ -25,12 +25,12 @@ serve de porta de saída para a internet. Tudo é configurado em
    instala a Tailscale, liga o PC como saída, mantém a Tailscale rodando com o
    Windows bloqueado e desliga a suspensão. Guarde o comando só com quem
    instala: ele coloca qualquer PC na rede.
-3. **Por número:** conecte o número em Números (QR ou código). Com a
-   distribuição automática ligada, a linha já nasce no PC online com menos
-   números (até o limite por PC), então o WhatsApp nunca a vê saindo pela VPS;
-   sem PC livre, ela nasce na VPS e a distribuição a leva depois. Também dá
-   para escolher a saída à mão em Empresas → Detalhes → Números. Em nenhum dos
-   casos é preciso ler o QR de novo.
+3. **Por número:** conecte o número em Números (QR ou código). A linha nasce
+   no PC online com menos números (até o limite por PC), então o WhatsApp nunca
+   a vê saindo pela VPS; sem PC online, o número não é criado. Também dá para
+   escolher outro PC à mão em Empresas → Detalhes → Números, sem ler o QR de
+   novo. **Nenhuma linha sai pela VPS** (desde 25/11/2026): o IP de datacenter
+   pesa contra o número.
 
 ## Distribuição automática
 
@@ -39,30 +39,29 @@ A cada 30 s, uma instância da API (`EgressPoolService`):
 - leva os números conectados que estão na VPS para o PC online com menos
   números, até "Números por PC";
 - tira os números de um PC que está fora há mais que o tempo configurado e os
-  leva para outro PC online com vaga. Sem PC com vaga, eles vão para a VPS se o
-  modo do PC for "saem pela VPS", e esperam o PC voltar se for "números param";
+  leva para outro PC online com vaga. Sem PC com vaga, eles esperam o PC voltar;
+- não move número que o WhatsApp removeu ou travou, nem número pareado há menos
+  de 30 minutos;
 - move no máximo 2 números por rodada e nunca um número em ligação;
 - não devolve um número ao PC de onde ele saiu, para o IP dele não ficar
   mudando.
 
-Remover um PC passa os números dele para a VPS e tira o PC da Tailscale.
+Remover um PC passa os números dele para o PC online com menos números e tira o
+PC da Tailscale. Sem outro PC online, o PC com números não pode ser removido.
 
 ## Quando o PC desliga
 
 A vaga testa o PC a cada 10 s e só considera que ele caiu depois de 3 falhas
-seguidas (cerca de 30 s). Até a distribuição tirar os números de lá, vale o
-modo do PC:
-
-| Modo | PC fora | PC volta |
-|---|---|---|
-| Números param (padrão) | A Tailscale bloqueia o tráfego; os números ficam sem internet. | Reconectam sozinhos pelo PC. |
-| Saem pela VPS | O tráfego sai pela VPS; os números continuam funcionando. | O tráfego volta para o PC. |
+seguidas (cerca de 30 s). Até a distribuição tirar os números de lá, a Tailscale
+bloqueia o tráfego e os números ficam sem internet; quando o PC volta, eles
+reconectam sozinhos por ele. Uma vaga que perde o PC também fica sem internet,
+nunca saindo pela VPS.
 
 A troca de rota derruba uma ligação em andamento.
 
 **Ligação só sai pelo PC.** Uma linha só disca (automático, manual, extensão ou
 Franco) se estiver numa vaga cujo PC está online e saindo pelo PC. Na VPS, ou
-com o PC fora (em qualquer modo), a ligação é recusada com o código
+com o PC fora, a ligação é recusada com o código
 `line_off_pc_network` e a mensagem "Nenhuma rede de PC conectada…": ligar pelo IP
 da VPS é o que fez o WhatsApp bloquear números.
 

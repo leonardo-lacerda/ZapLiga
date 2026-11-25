@@ -19,7 +19,7 @@ describe('sanitizeExternalRef', () => {
 });
 
 describe('DialerService dial intents', () => {
-  const line = { id: 'num-1', tenant_id: 'tenant-1', phone: '5585900000000', status: 'connected', flagged_until: null, last_call_ended_at: null, max_concurrent_calls: 1, active_calls: 0, on_pc_network: true };
+  const line = { id: 'num-1', tenant_id: 'tenant-1', phone: '5585900000000', status: 'connected', flagged_until: null, last_call_ended_at: null, max_concurrent_calls: 1, active_calls: 0, on_pc_network: true, canary_status: 'passed', under_daily_cap: true };
 
   const makeService = (overrides: { sdrs?: any[]; numbers?: any[]; suppressed?: boolean; busy?: boolean; stationAlive?: boolean; storedIntent?: any } = {}) => {
     const query = jest.fn(async (sql: string) => {
@@ -62,6 +62,8 @@ describe('DialerService dial intents', () => {
     ['line_disconnected', { numbers: [{ ...line, status: 'disconnected' }] }],
     ['line_verification_only', { numbers: [{ ...line, verification_only: true }] }],
     ['line_off_pc_network', { numbers: [{ ...line, on_pc_network: false }] }],
+    ['line_canary_pending', { numbers: [{ ...line, canary_status: 'pending' }] }],
+    ['line_daily_cap', { numbers: [{ ...line, under_daily_cap: false }] }],
     ['line_busy', { numbers: [{ ...line, active_calls: 4 }] }],
     ['self_call', { numbers: [{ ...line, phone: '5511999990000' }] }],
     ['suppressed', { suppressed: true }],

@@ -13,7 +13,7 @@ function updateNumberField(setNumberForm: AnyRow['setNumberForm'], numberForm: A
 }
 
 // `canProvision`: flag whatsapp_provisioning + papel leader/super_admin (calculado em App com canUseProvisioning).
-export function NumbersPage({ numbers, numbersTotal, numbersOffset, onNumbersPageChange, numberForm, setNumberForm, createNumber, showQr, reconnectNumber, removeNumber, qrLoading, qr, qrNumberId, closeQr, canManageNumbers = false, canProvision = false, onOpenProvisioning }: AnyRow) {
+export function NumbersPage({ numbers, numbersTotal, numbersOffset, onNumbersPageChange, numberForm, setNumberForm, createNumber, showQr, reconnectNumber, removeNumber, qrLoading, qr, qrNumberId, closeQr, canManageNumbers = false, canProvision = false, onOpenProvisioning, canaryCall, stationReady = false }: AnyRow) {
   const [pairNumber, setPairNumber] = useState<AnyRow | null>(null);
   return <>
     <div className="page-heading">
@@ -73,6 +73,8 @@ export function NumbersPage({ numbers, numbersTotal, numbersOffset, onNumbersPag
         <div className="resource-meta"><span>Limite de chamadas</span><strong>{number.max_concurrent_calls}</strong></div>
         <div className="resource-meta"><span>Cadência protegida</span><strong>{number.max_calls_per_window ?? 3} / {number.call_window_seconds ?? 180}s</strong></div>
         <CallBlock flaggedUntil={number.flagged_until} />
+        <LineHealth number={number} />
+        {canManageNumbers && <CanaryStep number={number} canaryCall={canaryCall} stationReady={stationReady} />}
         <VerificationOnlyToggle number={number} canManage={canManageNumbers} />
         {canManageNumbers && <div className="card-actions">{!connectedStatuses.includes(String(number.status).toLowerCase()) && <><Button variant="secondary" icon="qr" disabled={qrLoading} onClick={() => void showQr(number.id)}>Abrir QR</Button><Button variant="secondary" icon="phone" disabled={qrLoading} onClick={() => setPairNumber(number)}>Conectar por código</Button></>}<Button variant="ghost" icon="refresh" disabled={qrLoading} onClick={() => void reconnectNumber(number.id)}>Reconectar</Button><Button variant="danger" icon="close" disabled={qrLoading} onClick={() => void removeNumber(number.id, number.label)}>Remover</Button></div>}
       </div>)}
@@ -89,6 +91,59 @@ function CallBlock({ flaggedUntil }: { flaggedUntil?: string | null }) {
   if (!flaggedUntil || new Date(flaggedUntil).getTime() <= Date.now()) return null;
   const until = new Date(flaggedUntil).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
   return <div className="resource-meta"><span>Ligações</span><Badge tone="warning">Bloqueadas até {until}</Badge></div>;
+}
+
+const RETIRED_AFTER_LOSSES = 2;
+const YOUNG_LINE_DAILY_CALLS = 40;
+const lossCopy: Record<string, string> = {
+  device_removed: 'Removida pelo WhatsApp: precisa de QR novo e descanso',
+  account_locked: 'Conta travada: resolva no celular antes do QR',
+};
+
+// Por que a linha caiu, quantas ligações ela fez hoje (limite da linha jovem) e quantas vezes reconectou.
+function LineHealth({ number }: { number: AnyRow }) {
+  const retired = Number(number.removal_count ?? 0) >= RETIRED_AFTER_LOSSES;
+  return <>
+    {retired && <div className="resource-meta"><span>Linha</span><Badge tone="error">Aposentada: o WhatsApp tirou este número {number.removal_count} vezes</Badge></div>}
+    {!retired && number.loss_reason && <div className="resource-meta"><span>Queda</span><Badge tone="error">{lossCopy[number.loss_reason] ?? number.loss_reason}</Badge></div>}
+    {number.young && <div className="resource-meta"><span>Ligações hoje</span><strong>{number.calls_today ?? 0}/{YOUNG_LINE_DAILY_CALLS}</strong></div>}
+    {Number(number.reconnects_24h ?? 0) > 0 && <div className="resource-meta"><span>Reconexões em 24 h</span><strong>{number.reconnects_24h}</strong></div>}
+  </>;
+}
+
+/**
+ * Canário: depois de cada pareamento, a primeira ligação da linha vai para o celular de alguém da
+ * equipe, nunca para um lead. A linha manda uma mensagem, a pessoa responde e quem está na estação
+ * liga. Se a ligação passar de alguns segundos e a linha seguir conectada, ela é liberada.
+ */
+function CanaryStep({ number, canaryCall, stationReady }: { number: AnyRow; canaryCall?: (numberId: string, phone: string) => Promise<void>; stationReady: boolean }) {
+  const [phone, setPhone] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  if (number.canary_status === 'passed' || number.loss_reason || Number(number.removal_count ?? 0) >= RETIRED_AFTER_LOSSES) return null;
+  const blocked = number.flagged_until && new Date(number.flagged_until).getTime() > Date.now();
+  const connected = connectedStatuses.includes(String(number.status).toLowerCase());
+  const sendMessage = async () => {
+    setBusy(true); setError('');
+    try { setPhone((await json(`/api/numbers/${number.id}/canary/message`, { method: 'POST' }))?.phone ?? ''); }
+    catch (failure) { setError(failure instanceof Error ? failure.message : String(failure)); }
+    finally { setBusy(false); }
+  };
+  const call = async () => {
+    setBusy(true); setError('');
+    try { await canaryCall?.(number.id, phone); }
+    catch (failure) { setError(failure instanceof Error ? failure.message : String(failure)); }
+    finally { setBusy(false); }
+  };
+  return <div className="admin-flag-row">
+    <span>{number.canary_status === 'failed' ? 'Canário reprovado: tente de novo depois do descanso' : 'Aguardando canário'}<small>A primeira ligação depois do QR vai para o celular de alguém da equipe, nunca para um lead. Só depois a linha liga para leads.</small></span>
+    {connected && !blocked && <div className="card-actions">
+      {!phone && <Button variant="secondary" icon="note" disabled={busy} onClick={() => void sendMessage()}>1. Enviar mensagem</Button>}
+      {phone && <><small>Mensagem enviada para {phone}. Peça para a pessoa responder, ligue, converse uns 30 segundos e desligue.</small><Button variant="secondary" icon="phone" disabled={busy || !stationReady} onClick={() => void call()}>2. Ligar para {phone}</Button></>}
+      {phone && !stationReady && <small>Conecte sua estação de ligação para ligar.</small>}
+    </div>}
+    {error && <div className="alert" role="alert"><Icon name="alert" /><span>{error}</span></div>}
+  </div>;
 }
 
 /**

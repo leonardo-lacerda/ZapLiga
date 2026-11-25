@@ -1,4 +1,4 @@
-import { IsIn, IsInt, IsOptional, Max, Min } from 'class-validator';
+import { ArrayMaxSize, IsArray, IsIn, IsInt, IsOptional, Matches, Max, Min } from 'class-validator';
 
 export class UpdateDialerSettingsDto {
   @IsOptional() @IsInt() @Min(1) @Max(1000) global_max_concurrent_calls?: number;
@@ -9,4 +9,6 @@ export class UpdateDialerSettingsDto {
   @IsOptional() @IsInt() @Min(1) @Max(600) ring_timeout_seconds?: number;
   @IsOptional() @IsInt() @Min(0) @Max(3600) default_number_cooldown_seconds?: number;
   @IsOptional() @IsIn(['fifo', 'lifo', 'priority_fifo']) queue_strategy?: 'fifo' | 'lifo' | 'priority_fifo';
+  /** Team phones (country code + area code + number, digits only) a new line calls first: the canary. */
+  @IsOptional() @IsArray() @ArrayMaxSize(10) @Matches(/^\d{10,15}$/, { each: true, message: 'Cada celular da equipe precisa ter só dígitos, com DDI e DDD (10 a 15)' }) canary_phones?: string[];
 }

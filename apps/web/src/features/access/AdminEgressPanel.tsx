@@ -73,10 +73,8 @@ export function AdminEgressPanel() {
 
   const showInstall = () => void act('install', async () => setInstall(await json('/api/admin/egress/install-command')));
 
-  const changeFallback = (pc: AnyRow, fallback: string) => void act(`fallback-${pc.id}`, () => json(`/api/admin/egress/pcs/${pc.id}`, { method: 'PATCH', body: JSON.stringify({ fallback }) }), `${pc.name}: modo salvo. Vale em até 10 segundos.`);
-
   const removePc = (pc: AnyRow) => {
-    if (!window.confirm(`Remover ${pc.name}? Os números dele passam para a VPS sem pedir QR, e o PC sai da Tailscale.`)) return;
+    if (!window.confirm(`Remover ${pc.name}? Os números dele passam para o PC online com menos números, sem pedir QR, e o PC sai da Tailscale.`)) return;
     void act(`remove-${pc.id}`, () => json(`/api/admin/egress/pcs/${pc.id}`, { method: 'DELETE' }), `${pc.name} removido.`);
   };
 
@@ -142,10 +140,6 @@ export function AdminEgressPanel() {
         return <div className="admin-compact-row" key={pc.id}>
           <div><strong>{pc.name}</strong><small>{pc.tailscale_ip ?? '—'} · {pc.number_count} número(s)</small></div>
           <Badge tone={tone}>{label}</Badge>
-          <select aria-label="Se o PC desligar e não houver outro PC" title="Se o PC desligar e não houver outro PC livre" value={pc.fallback} disabled={busy === `fallback-${pc.id}`} onChange={(event) => changeFallback(pc, event.target.value)}>
-            <option value="offline">Sem outro PC: números param</option>
-            <option value="vps">Sem outro PC: saem pela VPS</option>
-          </select>
           <div className="table-actions"><Button variant="danger" onClick={() => removePc(pc)} disabled={busy === `remove-${pc.id}`}>Remover</Button></div>
         </div>;
       })}

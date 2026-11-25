@@ -157,6 +157,32 @@ export class WaxumClient implements OnModuleDestroy {
   pairCode(sessionId: string, phone: string) {
     return this.request<{ code: string; timeout_seconds: number }>(`/api/v1/sessions/${encodeURIComponent(sessionId)}/pair`, { method: 'POST', body: JSON.stringify({ phone_number: phone }), signal: AbortSignal.timeout(30000) }, 1);
   }
+  // A plain WhatsApp text from the line to a phone (digits with country code).
+  sendText(sessionId: string, phone: string, text: string) {
+    return this.request<{ status: string; message_id?: string }>(`/api/v1/sessions/${encodeURIComponent(sessionId)}/messages/text`, { method: 'POST', body: JSON.stringify({ to: phone.replace(/\D/g, ''), text }) }, 1);
+  }
+
+  /**
+   * Session events of every line (`wa.events.<session>.<type>`, published by each Waxum).
+   * Every API instance receives every event, so each one can tell its own open dashboards;
+   * handlers must make their writes idempotent.
+   */
+  async subscribeSessionEvents(types: string[], onEvent: (sessionId: string, type: string, payload: any) => Promise<void>) {
+    const connection = await this.getNatsConnection();
+    const codec = StringCodec();
+    for (const type of types) {
+      const subscription = connection.subscribe(`wa.events.*.${type}`);
+      void (async () => {
+        for await (const message of subscription) {
+          const sessionId = message.subject.split('.')[2];
+          let payload: any = {};
+          try { payload = JSON.parse(codec.decode(message.data)); } catch { /* not JSON: keep the empty payload */ }
+          await onEvent(sessionId, type, payload).catch(() => undefined);
+        }
+      })();
+    }
+  }
+
   getQr(sessionId: string) { return this.request<any>(`/api/v1/sessions/${encodeURIComponent(sessionId)}/qr`); }
   getStatus(sessionId: string) { return this.request<any>(`/api/v1/sessions/${encodeURIComponent(sessionId)}/status`, {}, 1); }
   disconnect(sessionId: string) { return this.request<any>(`/api/v1/sessions/${encodeURIComponent(sessionId)}/disconnect`, { method: 'POST' }, 1); }

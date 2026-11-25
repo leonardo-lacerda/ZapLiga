@@ -32,7 +32,7 @@ export function OperationSettingsPage({ status, onChanged }: { status: AnyRow; o
   }, []);
   useEffect(() => { void loadSchedule(); }, [loadSchedule]);
   useEffect(() => {
-    if (!dirty) setSettings({ max_calls_per_minute: 6, min_seconds_between_calls: 10, ...(status.settings ?? {}) });
+    if (!dirty) setSettings({ max_calls_per_minute: 6, min_seconds_between_calls: 10, ...(status.settings ?? {}), canary_phones_text: (status.settings?.canary_phones ?? []).join('\n') });
   }, [status.settings, dirty]);
 
   const editSchedule = (change: (current: AnyRow) => AnyRow) => { setDirty(true); setSchedule(change); };
@@ -45,8 +45,9 @@ export function OperationSettingsPage({ status, onChanged }: { status: AnyRow; o
     try {
       const numericSettings = Object.fromEntries(settingFields.map(([key]) => [key, Number(settings[key])]));
       numericSettings.queue_strategy = settings.queue_strategy ?? 'fifo';
+      const canaryPhones = String(settings.canary_phones_text ?? '').split(/[\n,;]+/).map((phone) => phone.replace(/\D/g, '')).filter(Boolean);
       await Promise.all([
-        json('/api/dialer/settings', { method: 'PATCH', body: JSON.stringify(numericSettings) }),
+        json('/api/dialer/settings', { method: 'PATCH', body: JSON.stringify({ ...numericSettings, canary_phones: canaryPhones }) }),
         json('/api/dialer/schedule', { method: 'PUT', body: JSON.stringify(schedule) }),
       ]);
       setMessage('Configuração operacional salva. A nova janela já está valendo em todas as instâncias.');
@@ -64,6 +65,10 @@ export function OperationSettingsPage({ status, onChanged }: { status: AnyRow; o
     <div className="page-heading"><div><span className="eyebrow">OPERAÇÃO</span><h1>Configurações do discador</h1><p>Defina limites, fuso e os únicos horários em que chamadas podem começar.</p></div><Badge tone={status.schedule?.allowed ? 'success' : 'warning'}>{status.schedule?.allowed ? 'Dentro do horário' : 'Fora do horário'}</Badge></div>
     {message && <div className="alert" role="status"><span>{message}</span><button type="button" onClick={() => setMessage('')}>×</button></div>}
     <Panel><SectionHeader title="Limites de discagem" description="Controles de concorrência, tentativas e proteção das linhas." /><div className="operation-settings-grid">{settingFields.map(([key, label, min, max]) => <label key={key}><span>{label}</span><input type="number" min={min} max={max} required value={settings[key] ?? ''} onChange={(event) => editSettings((current) => ({ ...current, [key]: event.target.value }))} /></label>)}</div></Panel>
+    <Panel>
+      <SectionHeader title="Canário das linhas novas" description="Depois de cada QR, a primeira ligação de uma linha vai para um destes celulares da equipe, nunca para um lead. Um por linha, com DDI e DDD (ex.: 5527999999999)." />
+      <label className="operation-timezone"><span>Celulares da equipe</span><textarea aria-label="Celulares da equipe para o canário" rows={3} value={settings.canary_phones_text ?? ''} onChange={(event) => editSettings((current) => ({ ...current, canary_phones_text: event.target.value }))} /></label>
+    </Panel>
     <Panel>
       <SectionHeader title="Janelas semanais" description="O fim da janela é exclusivo: uma janela até 18:00 não inicia chamadas às 18:00." action={<Button type="button" variant="secondary" icon="plus" onClick={() => editSchedule((current: AnyRow) => ({ ...current, windows: [...current.windows, { day_of_week: 1, start_time: '09:00', end_time: '18:00' }] }))}>Adicionar janela</Button>} />
       <label className="operation-timezone"><span>Fuso horário da operação</span><select value={schedule.timezone} onChange={(event) => editSchedule((current: AnyRow) => ({ ...current, timezone: event.target.value }))}>{timezones.map((timezone) => <option key={timezone}>{timezone}</option>)}</select></label>

@@ -31,6 +31,10 @@ export class NumbersController {
   pair(@Param('id') id: string, @Body() body: PairNumberDto, @CurrentTenant() tenantId: string, @CurrentUser() user: any) { return this.numbers.pairCode(tenantId, user.id, id, body.phone); }
 
   @Roles('leader', 'super_admin')
+  @Post(['/api/numbers/:id/canary/message', '/api/tenants/:tenantId/numbers/:id/canary/message'])
+  canaryMessage(@Param('id') id: string, @CurrentTenant() tenantId: string, @CurrentUser() user: any) { return this.numbers.sendCanaryMessage(tenantId, user.id, id); }
+
+  @Roles('leader', 'super_admin')
   @Post(['/api/numbers/:id/reconnect', '/api/tenants/:tenantId/numbers/:id/reconnect'])
   reconnect(@Param('id') id: string, @CurrentTenant() tenantId: string, @CurrentUser() user: any) { return this.numbers.reconnect(tenantId, user.id, id); }
 

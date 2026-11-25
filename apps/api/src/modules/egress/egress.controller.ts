@@ -46,9 +46,8 @@ export class EgressAdminController {
   pcs() { return this.egress.listPcs(); }
 
   @Patch('/pcs/:id')
-  updatePc(@Param('id') id: string, @Body() body: { name?: unknown; fallback?: unknown }, @CurrentUser() actor: any) {
-    if (body?.fallback !== undefined && body.fallback !== 'offline' && body.fallback !== 'vps') throw new BadRequestException('fallback precisa ser offline ou vps');
-    return this.egress.updatePc(actor.id, id, { name: body?.name === undefined ? undefined : text(body.name, 'Nome', 60), fallback: body?.fallback as 'offline' | 'vps' | undefined });
+  updatePc(@Param('id') id: string, @Body() body: { name?: unknown }, @CurrentUser() actor: any) {
+    return this.egress.updatePc(actor.id, id, { name: body?.name === undefined ? undefined : text(body.name, 'Nome', 60) });
   }
 
   @Delete('/pcs/:id')
@@ -65,7 +64,7 @@ export class EgressInternalController {
   @Header('Content-Type', 'text/plain; charset=utf-8')
   slot(@Param('slot') slot: string, @Query('route') route: string, @Query('loggedIn') loggedIn: string, @Headers('authorization') authorization?: string) {
     if (!process.env.WAXUM_API_KEY || authorization !== `Bearer ${process.env.WAXUM_API_KEY}`) throw new UnauthorizedException();
-    if (!['pc', 'offline', 'vps', 'idle', 'none'].includes(route)) throw new BadRequestException('route inválida');
+    if (!['pc', 'offline', 'idle', 'none'].includes(route)) throw new BadRequestException('route inválida');
     return this.egress.slotConfig(slot, route, loggedIn === '1');
   }
 }

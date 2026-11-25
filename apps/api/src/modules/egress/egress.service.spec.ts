@@ -29,10 +29,9 @@ describe('EgressService PC exits', () => {
     expect(db.query.mock.calls[0][1]).toEqual([REPORT_STALE_SECONDS, 'pc-2']);
   });
 
-  it('keeps nodes() as the VPS plus every PC slot', async () => {
+  it('offers only PC slots as exits, never the VPS', async () => {
     const { service } = make();
     expect(await service.nodes()).toEqual({ items: [
-      { node: 'main', label: 'VPS', online: true },
       { node: 'edge-1', label: 'PC da Ana', online: true },
       { node: 'edge-2', label: 'PC do Bruno', online: false },
     ] });

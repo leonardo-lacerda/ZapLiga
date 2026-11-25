@@ -115,3 +115,31 @@ it('marca uma linha como só para verificação de WhatsApp', async () => {
   await waitFor(() => expect(toggle).toBeChecked());
   expect(bodies).toEqual([{ verificationOnly: true }]);
 });
+
+it('mostra por que a linha caiu, as ligações de hoje da linha jovem e as reconexões', () => {
+  render(<Harness onCreate={vi.fn()} numbers={[
+    { id: 'n1', label: 'Previtas 7', status: 'disconnected', loss_reason: 'device_removed', removal_count: 1, canary_status: 'pending' },
+    { id: 'n2', label: 'Previtas 8', status: 'disconnected', loss_reason: 'account_locked', removal_count: 2, canary_status: 'pending' },
+    { id: 'n3', label: 'Previtas 12', status: 'connected', canary_status: 'passed', young: true, calls_today: 12, reconnects_24h: 3 },
+  ]} />);
+  expect(screen.getByText(/Removida pelo WhatsApp/)).toBeInTheDocument();
+  expect(screen.getByText(/Aposentada: o WhatsApp tirou este número 2 vezes/)).toBeInTheDocument();
+  expect(screen.getByText('12/40')).toBeInTheDocument();
+  expect(screen.getByText('Reconexões em 24 h')).toBeInTheDocument();
+});
+
+it('conduz o canário: manda a mensagem e liga para o celular da equipe devolvido', async () => {
+  const canaryCall = vi.fn(async () => undefined);
+  server.use(http.post('/api/numbers/n4/canary/message', () => HttpResponse.json({ phone: '5527999990000' })));
+  render(<NumbersPage numbers={[{ id: 'n4', label: 'Previtas 13', status: 'connected', canary_status: 'pending' }]} numbersTotal={1} numbersOffset={0} onNumbersPageChange={() => undefined} numberForm={{ label: '', phone: '' }} setNumberForm={() => undefined} createNumber={() => undefined} showQr={() => undefined} reconnectNumber={() => undefined} removeNumber={() => undefined} qrLoading={false} qr={null} closeQr={() => undefined} canManageNumbers canaryCall={canaryCall} stationReady />);
+  expect(screen.getByText('Aguardando canário')).toBeInTheDocument();
+  await userEvent.click(screen.getByRole('button', { name: /1\. Enviar mensagem/ }));
+  await userEvent.click(await screen.findByRole('button', { name: /2\. Ligar para 5527999990000/ }));
+  expect(canaryCall).toHaveBeenCalledWith('n4', '5527999990000');
+});
+
+it('não oferece o canário enquanto a linha está no bloqueio de 24 h', () => {
+  render(<Harness onCreate={vi.fn()} numbers={[{ id: 'n5', label: 'Previtas 14', status: 'connected', canary_status: 'pending', flagged_until: new Date(Date.now() + 3_600_000).toISOString() }]} />);
+  expect(screen.getByText('Aguardando canário')).toBeInTheDocument();
+  expect(screen.queryByRole('button', { name: /Enviar mensagem/ })).not.toBeInTheDocument();
+});

@@ -15,6 +15,9 @@ const LEADER_LOCK = 'zapcall:global:lock:egress-pool';
 // A line whose move failed waits this long before the next try, so it does not hold
 // back, tick after tick, the lines behind it.
 const RETRY_AFTER_FAILURE_MS = 10 * 60_000;
+// A line paired this recently stays where it was paired: WhatsApp judges the new device on
+// its first call, and a login from another place right before it is one more signal.
+const PAIRING_SETTLE_MINUTES = 30;
 
 /**
  * Spreads the lines across the attendants' PCs (docs/saida-pelo-pc-do-atendente.md):
@@ -22,9 +25,11 @@ const RETRY_AFTER_FAILURE_MS = 10 * 60_000;
  *   max_numbers_per_pc; only a PC online without a break for STEADY_ONLINE_SECONDS
  *   receives lines;
  * - the lines of a PC that has been offline for offline_grace_seconds go to
- *   another online PC; with none, to the VPS if the PC's fallback is `vps`.
+ *   another online PC; with none, they wait for a PC. A line never goes to the VPS:
+ *   a datacenter IP is a ban signal.
  * Disconnected lines move too: a PC that goes away takes their connection with it, and
  * the device keys sit in the storage every Waxum shares, so the target reconnects them.
+ * Lines WhatsApp removed or locked stay put: they need a new QR or the phone, not a move.
  * A line never returns on its own to the PC it left, so its IP does not flap.
  */
 @Injectable()
@@ -50,13 +55,18 @@ export class EgressPoolService implements OnModuleInit, OnModuleDestroy {
     await this.egress.syncPcs();
 
     const pcs = (await this.db.query(`
-      SELECT slot, fallback,
+      SELECT slot,
         route = 'pc' AND route_reported_at > now() - make_interval(secs => $1) AS online,
         offline_since IS NOT NULL AND offline_since < now() - make_interval(secs => $2) AS gone,
         online_since < now() - make_interval(secs => $3) AS steady
       FROM egress_pcs WHERE slot IS NOT NULL
     `, [REPORT_STALE_SECONDS, settings.offline_grace_seconds, STEADY_ONLINE_SECONDS])).rows;
-    const lines = (await this.db.query(`SELECT id, tenant_id, waxum_node, status FROM whatsapp_numbers WHERE status <> 'removed' AND phone IS NOT NULL ORDER BY created_at`)).rows;
+    const lines = (await this.db.query(`
+      SELECT id, tenant_id, waxum_node, status FROM whatsapp_numbers
+      WHERE status <> 'removed' AND phone IS NOT NULL AND loss_reason IS NULL
+        AND (last_paired_at IS NULL OR last_paired_at < now() - make_interval(mins => $1))
+      ORDER BY created_at
+    `, [PAIRING_SETTLE_MINUTES])).rows;
     const load = new Map<string, number>(pcs.map((pc) => [pc.slot, lines.filter((line) => line.waxum_node === pc.slot).length]));
     const online = pcs.filter((pc) => pc.online && pc.steady);
     const target = () => online
@@ -73,7 +83,7 @@ export class EgressPoolService implements OnModuleInit, OnModuleDestroy {
       } else {
         const pc = pcs.find((row) => row.slot === line.waxum_node);
         // A slot whose PC was removed, or a PC offline past the grace period.
-        if (!pc || (!pc.online && pc.gone)) to = target() ?? (!pc || pc.fallback === 'vps' ? MAIN_WAXUM_NODE : undefined);
+        if (!pc || (!pc.online && pc.gone)) to = target();
       }
       if (!to) continue;
       moves.push({ line, to });

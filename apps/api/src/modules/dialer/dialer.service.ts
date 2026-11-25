@@ -31,10 +31,16 @@ import {
   isInboundAudioStalled,
   isInstantFailure,
   isSelfCallNumber,
+  lineCanaryPassedSql,
   lineIsProtected,
+  lineUnderDailyCapSql,
   normalizePhone,
   shouldQuarantineLine,
+  CANARY_CHECK_DELAY_MS,
+  CANARY_MIN_CALL_SECONDS,
+  CANARY_RETRY_HOURS,
   MANUAL_CALLS_PER_LINE,
+  YOUNG_LINE_DAILY_CALLS,
 } from './dialer.rules';
 import { DIAL_INTENT_TTL_SECONDS, DialIntent, DialRefusedError, dialIntentKey } from './dial-intents';
 import { OFF_PC_NETWORK_CODE, OFF_PC_NETWORK_MESSAGE, onPcNetworkSql } from '../egress/pc-network';
@@ -65,6 +71,8 @@ type CallResource = {
   ringingNotified?: boolean;
   sdrNotified?: boolean;
   waxumCallId?: string;
+  // When Waxum sent the offer (`call_started`): WhatsApp judges a new device on it.
+  offerStartedAt?: number;
   answerEventLogged?: boolean;
   browserAudioLogged?: boolean;
   ringTimeout?: NodeJS.Timeout;
@@ -272,7 +280,7 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
   }
 
   /** manualCallWithInput, run on the API instance that holds the caller's station socket. */
-  async manualCallFromStation(input: { leadId?: string; phone?: string; name?: string; numberId?: string }, tenantId: string, sdrUserId?: string): Promise<any> {
+  async manualCallFromStation(input: { leadId?: string; phone?: string; name?: string; numberId?: string; canary?: boolean }, tenantId: string, sdrUserId?: string): Promise<any> {
     const station = sdrUserId ? (await this.db.query('SELECT id, connection_instance_id FROM sdrs WHERE tenant_id = $1 AND user_id = $2 LIMIT 1', [tenantId, sdrUserId])).rows[0] : undefined;
     const instance = station?.connection_instance_id as string | undefined;
     if (!instance || instance === runtimeInstanceId || this.gateway.isConnected(station.id)) return this.manualCallWithInput(input, tenantId, sdrUserId);
@@ -556,6 +564,10 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
         sets.push(`${key} = $${values.length}`);
       }
     }
+    if (Array.isArray(input.canary_phones)) {
+      values.push([...new Set(input.canary_phones.map(normalizePhone))]);
+      sets.push(`canary_phones = $${values.length}`);
+    }
     if (sets.length) await this.db.query(`UPDATE dialer_settings SET ${sets.join(', ')} WHERE tenant_id = $${values.length + 1}`, [...values, tenantId]);
     return this.getSettings(tenantId);
   }
@@ -610,7 +622,7 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
       // Manual calls keep the line PROTECTIONS (quarantine after instant
       // failures, Waxum 429 backoff -- both future-date last_call_ended_at) but
       // not the automatic dialer's pacing: a person may dial again right away.
-      this.db.query(`SELECT *, ${onPcNetworkSql('whatsapp_numbers')} AS on_pc_network FROM whatsapp_numbers WHERE tenant_id = $1 AND verification_only = false AND status IN ('connected', 'online', 'ready', 'authenticated') AND (flagged_until IS NULL OR flagged_until <= now()) ORDER BY last_call_ended_at NULLS FIRST, last_call_ended_at ASC`, [tenantId]),
+      this.db.query(`SELECT *, ${onPcNetworkSql('whatsapp_numbers')} AS on_pc_network FROM whatsapp_numbers WHERE tenant_id = $1 AND verification_only = false AND status IN ('connected', 'online', 'ready', 'authenticated') AND (flagged_until IS NULL OR flagged_until <= now()) AND ${lineCanaryPassedSql('whatsapp_numbers')} AND ${lineUnderDailyCapSql('whatsapp_numbers')} ORDER BY last_call_ended_at NULLS FIRST, last_call_ended_at ASC`, [tenantId]),
       this.db.query(`SELECT l.*, f.is_active AS folder_active,
           EXISTS (SELECT 1 FROM contact_suppressions cs WHERE cs.tenant_id = l.tenant_id AND cs.phone = l.phone AND cs.lifted_at IS NULL) AS contact_suppressed,
           EXISTS (SELECT 1 FROM calls active_call WHERE active_call.tenant_id = l.tenant_id AND active_call.lead_id = l.id AND active_call.status IN ('reserved','dialing','media_active')) AS active_call,
@@ -687,10 +699,17 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
     return remote ? station.id as string : null;
   }
 
-  async manualCallWithInput(input: { leadId?: string; phone?: string; name?: string; numberId?: string; integration?: IntegrationCallContext }, tenantId = legacyTenantId(), sdrUserId?: string) {
+  /**
+   * `canary`: the first call of a line after its pairing (NumbersService.sendCanaryMessage). It
+   * may only dial one of the tenant's team phones (dialer_settings.canary_phones) from a line still
+   * waiting for its canary; finishCall then decides whether the line may dial leads.
+   */
+  async manualCallWithInput(input: { leadId?: string; phone?: string; name?: string; numberId?: string; integration?: IntegrationCallContext; canary?: boolean }, tenantId = legacyTenantId(), sdrUserId?: string) {
     await this.entitlement?.assertCanOperate(tenantId, sdrUserId);
     if (this.schedule) await this.schedule.assertAllowed(tenantId);
     const settings = await this.getSettings(tenantId);
+    const canary = Boolean(input.canary);
+    if (canary && (!input.numberId || input.leadId || !(settings.canary_phones ?? []).includes(normalizePhone(input.phone)))) throw new Error('O canário só liga de uma linha escolhida para um celular da equipe cadastrado em Configurações → Operação');
     let lead: any;
     const leadId = String(input.leadId ?? '').trim();
     if (leadId) {
@@ -734,7 +753,7 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
           ]);
           if (Number(count.rows[0]?.count ?? 0) >= Number(tenant.rows[0]?.max_leads ?? 100000)) throw new Error('O limite de leads desta empresa foi atingido');
           const folderId = input.integration ? await this.integrationFolderId(tenantId, client) : await this.defaultFolderId(tenantId);
-          return (await client.query("INSERT INTO leads (id, tenant_id, folder_id, name, phone, status, external_id) VALUES ($1, $2, $3, $4, $5, 'manual', $6) RETURNING *", [randomUUID(), tenantId, folderId, String(input.name ?? '').trim() || 'Ligacao manual', phone, input.integration?.leadExternalId ?? null])).rows[0];
+          return (await client.query("INSERT INTO leads (id, tenant_id, folder_id, name, phone, status, external_id) VALUES ($1, $2, $3, $4, $5, 'manual', $6) RETURNING *", [randomUUID(), tenantId, folderId, canary ? 'Canário (equipe)' : String(input.name ?? '').trim() || 'Ligacao manual', phone, input.integration?.leadExternalId ?? null])).rows[0];
         });
       }
     }
@@ -762,8 +781,9 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
           )
         ORDER BY s.last_assigned_at NULLS FIRST, s.last_assigned_at ASC
       `, [tenantId, sdrUserId ?? null]),
-      // A CRM call names its line: never silently swap it for another one.
-      this.db.query(`SELECT *, ${onPcNetworkSql('whatsapp_numbers')} AS on_pc_network FROM whatsapp_numbers WHERE tenant_id = $1 AND verification_only = false AND status IN ('connected', 'online', 'ready', 'authenticated') AND (flagged_until IS NULL OR flagged_until <= now()) AND ($2::text IS NULL OR id = $2) ORDER BY last_call_ended_at NULLS FIRST, last_call_ended_at ASC`, [tenantId, input.numberId ?? null]),
+      // A CRM call names its line: never silently swap it for another one. A canary dials only from
+      // a line still waiting for it; any other call only from lines that passed theirs.
+      this.db.query(`SELECT *, ${onPcNetworkSql('whatsapp_numbers')} AS on_pc_network FROM whatsapp_numbers WHERE tenant_id = $1 AND verification_only = false AND status IN ('connected', 'online', 'ready', 'authenticated') AND (flagged_until IS NULL OR flagged_until <= now()) AND ${canary ? "canary_status <> 'passed'" : lineCanaryPassedSql('whatsapp_numbers')} AND ${lineUnderDailyCapSql('whatsapp_numbers')} AND ($2::text IS NULL OR id = $2) ORDER BY last_call_ended_at NULLS FIRST, last_call_ended_at ASC`, [tenantId, input.numberId ?? null]),
     ]);
     const execution = this.campaignExecution ? await this.campaignExecution.resolveForLead(tenantId, lead) : undefined;
     if (execution && !execution.allowed) throw new Error('A campanha deste lead não está em execução ou não possui recursos disponíveis');
@@ -773,7 +793,7 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
     const sdr = sdrs.rows.find((row: any) => this.gateway.isConnected(row.id)
       && (!execution?.campaignId || execution.sdrIds.includes(row.id) || (sdrUserId && row.operator_kind !== 'sdr')));
     if (!sdr) throw new Error(sdrUserId ? STATION_UNAVAILABLE_MESSAGE : 'Nenhum SDR conectado e disponivel');
-    if (!numbers.rows.length) throw new Error(input.numberId ? 'A linha escolhida não está conectada ou está em quarentena' : 'Nenhum numero WhatsApp conectado');
+    if (!numbers.rows.length) throw new Error(canary ? 'A linha não está conectada, está bloqueada, já passou pelo canário ou chegou ao limite de ligações de hoje' : input.numberId ? 'A linha escolhida não está conectada, está em quarentena, aguarda o canário ou chegou ao limite de ligações de hoje' : 'Nenhum numero WhatsApp conectado');
     const networkedNumbers = numbers.rows.filter((row: any) => row.on_pc_network);
     if (!networkedNumbers.length) throw new DialRefusedError(OFF_PC_NETWORK_CODE, OFF_PC_NETWORK_MESSAGE);
     // Protections only (see manualCall): a manual call is not paced by the cooldown.
@@ -808,7 +828,7 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
       ttlMs: (MANUAL_RING_SAFETY_SECONDS + 60) * 1000,
     });
     if (!reserved) throw new Error('Os limites de chamadas estao ocupados; tente novamente em instantes');
-    return { ...(await this.startReservedCall(sdr, number, lead, settings, token, 'manual', tenantId, input.integration)), leadId: lead.id };
+    return { ...(await this.startReservedCall(sdr, number, lead, settings, token, 'manual', tenantId, input.integration, canary)), leadId: lead.id };
   }
 
   /**
@@ -825,7 +845,7 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
     if (phone.length < 10 || phone.length > 15) throw new DialRefusedError('invalid_phone', 'Informe um telefone válido com DDD');
     const [sdrs, numbers, suppressed, busy] = await Promise.all([
       this.db.query(`SELECT s.id, s.connection_instance_id FROM sdrs s WHERE s.tenant_id = $1 AND s.id = $2 AND ${eligibleOperatorSql('s')} LIMIT 1`, [tenantId, input.sdrId]),
-      this.db.query(`SELECT n.*, ${onPcNetworkSql('n')} AS on_pc_network, (SELECT count(*)::int FROM calls c WHERE c.number_id = n.id AND c.status IN ('reserved', 'dialing', 'media_active')) AS active_calls FROM whatsapp_numbers n WHERE n.tenant_id = $1 AND n.id = $2 AND n.status <> 'removed' LIMIT 1`, [tenantId, input.numberId]),
+      this.db.query(`SELECT n.*, ${onPcNetworkSql('n')} AS on_pc_network, ${lineUnderDailyCapSql('n')} AS under_daily_cap, (SELECT count(*)::int FROM calls c WHERE c.number_id = n.id AND c.status IN ('reserved', 'dialing', 'media_active')) AS active_calls FROM whatsapp_numbers n WHERE n.tenant_id = $1 AND n.id = $2 AND n.status <> 'removed' LIMIT 1`, [tenantId, input.numberId]),
       this.db.query(`SELECT 1 FROM contact_suppressions WHERE tenant_id = $1 AND phone = $2 AND lifted_at IS NULL LIMIT 1`, [tenantId, phone]),
       this.db.query(`SELECT 1 FROM calls WHERE tenant_id = $1 AND sdr_id = $2 AND status IN ('reserved', 'dialing', 'media_active') LIMIT 1`, [tenantId, input.sdrId]),
     ]);
@@ -841,6 +861,8 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
     if (!number.on_pc_network) throw new DialRefusedError(OFF_PC_NETWORK_CODE, OFF_PC_NETWORK_MESSAGE);
     const secondsUntil = (value: unknown) => Math.max(1, Math.ceil((new Date(String(value)).getTime() - Date.now()) / 1000));
     if (number.flagged_until && new Date(number.flagged_until).getTime() > Date.now()) throw new DialRefusedError('line_quarantined', 'A linha está em quarentena (aquecimento de número novo ou sinais de bloqueio do WhatsApp)', secondsUntil(number.flagged_until));
+    if (number.canary_status !== 'passed') throw new DialRefusedError('line_canary_pending', 'A linha precisa passar pelo canário (primeira ligação para um celular da equipe) antes de ligar para leads');
+    if (number.under_daily_cap === false) throw new DialRefusedError('line_daily_cap', `A linha chegou ao limite de ${YOUNG_LINE_DAILY_CALLS} ligações de hoje (número pareado há poucos dias)`);
     if (lineIsProtected(number.last_call_ended_at)) throw new DialRefusedError('line_protected', 'A linha está temporariamente protegida pelo limite de chamadas do WhatsApp', secondsUntil(number.last_call_ended_at));
     if (Number(number.active_calls ?? 0) >= MANUAL_CALLS_PER_LINE) throw new DialRefusedError('line_busy', 'A linha já está em uma ligação');
     if (number.phone && isSelfCallNumber(number.phone, phone)) throw new DialRefusedError('self_call', 'O número de destino é a própria linha de saída');
@@ -1087,7 +1109,7 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
       this.getSettings(tenantId),
       this.db.query(`SELECT id FROM sdrs WHERE tenant_id = $1 AND user_id = $2 LIMIT 1`, [tenantId, userId]),
       // Per-tenant lines: expose only whether a line is available, never how many.
-      this.db.query(`SELECT EXISTS (SELECT 1 FROM whatsapp_numbers WHERE tenant_id = $1 AND verification_only = false AND status IN ('connected', 'online', 'ready', 'authenticated') AND (flagged_until IS NULL OR flagged_until <= now()) AND ${onPcNetworkSql('whatsapp_numbers')}) AS ready`, [tenantId]),
+      this.db.query(`SELECT EXISTS (SELECT 1 FROM whatsapp_numbers WHERE tenant_id = $1 AND verification_only = false AND status IN ('connected', 'online', 'ready', 'authenticated') AND (flagged_until IS NULL OR flagged_until <= now()) AND ${lineCanaryPassedSql('whatsapp_numbers')} AND ${lineUnderDailyCapSql('whatsapp_numbers')} AND ${onPcNetworkSql('whatsapp_numbers')}) AS ready`, [tenantId]),
       this.schedule ? this.schedule.evaluate(tenantId, new Date(), true) : Promise.resolve({ allowed: true, reason: 'schedule_service_unavailable' }),
     ]);
     const sdr = ownSdr.rows[0] ? await this.getSdrState(ownSdr.rows[0].id, tenantId) : null;
@@ -1278,7 +1300,7 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
             )
           ORDER BY s.last_assigned_at NULLS FIRST, s.last_assigned_at ASC
         `, [tenantId]),
-        this.db.query(`SELECT * FROM whatsapp_numbers WHERE tenant_id = $1 AND verification_only = false AND status IN ('connected', 'online', 'ready', 'authenticated') AND (flagged_until IS NULL OR flagged_until <= now()) AND (last_call_ended_at IS NULL OR last_call_ended_at <= now() - (cooldown_seconds * interval '1 second')) AND ${onPcNetworkSql('whatsapp_numbers')} ORDER BY last_call_ended_at NULLS FIRST, last_call_ended_at ASC`, [tenantId]),
+        this.db.query(`SELECT * FROM whatsapp_numbers WHERE tenant_id = $1 AND verification_only = false AND status IN ('connected', 'online', 'ready', 'authenticated') AND (flagged_until IS NULL OR flagged_until <= now()) AND (last_call_ended_at IS NULL OR last_call_ended_at <= now() - (cooldown_seconds * interval '1 second')) AND ${lineCanaryPassedSql('whatsapp_numbers')} AND ${lineUnderDailyCapSql('whatsapp_numbers')} AND ${onPcNetworkSql('whatsapp_numbers')} ORDER BY last_call_ended_at NULLS FIRST, last_call_ended_at ASC`, [tenantId]),
           this.db.query(`
           WITH active_folders AS (
             SELECT f.id, (ROW_NUMBER() OVER (ORDER BY f.sort_order ASC, f.created_at ASC) - 1)::int AS folder_index,
@@ -1516,7 +1538,7 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
     }));
   }
 
-  private async startReservedCall(sdr: any, number: any, lead: any, settings: any, token: string, source: string, tenantId = legacyTenantId(), integration?: IntegrationCallContext) {
+  private async startReservedCall(sdr: any, number: any, lead: any, settings: any, token: string, source: string, tenantId = legacyTenantId(), integration?: IntegrationCallContext, canary = false) {
     const callId = randomUUID();
     // A call stays 'reserved' until answered, and expireReservations() cancels reserved calls past
     // offer_expires_at -- so a manual call needs the longer window here too, or it would still drop
@@ -1569,7 +1591,7 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
         });
         if (isAutomatic && Number(folder.rows[0].attempts ?? lead.attempts ?? 0) >= maxAttempts) throw new Error('O limite de tentativas desta campanha foi atingido');
         if (execution?.campaignId && !folder.rows[0].campaign_id) await client.query('UPDATE leads SET campaign_id=$1, campaign_version=$2 WHERE tenant_id=$3 AND id=$4', [execution.campaignId, execution.campaignVersion, tenantId, lead.id]);
-        await client.query(`INSERT INTO calls (id, tenant_id, folder_id, lead_id, number_id, sdr_id, campaign_id, campaign_version, experiment_id, experiment_variant_id, status, attempt_number, source, offer_expires_at, owner_instance_id, integration_id, external_ref) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'reserved',$11,$12,$13,$14,$15,$16::jsonb)`, [callId, tenantId, folder.rows[0].folder_id, lead.id, number.id, sdr.id, execution?.campaignId ?? null, execution?.campaignVersion ?? null, lead.experimentAssignment?.experimentId ?? null, lead.experimentAssignment?.variant?.id ?? null, isAutomatic ? Number(lead.attempts) + 1 : 0, source, expires, runtimeInstanceId, integration?.integrationId ?? null, integration?.externalRef ? JSON.stringify(integration.externalRef) : null]);
+        await client.query(`INSERT INTO calls (id, tenant_id, folder_id, lead_id, number_id, sdr_id, campaign_id, campaign_version, experiment_id, experiment_variant_id, status, attempt_number, source, offer_expires_at, owner_instance_id, integration_id, external_ref, canary) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'reserved',$11,$12,$13,$14,$15,$16::jsonb,$17)`, [callId, tenantId, folder.rows[0].folder_id, lead.id, number.id, sdr.id, execution?.campaignId ?? null, execution?.campaignVersion ?? null, lead.experimentAssignment?.experimentId ?? null, lead.experimentAssignment?.variant?.id ?? null, isAutomatic ? Number(lead.attempts) + 1 : 0, source, expires, runtimeInstanceId, integration?.integrationId ?? null, integration?.externalRef ? JSON.stringify(integration.externalRef) : null, canary]);
         await this.campaignEvents?.record({ tenantId, campaignId: execution?.campaignId ?? null, campaignVersion: execution?.campaignVersion ?? null, eventType: 'call.reserved', aggregateType: 'call', aggregateId: callId, idempotencyKey: `call.reserved:${callId}`, payload: { leadId: lead.id, sdrId: sdr.id, numberId: number.id, source } }, client as any);
         if (isAutomatic) {
           await client.query(`UPDATE leads SET status = 'reserved', attempts = attempts + 1, last_auto_round = $1 WHERE tenant_id = $2 AND id = $3`, [Number(settings.dialer_round ?? 1), tenantId, lead.id]);
@@ -1733,6 +1755,7 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
             const metadata = JSON.parse(data.toString()) as { type?: string; call_id?: string };
             if (metadata.type === 'call_started' && metadata.call_id && !resource.answerWatcherStarted) {
               resource.waxumCallId = metadata.call_id;
+              resource.offerStartedAt = Date.now();
               resource.answerWatcherStarted = true;
               if (resource.integrationId) this.emitCrmCall(resource.tenantId, callId, 'call.dialing');
               this.log(`Chamada Waxum iniciada (${metadata.call_id}); aguardando atendimento`, 'info', callId);
@@ -2042,6 +2065,37 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
     this.emitCrmLine(tenantId, numberId, 'number.status_changed');
   }
 
+  /**
+   * The canary passes when its call lasted CANARY_MIN_CALL_SECONDS from the offer and the line is
+   * still connected, with no loss, CANARY_CHECK_DELAY_MS after the offer: WhatsApp removes a device
+   * it rejects 1.4-3.8 s after the offer. A failed canary rests the line CANARY_RETRY_HOURS. A call
+   * that never reached the offer decides nothing.
+   */
+  private async evaluateCanary(tenantId: string, callId: string, numberId: string, sdrId: string, offerStartedAt?: number) {
+    if (!offerStartedAt) {
+      this.gateway.sendToSdr(sdrId, { type: 'canary_result', callId, numberId, result: 'not_dialed' });
+      return;
+    }
+    const lastedMs = Date.now() - offerStartedAt;
+    await new Promise((resolve) => setTimeout(resolve, Math.max(0, offerStartedAt + CANARY_CHECK_DELAY_MS - Date.now())));
+    const line = (await this.db.query('SELECT label, waxum_session_id, loss_reason FROM whatsapp_numbers WHERE tenant_id = $1 AND id = $2', [tenantId, numberId])).rows[0];
+    if (!line) return;
+    const status = normalizeWaxumStatus(await this.waxum.getStatus(line.waxum_session_id).catch(() => ({})));
+    const passed = lastedMs >= CANARY_MIN_CALL_SECONDS * 1000 && status.connected && !line.loss_reason;
+    const updated = await this.db.query(`
+      UPDATE whatsapp_numbers SET canary_status = $3,
+        flagged_until = CASE WHEN $3 = 'failed' THEN GREATEST(flagged_until, now() + make_interval(hours => $4)) ELSE flagged_until END
+      WHERE tenant_id = $1 AND id = $2 AND canary_status <> 'passed' RETURNING id
+    `, [tenantId, numberId, passed ? 'passed' : 'failed', CANARY_RETRY_HOURS]);
+    if (!updated.rows[0]) return;
+    const metadata = { callId, lastedSeconds: Math.round(lastedMs / 1000), connected: status.connected, lossReason: line.loss_reason ?? null };
+    await this.db.query(`INSERT INTO number_health_events (tenant_id, number_id, event_type, actor_type, metadata, occurred_at) VALUES ($1, $2, $3, 'automatic', $4::jsonb, now())`, [tenantId, numberId, passed ? 'canary_passed' : 'canary_failed', JSON.stringify(metadata)]);
+    await this.audit?.record({ tenantId, action: passed ? 'number.canary_passed' : 'number.canary_failed', entityType: 'whatsapp_number', entityId: numberId, metadata }).catch(() => undefined);
+    this.log(passed ? `Canário aprovado: ${line.label} liberada para ligar para leads` : `Canário reprovado: ${line.label} descansa ${CANARY_RETRY_HOURS} h antes de tentar de novo`, passed ? 'info' : 'warning', callId, tenantId);
+    this.gateway.sendToSdr(sdrId, { type: 'canary_result', callId, numberId, result: passed ? 'passed' : 'failed' });
+    this.notifyOperationsChanged(tenantId, 'canary_finished', { kind: passed ? 'canary_passed' : 'canary_failed', numberId, label: line.label });
+  }
+
   async finishCall(callId: string, status: string, reason?: string, forceNoRetry = false, tenantId = legacyTenantId()) {
     if (this.finishingCalls.has(callId)) return;
     this.finishingCalls.add(callId);
@@ -2078,7 +2132,8 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
         status, reason, forceNoRetry, isAutomatic,
         attempts: Number(row.attempts), maxAttemptsPerLead: Number(row.max_attempts_per_lead),
       });
-      const requiresPostCall = Boolean(row.connected_at) && !transientInfrastructureFailure;
+      // A canary is a test call to a team phone: nothing to record afterwards.
+      const requiresPostCall = Boolean(row.connected_at) && !transientInfrastructureFailure && !row.canary;
       const restoredAvailable = resource?.previousSdrAvailable ?? (isAutomatic ? true : false);
       const restoredState = restoredAvailable ? 'available' : (resource?.previousSdrState ?? 'offline');
       let pause: any = null;
@@ -2152,6 +2207,8 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
         available: nextAvailable,
         pause: Boolean(pause),
       });
+      if (row.canary) void this.evaluateCanary(tenantId, callId, row.number_id, row.sdr_id, resource?.offerStartedAt)
+        .catch((error) => this.logger.error(`Canary of ${callId} not evaluated: ${safeOperationalError(error)}`));
     } finally {
       if (resource?.recorder) {
         const recorder = resource.recorder;

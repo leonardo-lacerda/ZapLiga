@@ -34,29 +34,83 @@ describe('NumbersService QR code', () => {
     expect(calls.slice(0, 3)).toEqual(['status', 'connect', 'qr']);
   });
 
-  describe('call block after pairing', () => {
+  describe('pairing', () => {
     const pairing = () => ({
       getStatus: jest.fn(async () => ({ status: 'connecting', is_logged_in: false, socket_alive: true })),
       reconnect: jest.fn(),
       getQr: jest.fn(async () => ({ status: 'waiting_for_qr', qr_codes: ['2@abc'], timeout_seconds: 60 })),
     });
+    const pairingUpdate = (db: { query: jest.Mock }) => db.query.mock.calls.find(([sql]: [string]) => sql.includes('SET last_paired_at = now()'));
 
-    it('keeps a line created with the block out of the dialer for 24 h when it shows a pairing QR', async () => {
-      const db = { query: jest.fn(async () => ({ rows: [{ ...number, block_calls_after_pairing: true }] })) };
-      const service = new NumbersService(db as any, pairing() as any, {} as any, {} as any, {} as any, {} as any);
-
-      await service.qr('t1', 'n1');
-
-      expect(db.query).toHaveBeenCalledWith(expect.stringContaining('SET flagged_until = GREATEST(flagged_until'), [24, 'n1', 't1']);
-    });
-
-    it('leaves a line created before the block free to call after pairing', async () => {
+    it('puts the line back on the canary and marks it young when it shows a pairing QR', async () => {
       const { service, db } = build(pairing());
 
       await service.qr('t1', 'n1');
 
-      expect(db.query).not.toHaveBeenCalledWith(expect.stringContaining('flagged_until'), expect.anything());
+      const [sql, params] = pairingUpdate(db);
+      expect(sql).toContain("canary_status = 'pending'");
+      expect(sql).toContain('loss_reason = NULL');
+      expect(params).toEqual([24, 'n1', 't1']);
     });
+
+    it('keeps the 24 h block only for lines created with it', async () => {
+      const { service, db } = build(pairing());
+
+      await service.qr('t1', 'n1');
+
+      expect(pairingUpdate(db)[0]).toContain('flagged_until = CASE WHEN block_calls_after_pairing THEN GREATEST(flagged_until, now() + make_interval(hours => $1)) ELSE flagged_until END');
+    });
+
+    it('refuses a new QR for a line WhatsApp took away twice', async () => {
+      const db = { query: jest.fn(async () => ({ rows: [{ ...number, removal_count: 2 }] })) };
+      const waxum = pairing();
+      const service = new NumbersService(db as any, waxum as any, {} as any, {} as any, {} as any, {} as any);
+
+      await expect(service.qr('t1', 'n1')).rejects.toThrow('Linha aposentada');
+      expect(waxum.getQr).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('canary message', () => {
+    const entitlement = { assertAction: jest.fn(async () => undefined) };
+    const audit = { record: jest.fn(async () => undefined) };
+    const make = (line: Record<string, unknown>, phones: string[]) => {
+      const db = {
+        query: jest.fn(async (sql: string) => {
+          if (sql.includes('unnest(ds.canary_phones)')) return { rows: phones.map((phone) => ({ phone })) };
+          return { rows: [{ ...number, status: 'connected', canary_status: 'pending', ...line }] };
+        }),
+      };
+      const waxum = { sendText: jest.fn(async () => ({ status: 'sent' })) };
+      return { service: new NumbersService(db as any, waxum as any, audit as any, {} as any, entitlement as any, {} as any), waxum };
+    };
+
+    it('texts the least used team phone from the line and returns it', async () => {
+      const { service, waxum } = make({}, ['5527999990000']);
+
+      expect(await service.sendCanaryMessage('t1', 'u1', 'n1')).toEqual({ phone: '5527999990000' });
+      expect(waxum.sendText).toHaveBeenCalledWith('s1', '5527999990000', expect.any(String));
+    });
+
+    it('asks for the team phones when none is configured', async () => {
+      const { service, waxum } = make({}, []);
+
+      await expect(service.sendCanaryMessage('t1', 'u1', 'n1')).rejects.toThrow('Cadastre os celulares da equipe');
+      expect(waxum.sendText).not.toHaveBeenCalled();
+    });
+
+    it('refuses a line that already passed or is still blocked', async () => {
+      await expect(make({ canary_status: 'passed' }, ['5527999990000']).service.sendCanaryMessage('t1', 'u1', 'n1')).rejects.toThrow('já passou');
+      await expect(make({ flagged_until: new Date(Date.now() + 60_000).toISOString() }, ['5527999990000']).service.sendCanaryMessage('t1', 'u1', 'n1')).rejects.toThrow('bloqueada');
+    });
+  });
+
+  it('never moves a line to the VPS', async () => {
+    const redis = { acquireLock: jest.fn(async () => true), releaseLock: jest.fn(async () => undefined) };
+    const service = new NumbersService({ query: jest.fn() } as any, {} as any, {} as any, redis as any, {} as any, {} as any);
+
+    await expect(service.moveToWaxumNode('t1', null, 'n1', 'main')).rejects.toThrow('não podem sair pela VPS');
+    expect(redis.acquireLock).not.toHaveBeenCalled();
   });
 
   it('leaves a session that is already pairing alone', async () => {

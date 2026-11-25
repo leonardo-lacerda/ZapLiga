@@ -9,8 +9,15 @@ import { EntitlementService } from '../billing/entitlement.service';
 import { PlanLimitsService } from '../billing/plan-limits.service';
 import { CrmEventsService, CrmLineEventType } from '../crm-events/crm-events.service';
 import { STEADY_ONLINE_SECONDS } from '../egress/pc-network';
+import { LINE_RETIRED_AFTER_LOSSES, YOUNG_LINE_DAYS } from '../dialer/dialer.rules';
 
 const digits = (value: unknown) => String(value ?? '').replace(/\D/g, '');
+
+// A line WhatsApp took away LINE_RETIRED_AFTER_LOSSES times does not pair again.
+function assertNotRetired(number: any) {
+  if (Number(number.removal_count ?? 0) >= LINE_RETIRED_AFTER_LOSSES) throw new BadRequestException(`Linha aposentada: o WhatsApp já tirou este número ${number.removal_count} vezes. Use outro número.`);
+  return number;
+}
 
 export type CreateNumberInput = { label?: string; phone?: string; maxConcurrentCalls?: number; cooldownSeconds?: number; maxCallsPerWindow?: number; callWindowSeconds?: number };
 export type UpdateNumberInput = { label?: string; maxConcurrentCalls?: number; cooldownSeconds?: number; maxCallsPerWindow?: number; callWindowSeconds?: number; verificationOnly?: boolean };
@@ -24,6 +31,17 @@ const MOVE_CONNECT_CHECKS = 20;
 // WhatsApp removes a device that calls minutes after being linked, so a line created here stays
 // out of the dialer for this long after its last pairing QR or code. Counts from the last one shown.
 const PAIRING_CALL_BLOCK_HOURS = 24;
+// Sent from the line to a team phone right before its canary call. Varied so the lines do not
+// all send the same text.
+const CANARY_MESSAGES = [
+  'Oi! Tudo bem? Te ligo daqui a pouquinho, pode atender?',
+  'Olá, tudo certo? Vou te ligar rapidinho em seguida.',
+  'Oi, bom dia! Posso te ligar agora rapidinho?',
+  'Opa, tudo bem? Já já te ligo, pode ser?',
+];
+// Lines never go out through the VPS: WhatsApp reads a datacenter IP as a ban signal.
+const NO_VPS_MESSAGE = 'Linhas não podem sair pela VPS. Escolha o PC de um atendente.';
+const NO_PC_MESSAGE = 'Nenhum PC online para conectar a linha. Ligue o PC de um atendente em Admin → Saídas de internet.';
 
 @Injectable()
 export class NumbersService {
@@ -42,7 +60,7 @@ export class NumbersService {
   /**
    * The line is born on the Waxum that will hold it, so WhatsApp sees the device's very first
    * login from that exit (docs/estudo-bloqueio-numero-geelark.md). `node` pins it (registration
-   * on a chosen PC); otherwise the PC the distribution would pick, else the VPS.
+   * on a chosen PC); otherwise the PC the distribution would pick. Never the VPS.
    */
   async create(tenantId: string, actorUserId: string | null, body: CreateNumberInput, node?: string) {
     await this.entitlement.assertAction(tenantId, 'write', actorUserId ?? undefined);
@@ -51,7 +69,8 @@ export class NumbersService {
     let createdSessionId: string | undefined;
     let persisted = false;
     try {
-      const waxumNode = node ?? await this.pickPcSlot() ?? MAIN_WAXUM_NODE;
+      const waxumNode = node ?? await this.pickPcSlot();
+      if (!waxumNode) throw new BadRequestException(NO_PC_MESSAGE);
       const session = await this.createWaxumSession(label, waxumNode);
       createdSessionId = session.id;
       // A new line's cooldown defaults to the tenant's own "Proteção entre
@@ -62,7 +81,7 @@ export class NumbersService {
       const result = await this.db.transaction(async (client) => {
         // Keep the advisory lock, count and INSERT on one transaction.
         await this.planLimits.assertCanAddNumbers(tenantId, client, 1);
-        return client.query(`INSERT INTO whatsapp_numbers (id,tenant_id,label,phone,waxum_session_id,max_concurrent_calls,cooldown_seconds,max_calls_per_window,call_window_seconds,waxum_node,block_calls_after_pairing) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,true) RETURNING *`, [randomUUID(), tenantId, label, digits(body.phone) || null, session.id, Number(body.maxConcurrentCalls ?? 1), Number(body.cooldownSeconds ?? defaultCooldownSeconds), Number(body.maxCallsPerWindow ?? 3), Number(body.callWindowSeconds ?? 180), waxumNode]);
+        return client.query(`INSERT INTO whatsapp_numbers (id,tenant_id,label,phone,waxum_session_id,max_concurrent_calls,cooldown_seconds,max_calls_per_window,call_window_seconds,waxum_node,block_calls_after_pairing,canary_status) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,true,'pending') RETURNING *`, [randomUUID(), tenantId, label, digits(body.phone) || null, session.id, Number(body.maxConcurrentCalls ?? 1), Number(body.cooldownSeconds ?? defaultCooldownSeconds), Number(body.maxCallsPerWindow ?? 3), Number(body.callWindowSeconds ?? 180), waxumNode]);
       });
       persisted = true;
       await this.audit.record({ actorUserId, tenantId, action: 'number.created', entityType: 'whatsapp_number', entityId: result.rows[0].id });
@@ -82,7 +101,17 @@ export class NumbersService {
     const cached = await this.redis.client.get(cacheKey).catch(() => null);
     if (cached) { try { return JSON.parse(cached); } catch { /* recompute corrupt cache */ } }
     const total = await this.db.query("SELECT count(*)::int AS total FROM whatsapp_numbers WHERE tenant_id = $1 AND status <> 'removed'", [tenantId]);
-    const items = await this.db.query("SELECT * FROM whatsapp_numbers WHERE tenant_id = $1 AND status <> 'removed' ORDER BY created_at DESC LIMIT $2 OFFSET $3", [tenantId, safeLimit, safeOffset]);
+    // calls_today: what the daily cap of a young line counts (dialer.rules lineUnderDailyCapSql).
+    // reconnects_24h: logins in the last day; each one is a fresh look by WhatsApp.
+    const items = await this.db.query(`
+      SELECT n.*,
+        (SELECT count(*)::int FROM calls c, tenants tz WHERE tz.id = n.tenant_id AND c.tenant_id = n.tenant_id AND c.number_id = n.id
+          AND c.created_at >= date_trunc('day', now() AT TIME ZONE tz.timezone) AT TIME ZONE tz.timezone) AS calls_today,
+        (SELECT count(*)::int FROM number_status_history h WHERE h.tenant_id = n.tenant_id AND h.number_id = n.id
+          AND h.changed_at > now() - interval '24 hours' AND lower(h.to_status) IN ('connected', 'online', 'ready', 'authenticated')) AS reconnects_24h,
+        (n.last_paired_at IS NOT NULL AND n.last_paired_at > now() - make_interval(days => $4)) AS young
+      FROM whatsapp_numbers n WHERE n.tenant_id = $1 AND n.status <> 'removed' ORDER BY n.created_at DESC LIMIT $2 OFFSET $3
+    `, [tenantId, safeLimit, safeOffset, YOUNG_LINE_DAYS]);
     const response = { items: items.rows, total: Number(total.rows[0]?.total ?? 0), limit: safeLimit, offset: safeOffset };
     await this.redis.client.set(cacheKey, JSON.stringify(response), 'PX', 1500).catch(() => undefined);
     return response;
@@ -136,7 +165,7 @@ export class NumbersService {
     await this.entitlement.assertAction(tenantId, 'write', actorUserId);
     const digits = phone.replace(/\D/g, '');
     if (digits.length < 10 || digits.length > 15) throw new BadRequestException('Informe o telefone com DDI e DDD, ex.: 5527999999999');
-    let number = await this.pairOnHealthySlot(await this.find(id, tenantId));
+    let number = await this.pairOnHealthySlot(assertNotRetired(await this.find(id, tenantId)));
     let result: { code: string; timeout_seconds: number };
     try { result = await this.waxum.pairCode(number.waxum_session_id, digits); }
     catch (error) {
@@ -146,7 +175,7 @@ export class NumbersService {
       number = await this.replaceMissingSession(number);
       result = await this.waxum.pairCode(number.waxum_session_id, digits);
     }
-    await this.blockCallsAfterPairing(number);
+    await this.markPairing(number);
     await this.audit.record({ actorUserId, tenantId, action: 'number.pair_code_requested', entityType: 'whatsapp_number', entityId: id });
     return { code: result.code, timeout_seconds: result.timeout_seconds };
   }
@@ -179,6 +208,7 @@ export class NumbersService {
    */
   async moveToWaxumNode(tenantId: string, actorUserId: string | null, id: string, node: string) {
     if (!waxumNodes().has(node)) throw new BadRequestException(`Saída "${node}" não existe`);
+    if (node === MAIN_WAXUM_NODE) throw new BadRequestException(NO_VPS_MESSAGE);
     const lockKey = `zapcall:global:lock:number-move:${id}`;
     const lockToken = randomUUID();
     if (!await this.redis.acquireLock(lockKey, lockToken, 90_000)) throw new HttpException('Esta linha já está trocando de saída', HttpStatus.CONFLICT);
@@ -186,10 +216,8 @@ export class NumbersService {
       const number = await this.find(id, tenantId);
       if (number.status === 'removed') throw new NotFoundException('Número não encontrado');
       if (number.waxum_node === node) return number;
-      if (node !== MAIN_WAXUM_NODE) {
-        const pc = await this.db.query("SELECT 1 FROM egress_pcs WHERE slot = $1 AND route = 'pc' AND route_reported_at > now() - interval '1 minute'", [node]);
-        if (!pc.rows[0]) throw new BadRequestException('O PC dessa saída não está online. Confira em Admin → Saídas de internet.');
-      }
+      const pc = await this.db.query("SELECT 1 FROM egress_pcs WHERE slot = $1 AND route = 'pc' AND route_reported_at > now() - interval '1 minute'", [node]);
+      if (!pc.rows[0]) throw new BadRequestException('O PC dessa saída não está online. Confira em Admin → Saídas de internet.');
       // Out of the dialer first, then check for calls: none can start halfway through the move.
       await this.db.query("UPDATE whatsapp_numbers SET status = 'reconnecting' WHERE id = $1", [id]);
       const active = await this.db.query("SELECT 1 FROM calls WHERE number_id = $1 AND status IN ('reserved', 'dialing', 'media_active') LIMIT 1", [id]);
@@ -232,15 +260,16 @@ export class NumbersService {
    * Pairing needs a slot that reaches WhatsApp. A line created on a PC that has since stopped
    * passing internet (its route is no longer `pc`) would wait for a QR that never comes, so a
    * session that never logged in starts over on the slot the distribution picks now. A session
-   * that did log in keeps its session; the egress pool moves it.
+   * that did log in keeps its session; the egress pool moves it. A line on the VPS never pairs
+   * there: WhatsApp would see the new device's first login from a datacenter IP.
    */
   private async pairOnHealthySlot(number: any) {
-    if (number.waxum_node === MAIN_WAXUM_NODE) return number;
     const online = await this.db.query(`SELECT 1 FROM egress_pcs WHERE slot = $1 AND route = 'pc' AND route_reported_at > now() - interval '1 minute'`, [number.waxum_node]);
     if (online.rows[0]) return number;
     const status = normalizeWaxumStatus(await this.waxum.getStatus(number.waxum_session_id).catch(() => ({})));
     if (status.connected || status.phone) return number;
-    const node = await this.pickPcSlot() ?? MAIN_WAXUM_NODE;
+    const node = await this.pickPcSlot();
+    if (!node) throw new BadRequestException(NO_PC_MESSAGE);
     const session = await this.createWaxumSession(number.label, node);
     await this.waxum.deleteSession(number.waxum_session_id).catch((error) => this.logger.warn(`Old session of line ${number.id} not deleted on ${number.waxum_node}: ${String((error as Error)?.message ?? error).slice(0, 200)}`));
     const result = await this.db.query(`UPDATE whatsapp_numbers SET waxum_node = $1, waxum_session_id = $2, status = 'disconnected' WHERE id = $3 AND tenant_id = $4 RETURNING *`, [node, session.id, number.id, number.tenant_id]);
@@ -255,14 +284,14 @@ export class NumbersService {
   }
 
   /**
-   * The PC slot a new line goes to, by the egress pool's own rule (EgressPoolService): with
-   * the distribution on, the online PC with the fewest lines below "Números por PC".
+   * The PC slot a new line goes to, by the egress pool's own rule (EgressPoolService): the
+   * online PC with the fewest lines below "Números por PC".
    */
   private async pickPcSlot(): Promise<string | undefined> {
     const result = await this.db.query(`
       SELECT p.slot FROM egress_pcs p CROSS JOIN egress_settings s
       CROSS JOIN LATERAL (SELECT count(*)::int AS lines FROM whatsapp_numbers n WHERE n.waxum_node = p.slot AND n.status <> 'removed' AND n.phone IS NOT NULL) l
-      WHERE s.pool_enabled AND p.slot IS NOT NULL AND p.route = 'pc' AND p.route_reported_at > now() - interval '1 minute'
+      WHERE p.slot IS NOT NULL AND p.route = 'pc' AND p.route_reported_at > now() - interval '1 minute'
         AND p.online_since < now() - make_interval(secs => $1) AND l.lines < s.max_numbers_per_pc
       ORDER BY l.lines, p.created_at LIMIT 1
     `, [STEADY_ONLINE_SECONDS]);
@@ -314,7 +343,7 @@ export class NumbersService {
   }
 
   private async loadQr(id: string, tenantId: string) {
-    let number = await this.pairOnHealthySlot(await this.find(id, tenantId));
+    let number = await this.pairOnHealthySlot(assertNotRetired(await this.find(id, tenantId)));
     let payload: any;
     try { payload = await this.loadQrFromSession(number.waxum_session_id); }
     catch (error) {
@@ -324,15 +353,45 @@ export class NumbersService {
     }
     const status = await this.refreshNumberStatus(number);
     if (status.connected) return { ...payload, status: 'connected', phone_number: status.phone };
-    await this.blockCallsAfterPairing(number);
+    await this.markPairing(number);
     return payload;
   }
 
-  // Only lines created with the block (see migration 076). Keeps a longer quarantine, e.g. the
-  // 72 h of a PC registration, instead of shortening it.
-  private async blockCallsAfterPairing(number: any) {
-    if (!number.block_calls_after_pairing) return;
-    await this.db.query(`UPDATE whatsapp_numbers SET flagged_until = GREATEST(flagged_until, now() + make_interval(hours => $1)) WHERE id = $2 AND tenant_id = $3`, [PAIRING_CALL_BLOCK_HOURS, number.id, number.tenant_id]);
+  /**
+   * A pairing QR or code was shown: WhatsApp will judge the new device on its first call, so the
+   * line waits for its canary (migration 077) and counts as young again. Lines created with the
+   * block (migration 076) also stay 24 h without calls; a longer quarantine, e.g. the 72 h of a
+   * PC registration, is kept instead of shortened.
+   */
+  private async markPairing(number: any) {
+    await this.db.query(`
+      UPDATE whatsapp_numbers SET last_paired_at = now(), canary_status = 'pending', loss_reason = NULL, loss_at = NULL,
+        flagged_until = CASE WHEN block_calls_after_pairing THEN GREATEST(flagged_until, now() + make_interval(hours => $1)) ELSE flagged_until END
+      WHERE id = $2 AND tenant_id = $3
+    `, [PAIRING_CALL_BLOCK_HOURS, number.id, number.tenant_id]);
+  }
+
+  /**
+   * First step of the canary (DialerService.manualCallWithInput with `canary`): the line texts a
+   * team phone, so the call that follows is not a cold first contact. Returns that phone, which
+   * the canary call must dial; the team phone least used by past canaries goes first.
+   */
+  async sendCanaryMessage(tenantId: string, actorUserId: string, id: string) {
+    await this.entitlement.assertAction(tenantId, 'write', actorUserId);
+    const number = assertNotRetired(await this.find(id, tenantId));
+    if (number.canary_status === 'passed') throw new BadRequestException('Esta linha já passou pelo canário');
+    if (!['connected', 'online', 'ready', 'authenticated'].includes(String(number.status).toLowerCase())) throw new BadRequestException('A linha não está conectada');
+    if (number.flagged_until && new Date(number.flagged_until).getTime() > Date.now()) throw new BadRequestException(`A linha está bloqueada até ${new Date(number.flagged_until).toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' })}`);
+    const phone = (await this.db.query(`
+      SELECT p.phone FROM dialer_settings ds CROSS JOIN LATERAL unnest(ds.canary_phones) AS p(phone)
+      WHERE ds.tenant_id = $1
+      ORDER BY (SELECT count(*) FROM calls c JOIN leads l ON l.id = c.lead_id WHERE c.tenant_id = $1 AND c.canary AND l.phone = p.phone), p.phone
+      LIMIT 1
+    `, [tenantId])).rows[0]?.phone as string | undefined;
+    if (!phone) throw new BadRequestException('Cadastre os celulares da equipe para o canário em Configurações → Operação.');
+    await this.waxum.sendText(number.waxum_session_id, phone, CANARY_MESSAGES[Math.floor(Math.random() * CANARY_MESSAGES.length)]);
+    await this.audit.record({ actorUserId, tenantId, action: 'number.canary_message_sent', entityType: 'whatsapp_number', entityId: id, metadata: { phone } });
+    return { phone };
   }
 
   private async refreshNumberStatus(number: any) {

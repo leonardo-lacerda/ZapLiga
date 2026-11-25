@@ -24,6 +24,33 @@ export const MANUAL_CALLS_PER_LINE = 4;
 // respect is a line under PROTECTION: rapid-failure quarantine and Waxum 429
 // backoff are both expressed by future-dating `last_call_ended_at`, so a
 // timestamp in the future is the one signal a manual call does not override.
+// WhatsApp judges a newly paired device on the offer of its first call (removed 1.4-3.8 s
+// later, 2026-11-25). So after every pairing the first call of a line is a canary to a team
+// phone, and a young line has a daily cap; a line WhatsApp took away this many times is retired.
+export const YOUNG_LINE_DAYS = 7;
+export const YOUNG_LINE_DAILY_CALLS = 40;
+export const LINE_RETIRED_AFTER_LOSSES = 2;
+// The canary passes when its call lasted this long and the line was still connected
+// CANARY_CHECK_DELAY_MS after it started; a failed one rests CANARY_RETRY_HOURS.
+export const CANARY_MIN_CALL_SECONDS = 5;
+export const CANARY_CHECK_DELAY_MS = 30_000;
+export const CANARY_RETRY_HOURS = 48;
+
+// SQL over a `whatsapp_numbers` alias: the line passed its canary.
+export function lineCanaryPassedSql(alias: string) {
+  return `${alias}.canary_status = 'passed'`;
+}
+
+// SQL over a `whatsapp_numbers` alias: an old line, or a young one with calls left today
+// (the day of the tenant's timezone). Manual and automatic calls count alike.
+export function lineUnderDailyCapSql(alias: string) {
+  return `(${alias}.last_paired_at IS NULL OR ${alias}.last_paired_at < now() - interval '${YOUNG_LINE_DAYS} days' OR (
+    SELECT count(*) FROM calls c, tenants tz
+    WHERE tz.id = ${alias}.tenant_id AND c.tenant_id = ${alias}.tenant_id AND c.number_id = ${alias}.id
+      AND c.created_at >= date_trunc('day', now() AT TIME ZONE tz.timezone) AT TIME ZONE tz.timezone
+  ) < ${YOUNG_LINE_DAILY_CALLS})`;
+}
+
 export function lineIsProtected(lastCallEndedAt: Date | string | null, now = new Date()) {
   if (!lastCallEndedAt) return false;
   return new Date(lastCallEndedAt).getTime() > now.getTime();
