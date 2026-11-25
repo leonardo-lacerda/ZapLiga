@@ -1,0 +1,132 @@
+diff -ruN '--exclude=target' '--exclude=.git' a/src/handlers/call.rs b/src/handlers/call.rs
+--- a/src/handlers/call.rs	2026-11-25 22:27:18.907868870 +0100
++++ b/src/handlers/call.rs	2026-11-25 22:30:58.784105620 +0100
+@@ -181,11 +181,15 @@
+                 // Diagnostic: every recognized <call> action we receive (offer/accept/reject/
+                 // terminate/transport/relaylatency...). Lets us see whether the caller actually gets a
+                 // peer device's <accept> (which drives the sibling dismiss).
+-                debug!(
+-                    "call: received {} for {} from {}",
++                // ZapLiga: at info, with the action's own fields (a reject's reason, say), so the
++                // answers to each offer can be read next to the offer and the stream errors.
++                log::info!(
++                    target: "zapliga.call",
++                    "call: received {} for {} from {} detail={}",
+                     call.action.wire_tag(),
+                     call.action.call_id(),
+-                    call.from.observe()
++                    call.from.observe(),
++                    format!("{:?}", call.action).chars().take(400).collect::<String>()
+                 );
+                 let is_offer = matches!(call.action, CallAction::Offer { .. });
+                 let is_offer_notice = matches!(call.action, CallAction::OfferNotice { .. });
+diff -ruN '--exclude=target' '--exclude=.git' a/src/voip/facade.rs b/src/voip/facade.rs
+--- a/src/voip/facade.rs	2026-11-25 22:27:18.917868834 +0100
++++ b/src/voip/facade.rs	2026-11-25 22:32:41.598758787 +0100
+@@ -54,6 +54,8 @@
+     Pcm {
+         source: Arc<dyn AudioSource>,
+         sink: Arc<dyn AudioSink>,
++        /// ZapLiga: the codec chosen for this call; `None` follows `WA_CALL_AUDIO_CODEC`.
++        config: Option<AudioConfig>,
+     },
+     Encoded {
+         format: AudioFormat,
+@@ -81,7 +83,7 @@
+ impl AudioEndpoints {
+     fn config(&self) -> AudioConfig {
+         match self {
+-            Self::Pcm { .. } => pcm_audio_config(),
++            Self::Pcm { config, .. } => config.unwrap_or_else(pcm_audio_config),
+             Self::Encoded { format, .. } => AudioConfig::encoded(*format),
+         }
+     }
+@@ -103,6 +105,22 @@
+             self.audio = Some(AudioEndpoints::Pcm {
+                 source: Arc::new(source),
+                 sink: Arc::new(sink),
++                config: None,
++            });
++            self
++        }
++
++        /// ZapLiga: [`Self::audio`] with the codec chosen for this one call
++        /// ([`AudioConfig::MLOW_PCM`] or [`AudioConfig::OPUS_PCM`]) instead of `WA_CALL_AUDIO_CODEC`.
++        pub fn audio_with_config<S, K>(mut self, source: S, sink: K, config: AudioConfig) -> Self
++        where
++            S: AudioSource,
++            K: AudioSink,
++        {
++            self.audio = Some(AudioEndpoints::Pcm {
++                source: Arc::new(source),
++                sink: Arc::new(sink),
++                config: Some(config),
+             });
+             self
+         }
+@@ -2000,6 +2018,21 @@
+         video: video.is_some(),
+         audio_rates: &audio_rates,
+     });
++    log::info!(
++        target: "zapliga.call",
++        "offer call_id={} peer={} ring_devices={} keyed_devices={} enc_types={:?} privacy_token={} device_identity={} prekey_message={} audio_rate={} format={:?} video={}",
++        call_id,
++        peer,
++        ring_devices.len(),
++        device_keys.len(),
++        device_keys.iter().map(|key| key.enc_type.as_str()).collect::<Vec<_>>(),
++        privacy_token.is_some(),
++        device_identity.is_some(),
++        raw.includes_prekey_message,
++        audio_rate,
++        audio.config().format,
++        video.is_some()
++    );
+ 
+     // Register the ack-waiter for the offer's stanza id BEFORE send_node so a fast server reply can't
+     // arrive before we are listening. The ack carries the relay; the spawned task below attaches the
+@@ -2191,9 +2224,18 @@
+                 match wacore::runtime::timeout(&*runtime, OFFER_ACK_RELAY_TIMEOUT, ack_rx).await {
+                     // The ack node re-encoded as OwnedNodeRef; find its <relay> child and parse it (same
+                     // path the incoming offer uses). handle_ack_response already removed our waiter entry.
+-                    Ok(Ok(ack)) => wacore::stanza::call::find_relay(ack.get())
+-                        .and_then(wacore::voip::relay_parse::parse_relay_data)
+-                        .ok_or("the server acked the offer but carried no relay"),
++                    Ok(Ok(ack)) => {
++                        // ZapLiga: the server's whole answer to the offer, error attributes included.
++                        log::info!(
++                            target: "zapliga.call",
++                            "offer ack call_id={} node={}",
++                            call_id,
++                            format!("{:?}", ack.get()).chars().take(1500).collect::<String>()
++                        );
++                        wacore::stanza::call::find_relay(ack.get())
++                            .and_then(wacore::voip::relay_parse::parse_relay_data)
++                            .ok_or("the server acked the offer but carried no relay")
++                    }
+                     // Sender dropped (disconnect cleared the waiter map) or the timeout elapsed:
+                     // handle_ack_response never ran, so our still-registered waiter entry must be dropped
+                     // here or send_keepalive suppresses pings for the life of the connection.
+@@ -3280,7 +3322,7 @@
+     // Only the selected I/O pair stays open. Closed inactive channels make their driver select arms
+     // retire immediately without per-frame branching or idle tasks.
+     let (mic_rx, speaker, encoded_audio_in, encoded_audio_out, audio_feed) = match audio {
+-        AudioEndpoints::Pcm { source, sink } => {
++        AudioEndpoints::Pcm { source, sink, .. } => {
+             let (mic_tx, mic_rx) = async_channel::bounded::<Vec<i16>>(MIC_CHANNEL_CAPACITY);
+             let mute_feed = MuteFeed {
+                 src: source.frames(),
+@@ -4835,7 +4877,11 @@
+     }
+ 
+     fn pcm_audio(source: Arc<dyn AudioSource>, sink: Arc<dyn AudioSink>) -> AudioEndpoints {
+-        AudioEndpoints::Pcm { source, sink }
++        AudioEndpoints::Pcm {
++            source,
++            sink,
++            config: None,
++        }
+     }
+ 
+     fn encoded_audio(format: AudioFormat) -> AudioEndpoints {

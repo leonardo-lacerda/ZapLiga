@@ -40,6 +40,7 @@ import {
   CANARY_MIN_CALL_SECONDS,
   CANARY_RETRY_HOURS,
   MANUAL_CALLS_PER_LINE,
+  canaryCodec,
   YOUNG_LINE_DAILY_CALLS,
 } from './dialer.rules';
 import { DIAL_INTENT_TTL_SECONDS, DialIntent, DialRefusedError, dialIntentKey } from './dial-intents';
@@ -73,6 +74,8 @@ type CallResource = {
   waxumCallId?: string;
   // When Waxum sent the offer (`call_started`): WhatsApp judges a new device on it.
   offerStartedAt?: number;
+  // The first call of a line after its pairing, to a team phone (manualCallWithInput).
+  canary?: boolean;
   answerEventLogged?: boolean;
   browserAudioLogged?: boolean;
   ringTimeout?: NodeJS.Timeout;
@@ -1609,6 +1612,7 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
         previousSdrAvailable: Boolean(sdr.available),
         previousSdrState: String(sdr.state ?? (sdr.available ? 'available' : 'offline')),
         integrationId: integration?.integrationId,
+        canary,
       });
       await this.redis.incrementMetric?.('calls_started_total');
       try {
@@ -1731,7 +1735,7 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
       // Re-check immediately before opening the external Waxum media call so
       // a webhook/tick race cannot turn a stale reservation into a new call.
       await this.entitlement?.assertCanOperate(tenantId);
-      const media = await this.waxum.openMedia(call.rows[0].waxum_session_id, recipient);
+      const media = await this.waxum.openMedia(call.rows[0].waxum_session_id, recipient, resource.canary ? canaryCodec(resource.numberId) : undefined);
       resource.media = media;
       resource.recipient = recipient;
       resource.waxumSessionId = call.rows[0].waxum_session_id;
@@ -1756,6 +1760,8 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
             if (metadata.type === 'call_started' && metadata.call_id && !resource.answerWatcherStarted) {
               resource.waxumCallId = metadata.call_id;
               resource.offerStartedAt = Date.now();
+              void this.db.query('UPDATE calls SET waxum_call_id = $1, offer_sent_at = now() WHERE tenant_id = $2 AND id = $3', [metadata.call_id, resource.tenantId, callId])
+                .catch((error) => this.logger.warn(`Offer of ${callId} not recorded: ${safeOperationalError(error)}`));
               resource.answerWatcherStarted = true;
               if (resource.integrationId) this.emitCrmCall(resource.tenantId, callId, 'call.dialing');
               this.log(`Chamada Waxum iniciada (${metadata.call_id}); aguardando atendimento`, 'info', callId);
@@ -2088,7 +2094,7 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
       WHERE tenant_id = $1 AND id = $2 AND canary_status <> 'passed' RETURNING id
     `, [tenantId, numberId, passed ? 'passed' : 'failed', CANARY_RETRY_HOURS]);
     if (!updated.rows[0]) return;
-    const metadata = { callId, lastedSeconds: Math.round(lastedMs / 1000), connected: status.connected, lossReason: line.loss_reason ?? null };
+    const metadata = { callId, lastedSeconds: Math.round(lastedMs / 1000), connected: status.connected, lossReason: line.loss_reason ?? null, codec: canaryCodec(numberId) };
     await this.db.query(`INSERT INTO number_health_events (tenant_id, number_id, event_type, actor_type, metadata, occurred_at) VALUES ($1, $2, $3, 'automatic', $4::jsonb, now())`, [tenantId, numberId, passed ? 'canary_passed' : 'canary_failed', JSON.stringify(metadata)]);
     await this.audit?.record({ tenantId, action: passed ? 'number.canary_passed' : 'number.canary_failed', entityType: 'whatsapp_number', entityId: numberId, metadata }).catch(() => undefined);
     this.log(passed ? `Canário aprovado: ${line.label} liberada para ligar para leads` : `Canário reprovado: ${line.label} descansa ${CANARY_RETRY_HOURS} h antes de tentar de novo`, passed ? 'info' : 'warning', callId, tenantId);

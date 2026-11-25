@@ -164,14 +164,14 @@ export class WaxumClient implements OnModuleDestroy {
 
   /**
    * Session events of every line (`wa.events.<session>.<type>`, published by each Waxum).
-   * Every API instance receives every event, so each one can tell its own open dashboards;
-   * handlers must make their writes idempotent.
+   * Without `queue` every API instance receives every event, so each one can tell its own open
+   * dashboards and handlers must make their writes idempotent; with it, one instance gets each.
    */
-  async subscribeSessionEvents(types: string[], onEvent: (sessionId: string, type: string, payload: any) => Promise<void>) {
+  async subscribeSessionEvents(types: string[], onEvent: (sessionId: string, type: string, payload: any) => Promise<void>, queue?: string) {
     const connection = await this.getNatsConnection();
     const codec = StringCodec();
     for (const type of types) {
-      const subscription = connection.subscribe(`wa.events.*.${type}`);
+      const subscription = connection.subscribe(`wa.events.*.${type}`, queue ? { queue } : undefined);
       void (async () => {
         for await (const message of subscription) {
           const sessionId = message.subject.split('.')[2];
@@ -243,8 +243,10 @@ export class WaxumClient implements OnModuleDestroy {
     }
   }
 
-  async openMedia(sessionId: string, recipient: string) {
-    const httpUrl = `${await this.sessionUrl(sessionId)}/api/v1/sessions/${encodeURIComponent(sessionId)}/calls/media/ws?to=${encodeURIComponent(recipient)}&kind=audio`;
+  // `codec` picks the audio codec of this one call (Waxum zapliga-signal patch); absent follows
+  // the Waxum's WA_CALL_AUDIO_CODEC. An older Waxum ignores it.
+  async openMedia(sessionId: string, recipient: string, codec?: 'opus' | 'mlow') {
+    const httpUrl = `${await this.sessionUrl(sessionId)}/api/v1/sessions/${encodeURIComponent(sessionId)}/calls/media/ws?to=${encodeURIComponent(recipient)}&kind=audio${codec ? `&codec=${codec}` : ''}`;
     return new WebSocket(httpUrl.replace(/^http/, 'ws'), { headers: this.apiKey ? { authorization: `Bearer ${this.apiKey}` } : undefined });
   }
 

@@ -3,6 +3,7 @@ import { WaxumClient } from '../../infrastructure/waxum/waxum.client';
 import { SdrGateway } from '../sdrs/sdr.gateway';
 import { DialerService } from './dialer.service';
 import { LineLossService } from './line-loss.service';
+import { CallSignalService } from './call-signal.service';
 import { ContactComplianceModule } from '../contact-compliance/contact-compliance.module';
 import { DialerScheduleModule } from '../dialer-schedule/dialer-schedule.module';
 import { AuditModule } from '../audit/audit.module';
@@ -15,7 +16,7 @@ import { CallRecordingsModule } from '../call-recordings/call-recordings.module'
 
 @Module({
   imports: [ContactComplianceModule, DialerScheduleModule, AuditModule, CampaignsModule, DecisionEngineModule, ExperimentsModule, BillingModule, CrmEventsModule, CallRecordingsModule],
-  providers: [WaxumClient, DialerService, SdrGateway, LineLossService],
+  providers: [WaxumClient, DialerService, SdrGateway, LineLossService, CallSignalService],
   exports: [DialerService, SdrGateway, WaxumClient],
 })
 export class DialerModule {}

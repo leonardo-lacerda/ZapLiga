@@ -1,0 +1,349 @@
+diff -ruN '--exclude=target' '--exclude=.git' '--exclude=whatsapp-rust' a/src/device_props.rs b/src/device_props.rs
+--- a/src/device_props.rs	2026-11-25 22:27:15.414881287 +0100
++++ b/src/device_props.rs	2026-11-25 22:31:53.066921840 +0100
+@@ -32,6 +32,35 @@
+     pub version: Option<wa::device_props::AppVersion>,
+ }
+ 
++/// ZapLiga: the noise-handshake profile from `WA_CLIENT_OS_VERSION` and `WA_CLIENT_LOCALE`
++/// (e.g. `pt_BR`), so the login matches the registered device and the operation's country.
++/// `None` when neither is set, which keeps the library's web profile.
++pub fn client_profile_from_env() -> Option<wacore::client_profile::ClientProfile> {
++    let os_version = std::env::var("WA_CLIENT_OS_VERSION")
++        .ok()
++        .filter(|value| !value.trim().is_empty());
++    let locale = std::env::var("WA_CLIENT_LOCALE")
++        .ok()
++        .filter(|value| !value.trim().is_empty());
++    if os_version.is_none() && locale.is_none() {
++        return None;
++    }
++    let mut profile = wacore::client_profile::ClientProfile::web();
++    if let Some(os_version) = os_version {
++        profile.os_version = os_version.trim().to_string();
++    }
++    if let Some(locale) = locale {
++        let mut parts = locale.trim().split(|c| c == '_' || c == '-');
++        if let Some(language) = parts.next().filter(|part| !part.is_empty()) {
++            profile.locale_language = language.to_ascii_lowercase();
++        }
++        if let Some(country) = parts.next().filter(|part| !part.is_empty()) {
++            profile.locale_country = country.to_ascii_uppercase();
++        }
++    }
++    Some(profile)
++}
++
+ pub fn resolve_from_env() -> ResolvedDeviceProps {
+     let os = std::env::var("WA_DEVICE_OS").unwrap_or_else(|_| "Windows".to_string());
+     let platform = std::env::var("WA_DEVICE_PLATFORM")
+diff -ruN '--exclude=target' '--exclude=.git' '--exclude=whatsapp-rust' a/src/handlers/calls.rs b/src/handlers/calls.rs
+--- a/src/handlers/calls.rs	2026-11-25 22:27:15.414881287 +0100
++++ b/src/handlers/calls.rs	2026-11-25 22:32:41.600758780 +0100
+@@ -578,8 +578,10 @@
+     let client = get_client(&state, &session_id)?;
+ 
+     if let Some((_, handle)) = state.active_calls().remove(&request.call_id) {
+-        handle.terminate().await;
++        let termination = handle.terminate().await;
++        tracing::info!(target: "zapliga.call", session_id = %session_id, call_id = %request.call_id, termination = ?termination, "terminate requested by the API on a live call");
+         state.call_audio_channels().remove(&request.call_id);
++        state.originated_calls().remove(&request.call_id);
+         return Ok(Json(SuccessResponse::with_message("Call terminated")));
+     }
+ 
+@@ -588,9 +590,21 @@
+         .parse()
+         .map_err(|_| ApiError::InvalidJid(request.peer.clone()))?;
+ 
++    // A call we originated: never the peer as call creator, and nothing to send when our own
++    // `<terminate>` already reached the peer. Anything else keeps the old behaviour.
++    let creator = match state.originated_calls().remove(&request.call_id) {
++        Some((_, (_, true))) => {
++            tracing::info!(target: "zapliga.call", session_id = %session_id, call_id = %request.call_id, "terminate skipped: the peer was already told");
++            return Ok(Json(SuccessResponse::with_message("Call already terminated")));
++        }
++        Some((_, (creator, false))) => creator,
++        None => peer.clone(),
++    };
++    tracing::info!(target: "zapliga.call", session_id = %session_id, call_id = %request.call_id, call_creator = %creator, "terminate sent for a call that already ended locally");
++
+     client
+         .voip()
+-        .terminate(&request.call_id, &peer, &peer)
++        .terminate(&request.call_id, &peer, &creator)
+         .await
+         .map_err(|e| ApiError::Internal(e.to_string()))?;
+ 
+@@ -1066,6 +1080,9 @@
+     pub to: String,
+     #[serde(default)]
+     pub kind: Option<String>,
++    /// ZapLiga: `opus` or `mlow` for this call only; absent follows `WA_CALL_AUDIO_CODEC`.
++    #[serde(default)]
++    pub codec: Option<String>,
+ }
+ 
+ pub async fn media_stream_ws(
+@@ -1086,9 +1103,18 @@
+             ));
+         }
+     };
++    let audio_config = match q.codec.as_deref() {
++        None => None,
++        Some("opus") => Some(whatsapp_rust::voip::AudioConfig::OPUS_PCM),
++        Some("mlow") => Some(whatsapp_rust::voip::AudioConfig::MLOW_PCM),
++        Some(_) => {
++            return Err(ApiError::BadRequest("codec must be 'opus' or 'mlow'".into()));
++        }
++    };
+ 
+     Ok(ws.on_upgrade(move |socket| async move {
+-        if let Err(e) = drive_media_socket(state, session_id, client, to, socket, with_video).await
++        if let Err(e) =
++            drive_media_socket(state, session_id, client, to, socket, with_video, audio_config).await
+         {
+             tracing::warn!("media ws terminated: {e}");
+         }
+@@ -1110,6 +1136,7 @@
+     to: Jid,
+     socket: WebSocket,
+     with_video: bool,
++    audio_config: Option<whatsapp_rust::voip::AudioConfig>,
+ ) -> anyhow::Result<()> {
+     let (mut sink, mut stream) = socket.split();
+ 
+@@ -1123,7 +1150,10 @@
+     });
+ 
+     let voip = client.voip();
+-    let mut builder = voip.call(&to).audio(mic_rx, spk_tx);
++    let mut builder = match audio_config {
++        Some(config) => voip.call(&to).audio_with_config(mic_rx, spk_tx, config),
++        None => voip.call(&to).audio(mic_rx, spk_tx),
++    };
+     if let Some((_, video_in_rx, video_out_tx, _)) = &video_channels {
+         builder = builder.video(video_in_rx.clone(), video_out_tx.clone());
+     }
+@@ -1137,6 +1167,9 @@
+     state
+         .active_calls()
+         .insert(call_id.clone(), handle_arc.clone());
++    state
++        .originated_calls()
++        .insert(call_id.clone(), (handle_arc.call_creator().clone(), false));
+     state.call_audio_channels().insert(
+         call_id.clone(),
+         ActiveCallAudio {
+@@ -1262,7 +1295,16 @@
+     }
+ 
+     peer_task.abort();
+-    handle_arc.terminate().await;
++    let termination = handle_arc.terminate().await;
++    let peer_notified = matches!(
++        termination,
++        whatsapp_rust::voip::CallTermination::PeerNotified
++            | whatsapp_rust::voip::CallTermination::PartlyNotified { .. }
++    );
++    tracing::info!(target: "zapliga.call", session_id = %session_id, call_id = %call_id, termination = ?termination, "media socket closed");
++    if let Some(mut entry) = state.originated_calls().get_mut(&call_id) {
++        entry.1 = peer_notified;
++    }
+     state.active_calls().remove(&call_id);
+     state.call_audio_channels().remove(&call_id);
+     Ok(())
+diff -ruN '--exclude=target' '--exclude=.git' '--exclude=whatsapp-rust' a/src/handlers/sessions.rs b/src/handlers/sessions.rs
+--- a/src/handlers/sessions.rs	2026-11-25 22:27:15.417881276 +0100
++++ b/src/handlers/sessions.rs	2026-11-25 22:33:25.463612340 +0100
+@@ -1391,6 +1391,50 @@
+     }
+ }
+ 
++/// ZapLiga: one live client per session across every Waxum on the shared volume. Two clients
++/// with the same device keys make WhatsApp drop the device, and the pidfile cannot tell the
++/// containers apart (every one runs as PID 1). The lock is an exclusive `flock` on
++/// `{session}/.session.lock`, held by the returned file while the client runs and released by the
++/// kernel if the process dies. Re-entrant inside one Waxum (a reconnect may overlap the client it
++/// replaces); another Waxum waits a little (a move releases the source first) and then gives up.
++async fn lock_session_storage(
++    storage_path: &str,
++    session_id: &str,
++) -> Result<std::sync::Arc<std::fs::File>, ApiError> {
++    static HELD: std::sync::OnceLock<
++        parking_lot::Mutex<std::collections::HashMap<String, std::sync::Weak<std::fs::File>>>,
++    > = std::sync::OnceLock::new();
++    let held = HELD.get_or_init(|| parking_lot::Mutex::new(std::collections::HashMap::new()));
++    if let Some(file) = held.lock().get(session_id).and_then(|weak| weak.upgrade()) {
++        return Ok(file);
++    }
++    let _ = std::fs::create_dir_all(storage_path);
++    let path = format!("{}/.session.lock", storage_path);
++    let file = std::fs::OpenOptions::new()
++        .create(true)
++        .write(true)
++        .truncate(false)
++        .open(&path)
++        .map_err(|e| ApiError::Internal(format!("session lock {}: {}", path, e)))?;
++    for _ in 0..40 {
++        if file.try_lock().is_ok() {
++            let file = std::sync::Arc::new(file);
++            held.lock()
++                .insert(session_id.to_string(), std::sync::Arc::downgrade(&file));
++            return Ok(file);
++        }
++        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
++    }
++    tracing::warn!(
++        session_id = %session_id,
++        "session is open in another Waxum; not starting a second client"
++    );
++    Err(ApiError::Internal(format!(
++        "session {} is already open in another Waxum",
++        session_id
++    )))
++}
++
+ async fn connect_client(
+     state: &AppState,
+     session_id: &str,
+@@ -1408,6 +1452,7 @@
+         .map_err(|e| ApiError::Internal(e.to_string()))?
+         .ok_or_else(|| ApiError::SessionNotFound(session_id.to_string()))?;
+ 
++    let _session_lock = lock_session_storage(&storage_path, session_id).await?;
+     let db_path = format!("{}/whatsapp.db", storage_path);
+ 
+     let backend = SqliteStore::new(&db_path)
+@@ -1474,6 +1519,9 @@
+         .update_session_status(session_id, SessionStatus::WaitingForQr, false)
+         .await;
+ 
++    if let Some(profile) = crate::device_props::client_profile_from_env() {
++        bot.client().set_client_profile(profile).await;
++    }
+     bot.run().await;
+ 
+     if let Some(runtime) = state.get_session(session_id) {
+@@ -1509,6 +1557,7 @@
+         .map_err(|e| ApiError::Internal(e.to_string()))?
+         .ok_or_else(|| ApiError::SessionNotFound(session_id.to_string()))?;
+ 
++    let _session_lock = lock_session_storage(&storage_path, session_id).await?;
+     let db_path = format!("{}/whatsapp.db", storage_path);
+ 
+     let backend = SqliteStore::new(&db_path)
+@@ -1577,6 +1626,9 @@
+         runtime.set_client(Some(c));
+     }
+ 
++    if let Some(profile) = crate::device_props::client_profile_from_env() {
++        bot.client().set_client_profile(profile).await;
++    }
+     bot.run().await;
+ 
+     if let Some(runtime) = state.get_session(session_id) {
+@@ -1740,6 +1792,39 @@
+                 return;
+             }
+ 
++            // ZapLiga: the API takes a line out of the dialer when WhatsApp removed its device,
++            // so every non-lock logout goes out with its cause, transient flaps included.
++            let conflict = logged_out
++                .raw
++                .as_ref()
++                .filter(|raw| raw.tag == "stream:error")
++                .and_then(|raw| raw.get_optional_child("conflict"))
++                .and_then(|conflict| conflict.attrs().optional_string("type").map(|kind| kind.to_string()));
++            let raw_preview = logged_out
++                .raw
++                .as_ref()
++                .map(|raw| format!("{:?}", raw).chars().take(2000).collect::<String>());
++            let logout_payload = serde_json::json!({
++                "session_id": session_id,
++                "event": "logged_out",
++                "timestamp": chrono::Utc::now().timestamp(),
++                "data": {
++                    "reason": format!("{:?}", logged_out.reason),
++                    "on_connect": logged_out.on_connect,
++                    "conflict": conflict,
++                    "raw": raw_preview,
++                },
++            });
++            if let Ok(payload_str) = serde_json::to_string(&logout_payload) {
++                state
++                    .broadcast_to_webhooks(session_id, "logged_out", &payload_str)
++                    .await;
++                state
++                    .publish_to_nats(session_id, "logged_out", &payload_str)
++                    .await;
++                runtime.broadcast_event(payload_str);
++            }
++
+             let should_purge = runtime.record_logout_and_should_purge();
+             if !should_purge {
+                 tracing::warn!(
+@@ -2426,6 +2511,7 @@
+         Event::StreamError(err) => {
+             serde_json::json!({
+                 "code": err.code,
++                "raw": err.raw.as_ref().map(|raw| format!("{:?}", raw).chars().take(2000).collect::<String>()),
+             })
+         }
+         Event::EncDecryptFailed(failed) => {
+diff -ruN '--exclude=target' '--exclude=.git' '--exclude=whatsapp-rust' a/src/state.rs b/src/state.rs
+--- a/src/state.rs	2026-11-25 22:27:15.421881262 +0100
++++ b/src/state.rs	2026-11-25 22:29:49.446342785 +0100
+@@ -529,6 +529,12 @@
+ 
+     pub active_calls: DashMap<String, Arc<whatsapp_rust::voip::CallHandle>>,
+ 
++    /// ZapLiga: calls this Waxum originated over the media socket, by call id: who created the
++    /// call (our own JID) and whether our `<terminate>` already reached the peer. The API asks
++    /// for a terminate after every call; this keeps it from going out twice or with the peer as
++    /// the call creator.
++    pub originated_calls: DashMap<String, (wacore_binary::jid::Jid, bool)>,
++
+     pub call_audio_channels: DashMap<String, ActiveCallAudio>,
+ 
+     /// In-memory tag membership per session. `DashMap<session_id, HashSet<tag>>`.
+@@ -621,6 +627,7 @@
+                 webhook_dlq: DashMap::new(),
+                 incoming_calls: DashMap::new(),
+                 active_calls: DashMap::new(),
++                originated_calls: DashMap::new(),
+                 call_audio_channels: DashMap::new(),
+                 event_ring: parking_lot::Mutex::new(std::collections::VecDeque::with_capacity(200)),
+                 session_tags: DashMap::new(),
+@@ -778,12 +785,19 @@
+             payload_preview: preview,
+             at_epoch_ms: now,
+         });
++        // ZapLiga: whole payloads for call and session events, which carry the action and the
++        // reason past the preview; other events keep the preview, so message text stays out.
++        let log_max = match event {
++            "incoming_call" | "logged_out" | "account_locked" | "stream_error" | "connected"
++            | "disconnected" => 4000,
++            _ => PREVIEW_MAX,
++        };
+         tracing::info!(
+             target: "waxum::event",
+             session_id = %session_id,
+             event = %event,
+             "{}",
+-            payload.chars().take(PREVIEW_MAX).collect::<String>()
++            payload.chars().take(log_max).collect::<String>()
+         );
+     }
+ 
+@@ -800,6 +814,10 @@
+         *self.inner.voice_cache.write() = Some(voices);
+     }
+ 
++    pub fn originated_calls(&self) -> &DashMap<String, (wacore_binary::jid::Jid, bool)> {
++        &self.inner.originated_calls
++    }
++
+     pub fn incoming_calls(&self) -> &DashMap<String, wacore::types::call::IncomingCall> {
+         &self.inner.incoming_calls
+     }

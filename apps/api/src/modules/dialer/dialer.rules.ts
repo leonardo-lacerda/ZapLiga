@@ -36,6 +36,15 @@ export const CANARY_MIN_CALL_SECONDS = 5;
 export const CANARY_CHECK_DELAY_MS = 30_000;
 export const CANARY_RETRY_HOURS = 48;
 
+// The canary A/B of the offer's audio codec (the codec profile is one of the few things the
+// server reads in the offer that differs from the official client): half of the lines offer MLow
+// on their canary, half Opus, fixed per line. Lead calls keep the Waxum default (Opus).
+export function canaryCodec(numberId: string): 'opus' | 'mlow' {
+  let sum = 0;
+  for (const char of numberId) sum += char.charCodeAt(0);
+  return sum % 2 === 0 ? 'mlow' : 'opus';
+}
+
 // SQL over a `whatsapp_numbers` alias: the line passed its canary.
 export function lineCanaryPassedSql(alias: string) {
   return `${alias}.canary_status = 'passed'`;

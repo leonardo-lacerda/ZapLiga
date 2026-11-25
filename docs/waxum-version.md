@@ -47,3 +47,35 @@ Não trocar a versão automaticamente. Qualquer atualização deve:
    **no mesmo commit** (uma troca manual não commitada é revertida no próximo deploy).
 
 Fontes: [imtaqin/waxum](https://github.com/imtaqin/waxum), [oxidezap/whatsapp-rust](https://github.com/oxidezap/whatsapp-rust).
+
+## Sinais de chamada (imagem `0.12.6-multirelay-v5-signal`)
+
+O WhatsApp removia o aparelho de linhas novas entre 1,4 e 3,8 s depois da oferta da primeira
+ligação (25/11/2026). Os patches `whatsapp-rust-zapliga-signal.patch` e `waxum-zapliga-signal.patch`
+existem para ler o que ele responde em vez de adivinhar, e para corrigir o encerramento:
+
+- **Log `zapliga.call`** (nível info): o conteúdo de cada oferta (`offer call_id=… ring_devices=…
+  keyed_devices=… enc_types=… privacy_token=… device_identity=… prekey_message=… audio_rate=…
+  format=…`), a resposta do servidor à oferta (`offer ack … node=…`), cada `<call>` recebido com os
+  campos da ação (`call: received <tipo> for <call_id> from <jid> detail=…`) e cada encerramento.
+- **`logged_out` publicado com a causa**, inclusive nas quedas que o Waxum trata como passageiras:
+  `{"event":"logged_out","data":{"reason":"LoggedOut","on_connect":false,"conflict":"device_removed","raw":"…"}}`.
+  `conflict = "device_removed"` é o aparelho removido pelo WhatsApp; a API marca a linha
+  (`LineLossService`). `stream_error` passa a levar `raw` além de `code`.
+- **Log de eventos sem corte** para `incoming_call`, `logged_out`, `account_locked`,
+  `stream_error`, `connected` e `disconnected` (até 4000 caracteres); os demais continuam com 160,
+  para o texto das mensagens não ir para o log.
+- **Encerramento**: o Waxum guarda as ligações que ele originou. O `POST …/calls/terminate` que a
+  API manda no fim de cada ligação não repete um `<terminate>` que já chegou ao lead e, quando a
+  ligação terminou do lado local sem avisar o lead, manda o `<terminate>` com o nosso JID como
+  `call-creator` (antes ia com o do lead).
+- **Codec por ligação**: `…/calls/media/ws?to=…&kind=audio&codec=opus|mlow`. Sem `codec`, vale o
+  `WA_CALL_AUDIO_CODEC`. A API só manda `codec` na ligação de canário (A/B por linha, `canaryCodec`).
+- **Trava por sessão**: `flock` em `{sessão}/.session.lock` enquanto o cliente roda, para dois
+  Waxums nunca abrirem a mesma sessão no volume compartilhado. Outro Waxum espera até 20 s e desiste.
+- **Perfil do handshake por ambiente**: `WA_CLIENT_LOCALE` (ex.: `pt_BR`) e `WA_CLIENT_OS_VERSION`.
+  Sem eles, vale o perfil web da biblioteca (`en_US`, `0.1.0`). `WA_DEVICE_PLATFORM` /
+  `WA_DEVICE_OS` continuam valendo só no pareamento.
+
+A API guarda os sinais em `call_signal_events` (migração 078, `CallSignalService`), com os ms desde
+a oferta (`calls.offer_sent_at`).

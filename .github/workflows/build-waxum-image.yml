@@ -1,0 +1,90 @@
+name: Construir imagem do Waxum
+
+# Builds zapliga-waxum:<tag> from infra/waxum/build.sh on a GitHub runner, never on the VPS
+# (docs/deploy-runbook.md, "Regra operacional: nao compilar em producao"). It runs the VoIP tests
+# of the patched whatsapp-rust, then publishes the image as the asset of release waxum-<tag>, the
+# shape "Carregar imagem do Waxum" (load-waxum-image.yml) loads on the VPS. A manual run only
+# exists once this file is on main, so a push to a `waxum-build/...` branch also builds, with the
+# default tag of infra/waxum/build.sh; that push deploys nothing.
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag da imagem (release waxum-<tag>, asset waxum-<tag>.tar.gz); vazio = a padrão do build.sh'
+        required: false
+  push:
+    branches: ['waxum-build/**']
+
+permissions:
+  contents: write
+
+concurrency:
+  group: waxum-image-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Escolher a tag
+        id: tag
+        env:
+          INPUT_TAG: ${{ inputs.tag }}
+        run: |
+          tag="${INPUT_TAG:-$(sed -n 's/^TAG="\${1:-\(.*\)}"$/\1/p' infra/waxum/build.sh)}"
+          [ -n "$tag" ] || { echo "tag vazia" >&2; exit 1; }
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "Tag: $tag"
+
+      - name: Liberar disco do runner
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          docker system prune -af
+          df -h /
+
+      - name: Montar o código (Waxum + whatsapp-rust + patches)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          set -euo pipefail
+          if gh release view "waxum-$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "O release waxum-$TAG já existe; use outra tag." >&2
+            exit 1
+          fi
+          # build.sh assembles and builds in one go; stop it before `docker build` to test first.
+          sed '/^echo "==> Building/,$d' infra/waxum/build.sh > "$RUNNER_TEMP/assemble.sh"
+          sed -i "s|^HERE=.*|HERE=$GITHUB_WORKSPACE/infra/waxum|" "$RUNNER_TEMP/assemble.sh"
+          WORKDIR="$RUNNER_TEMP/wx" bash "$RUNNER_TEMP/assemble.sh" "$TAG"
+
+      - name: Testes de VoIP do whatsapp-rust
+        run: |
+          set -euo pipefail
+          docker run --rm -v "$RUNNER_TEMP/wx/waxum:/app" -w /app/whatsapp-rust \
+            -e CMAKE_POLICY_VERSION_MINIMUM=3.5 rust:slim-bookworm bash -c '
+              apt-get update -qq && apt-get install -y -qq pkg-config libssl-dev libsqlite3-dev cmake build-essential git >/dev/null &&
+              rustup default nightly-2026-09-09 &&
+              cargo test -p whatsapp-rust --features voip,tracing voip'
+
+      - name: Construir a imagem
+        env:
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          set -euo pipefail
+          sudo rm -rf "$RUNNER_TEMP/wx/waxum/whatsapp-rust/target"
+          docker build --progress=plain -t "zapliga-waxum:$TAG" "$RUNNER_TEMP/wx/waxum"
+          docker save "zapliga-waxum:$TAG" | gzip > "$RUNNER_TEMP/waxum-$TAG.tar.gz"
+          ls -lh "$RUNNER_TEMP/waxum-$TAG.tar.gz"
+
+      - name: Publicar no release waxum-<tag>
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          gh release create "waxum-$TAG" "$RUNNER_TEMP/waxum-$TAG.tar.gz" \
+            --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
+            --title "Waxum $TAG" --notes "zapliga-waxum:$TAG, construída de $GITHUB_SHA por infra/waxum/build.sh."
