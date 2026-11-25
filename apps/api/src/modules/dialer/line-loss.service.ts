@@ -31,7 +31,6 @@ export class LineLossService implements OnModuleInit {
   constructor(private readonly db: DatabaseService, private readonly waxum: WaxumClient, private readonly audit: AuditService, private readonly gateway: SdrGateway, @Optional() private readonly crmEvents?: CrmEventsService) {}
 
   onModuleInit() {
-    if (process.env.NODE_ENV === 'test') return;
     void this.waxum.subscribeSessionEvents(['account_locked', 'logged_out'], (sessionId, type, payload) => this.handle(sessionId, type, payload))
       .catch((error) => this.logger.error(`Line loss events not subscribed: ${String((error as Error)?.message ?? error).slice(0, 300)}`));
   }

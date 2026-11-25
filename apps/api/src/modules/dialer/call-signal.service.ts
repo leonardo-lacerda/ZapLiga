@@ -20,7 +20,6 @@ export class CallSignalService implements OnModuleInit {
   constructor(private readonly db: DatabaseService, private readonly waxum: WaxumClient) {}
 
   onModuleInit() {
-    if (process.env.NODE_ENV === 'test') return;
     void this.waxum.subscribeSessionEvents(['incoming_call', 'logged_out', 'stream_error', 'account_locked'], (sessionId, type, payload) => this.store(sessionId, type, payload), 'zapliga-call-signals')
       .catch((error) => this.logger.error(`Call signals not subscribed: ${String((error as Error)?.message ?? error).slice(0, 300)}`));
   }

@@ -2,6 +2,7 @@ import { createHmac } from 'node:crypto';
 import { Pool } from 'pg';
 import { expect, request as playwrightRequest, test } from '@playwright/test';
 import WebSocket from 'ws';
+import { connect as connectNats, StringCodec } from 'nats';
 
 const apiBase = process.env.E2E_API_URL ?? 'http://127.0.0.1:3000';
 const wsBase = apiBase.replace(/^http/, 'ws');
@@ -29,6 +30,22 @@ let sdrToken = '';
 let sdrId = '';
 let control: WebSocket;
 let callbackId = '';
+// Celular da equipe que recebe o canário das linhas novas.
+const teamPhone = `55279${String(Date.now()).slice(-8)}`;
+let canaryCallId = '';
+// Publica um evento como o Waxum publica no NATS (wa.events.<sessão>.<tipo>).
+async function publishWaxumEvent(sessionId: string, type: string, data: Record<string, unknown>) {
+  const nats = await connectNats({ servers: process.env.E2E_NATS_URL ?? 'nats://127.0.0.1:4222' });
+  nats.publish(`wa.events.${sessionId}.${type}`, StringCodec().encode(JSON.stringify({ session_id: sessionId, event: type, data })));
+  await nats.drain();
+}
+async function openStation(api: any) {
+  const ticket = await expectOk(await api.post('/api/auth/ws-ticket', { headers: headers(sdrToken, tenantA) }));
+  control = new WebSocket(`${wsBase}/ws/tenants/${tenantA}/sdr?ticket=${encodeURIComponent(ticket.ticket)}`);
+  await new Promise<void>((resolve, reject) => { control.once('open', resolve); control.once('error', reject); });
+  control.send(JSON.stringify({ type: 'identify', sessionId: `e2e-station-${suffix}-${Date.now()}` }));
+  return waitForWs('identified');
+}
 let numberId = '';
 let suppressedLeadId = '';
 const suppressedPhone = `55119${String(Date.now()).slice(-8)}`;
@@ -328,6 +345,48 @@ test.describe.serial('Gate B - jornadas criticas', () => {
     await api.dispose();
   });
 
+  test('6b. canario: a linha nova so liga para leads depois de ligar para a equipe', async () => {
+    test.setTimeout(120_000);
+    const api = await context();
+    const lines = async () => (await expectOk(await api.get(`/api/tenants/${tenantA}/numbers`, { headers: headers(leaderToken, tenantA) }))).items;
+    // A jornada roda a qualquer hora: abre a semana inteira, como a 8 faz.
+    await expectOk(await api.put(`/api/tenants/${tenantA}/dialer/schedule`, { headers: headers(leaderToken, tenantA), data: { timezone: 'America/Sao_Paulo', windows: Array.from({ length: 7 }, (_, day_of_week) => ({ day_of_week, start_time: '00:00', end_time: '23:59' })), exceptions: [] } }));
+    expect((await lines()).find((line: any) => line.id === numberId).canary_status).toBe('pending');
+    // Sem celular da equipe cadastrado, o canário não começa.
+    const noPhones = await api.post(`/api/tenants/${tenantA}/numbers/${numberId}/canary/message`, { headers: headers(leaderToken, tenantA) });
+    expect(noPhones.ok()).toBeFalsy();
+    await expectOk(await api.patch(`/api/tenants/${tenantA}/dialer/settings`, { headers: headers(leaderToken, tenantA), data: { canary_phones: [teamPhone] } }));
+    const message = await expectOk(await api.post(`/api/tenants/${tenantA}/numbers/${numberId}/canary/message`, { headers: headers(leaderToken, tenantA) }));
+    expect(message.phone).toBe(teamPhone);
+
+    await openStation(api);
+    // Canário só liga para um celular da equipe; e a linha pendente não liga para leads.
+    const outsider = await api.post(`/api/tenants/${tenantA}/calls/manual`, { headers: headers(sdrToken, tenantA), data: { phone: '5511988887777', numberId, canary: true } });
+    expect(outsider.ok()).toBeFalsy();
+    const leadCall = await api.post(`/api/tenants/${tenantA}/calls/manual`, { headers: headers(sdrToken, tenantA), data: { phone: '5511988886666', numberId } });
+    expect(leadCall.ok()).toBeFalsy();
+    expect(JSON.stringify(await leadCall.json())).toContain('canário');
+
+    const reservedPromise = waitForWs('call_reserved');
+    const answeredPromise = waitForWs('call_started');
+    await expectOk(await api.post(`/api/tenants/${tenantA}/calls/manual`, { headers: headers(sdrToken, tenantA), data: { phone: teamPhone, numberId, canary: true } }));
+    canaryCallId = (await reservedPromise).callId;
+    await answeredPromise;
+    const resultPromise = waitForWs('canary_result', 60_000);
+    await delay(6_000);
+    control.send(JSON.stringify({ type: 'hangup', callId: canaryCallId }));
+    expect((await resultPromise).result).toBe('passed');
+    expect((await lines()).find((line: any) => line.id === numberId).canary_status).toBe('passed');
+    const call = (await billingPool.query('SELECT canary, waxum_call_id, offer_sent_at FROM calls WHERE id = $1', [canaryCallId])).rows[0];
+    expect(call.canary).toBe(true);
+    expect(call.waxum_call_id).toBeTruthy();
+    expect(call.offer_sent_at).toBeTruthy();
+    const event = (await billingPool.query("SELECT metadata FROM number_health_events WHERE number_id = $1 AND event_type = 'canary_passed'", [numberId])).rows[0];
+    expect(event.metadata.lastedSeconds).toBeGreaterThanOrEqual(5);
+    control.close();
+    await api.dispose();
+  });
+
   test('7. ciclo de campanha publica, versiona edicoes concorrentes e encerra com seguranca', async () => {
     const api = await context();
     const folderPage = await expectOk(await api.get(`/api/tenants/${tenantA}/lead-folders`, { headers: headers(leaderToken, tenantA) }));
@@ -519,6 +578,74 @@ test.describe.serial('Gate B - jornadas criticas', () => {
     expect((await mcp(4, 'tools/list', {}, 'zpl_mcp_invalida')).status()).toBe(401);
     await expectOk(await api.post(`/api/tenants/${tenantA}/provisioning/mcp-keys/${created.id}/revoke`, { headers: headers(leaderToken, tenantA) }));
     expect((await mcp(5, 'tools/list')).status()).toBe(401);
+    await api.dispose();
+  });
+
+  test('16. queda: conta travada e aparelho removido marcam a linha, e a segunda queda aposenta', async () => {
+    const api = await context();
+    const line = await expectOk(await api.post(`/api/tenants/${tenantA}/numbers`, { headers: headers(leaderToken, tenantA), data: { label: 'Linha queda CI', phone: '5511977776666' } }));
+    const byId = async () => (await expectOk(await api.get(`/api/tenants/${tenantA}/numbers`, { headers: headers(leaderToken, tenantA) }))).items.find((item: any) => item.id === line.id);
+    expect(line.waxum_node).toBe('main');
+
+    // Um logout comum não é queda.
+    await publishWaxumEvent(line.waxum_session_id, 'logged_out', { reason: 'ClientOutdated' });
+    await delay(1500);
+    expect((await byId()).loss_reason).toBeNull();
+
+    await publishWaxumEvent(line.waxum_session_id, 'logged_out', { reason: 'LoggedOut', conflict: 'device_removed', on_connect: false });
+    const removed = await waitFor(async () => { const item = await byId(); return item.loss_reason === 'device_removed' ? item : false; }, 'linha removida');
+    expect(removed.removal_count).toBe(1);
+    // Eventos repetidos da mesma queda não contam duas vezes.
+    await publishWaxumEvent(line.waxum_session_id, 'logged_out', { reason: 'LoggedOut', conflict: 'device_removed' });
+    await delay(1500);
+    expect((await byId()).removal_count).toBe(1);
+
+    // Pareada de novo, a linha cai de novo: segunda queda aposenta e recusa QR novo.
+    await billingPool.query('UPDATE whatsapp_numbers SET loss_reason = NULL WHERE id = $1', [line.id]);
+    await publishWaxumEvent(line.waxum_session_id, 'account_locked', { reason: 'AccountLocked' });
+    const locked = await waitFor(async () => { const item = await byId(); return item.loss_reason === 'account_locked' ? item : false; }, 'conta travada');
+    expect(locked.removal_count).toBe(2);
+    const qr = await api.get(`/api/tenants/${tenantA}/numbers/${line.id}/qr`, { headers: headers(leaderToken, tenantA) });
+    expect(qr.ok()).toBeFalsy();
+    expect(JSON.stringify(await qr.json())).toContain('aposentada');
+    const events = (await billingPool.query("SELECT event_type FROM number_health_events WHERE number_id = $1 AND event_type IN ('device_removed', 'account_locked') ORDER BY occurred_at", [line.id])).rows.map((row) => row.event_type);
+    expect(events).toEqual(['device_removed', 'account_locked']);
+    await api.dispose();
+  });
+
+  test('17. sinais: as respostas a oferta e a queda logo depois ficam gravadas com os ms desde a oferta', async () => {
+    const call = (await billingPool.query('SELECT c.waxum_call_id, n.waxum_session_id FROM calls c JOIN whatsapp_numbers n ON n.id = c.number_id WHERE c.id = $1', [canaryCallId])).rows[0];
+    await publishWaxumEvent(call.waxum_session_id, 'incoming_call', { call_id: call.waxum_call_id, action: `PreAccept { call_id: "${call.waxum_call_id}" }`, from: '10000000000000@lid' });
+    const signal = await waitFor(async () => (await billingPool.query('SELECT call_id, kind, ms_since_offer FROM call_signal_events WHERE waxum_call_id = $1', [call.waxum_call_id])).rows[0] ?? false, 'sinal gravado');
+    expect(signal.call_id).toBe(canaryCallId);
+    expect(signal.kind).toBe('call_preaccept');
+    expect(signal.ms_since_offer).toBeGreaterThan(0);
+    // Os logouts da jornada 16 também ficaram gravados, sem ligação (nenhuma oferta recente).
+    const losses = (await billingPool.query("SELECT kind, call_id FROM call_signal_events WHERE kind IN ('logged_out', 'account_locked')")).rows;
+    expect(losses.length).toBeGreaterThanOrEqual(3);
+  });
+
+  test('18. limite diario: linha pareada ha poucos dias para em 40 ligacoes no dia', async () => {
+    const api = await context();
+    await billingPool.query('UPDATE whatsapp_numbers SET last_paired_at = now() WHERE id = $1', [numberId]);
+    const copies = await billingPool.query(`
+      INSERT INTO calls SELECT (jsonb_populate_record(c, jsonb_build_object('id', 'e2e-cap-' || g || '-' || c.id, 'status', 'completed', 'created_at', now(), 'canary', false))).*
+      FROM calls c, generate_series(1, 40) g WHERE c.id = $1 RETURNING id
+    `, [canaryCallId]);
+    expect(copies.rowCount).toBe(40);
+    // A lista de números fica 1,5 s em cache: espera o dado novo.
+    const listed = await waitFor(async () => {
+      const item = (await expectOk(await api.get(`/api/tenants/${tenantA}/numbers`, { headers: headers(leaderToken, tenantA) }))).items.find((row: any) => row.id === numberId);
+      return item.young ? item : false;
+    }, 'linha jovem na lista');
+    expect(listed.calls_today).toBeGreaterThanOrEqual(40);
+    await openStation(api);
+    const capped = await api.post(`/api/tenants/${tenantA}/calls/manual`, { headers: headers(sdrToken, tenantA), data: { phone: '5511988885555', numberId } });
+    expect(capped.ok()).toBeFalsy();
+    expect(JSON.stringify(await capped.json())).toContain('limite de ligações de hoje');
+    control.close();
+    await billingPool.query("DELETE FROM calls WHERE id LIKE 'e2e-cap-%'");
+    await billingPool.query('UPDATE whatsapp_numbers SET last_paired_at = NULL WHERE id = $1', [numberId]);
     await api.dispose();
   });
 });

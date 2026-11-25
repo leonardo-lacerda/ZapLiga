@@ -42,6 +42,12 @@ const server = http.createServer(async (request, response) => {
     return json(response, 200, { lid: `10000000000000@lid`, jid });
   }
   if (request.method === 'POST' && suffix === '/calls/terminate') return json(response, 200, { ok: true });
+  // The canary's message before its call (NumbersService.sendCanaryMessage).
+  if (request.method === 'POST' && suffix === '/messages/text') {
+    const body = await readBody(request);
+    if (!body.to || !body.text) return json(response, 400, { error: 'to and text are required' });
+    return json(response, 200, { status: 'sent', message_id: `fake-msg-${randomUUID()}`, timestamp: Math.floor(Date.now() / 1000) });
+  }
   return json(response, 404, { error: 'not_found' });
 });
 

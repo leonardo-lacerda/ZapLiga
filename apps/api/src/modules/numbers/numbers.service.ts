@@ -69,7 +69,8 @@ export class NumbersService {
     let createdSessionId: string | undefined;
     let persisted = false;
     try {
-      const waxumNode = node ?? await this.pickPcSlot();
+      // A PC that only just came online still takes a new line: never the VPS, and no wait.
+      const waxumNode = node ?? await this.pickPcSlot() ?? await this.pickPcSlot(false);
       if (!waxumNode) throw new BadRequestException(NO_PC_MESSAGE);
       const session = await this.createWaxumSession(label, waxumNode);
       createdSessionId = session.id;
@@ -285,16 +286,17 @@ export class NumbersService {
 
   /**
    * The PC slot a new line goes to, by the egress pool's own rule (EgressPoolService): the
-   * online PC with the fewest lines below "Números por PC".
+   * online PC with the fewest lines below "Números por PC". `steadyOnly = false` also takes a PC
+   * that has not yet been online for STEADY_ONLINE_SECONDS.
    */
-  private async pickPcSlot(): Promise<string | undefined> {
+  private async pickPcSlot(steadyOnly = true): Promise<string | undefined> {
     const result = await this.db.query(`
-      SELECT p.slot FROM egress_pcs p CROSS JOIN egress_settings s
+      SELECT p.slot FROM egress_pcs p LEFT JOIN egress_settings s ON true
       CROSS JOIN LATERAL (SELECT count(*)::int AS lines FROM whatsapp_numbers n WHERE n.waxum_node = p.slot AND n.status <> 'removed' AND n.phone IS NOT NULL) l
       WHERE p.slot IS NOT NULL AND p.route = 'pc' AND p.route_reported_at > now() - interval '1 minute'
-        AND p.online_since < now() - make_interval(secs => $1) AND l.lines < s.max_numbers_per_pc
+        AND (NOT $2::boolean OR p.online_since < now() - make_interval(secs => $1)) AND l.lines < COALESCE(s.max_numbers_per_pc, 5)
       ORDER BY l.lines, p.created_at LIMIT 1
-    `, [STEADY_ONLINE_SECONDS]);
+    `, [STEADY_ONLINE_SECONDS, steadyOnly]);
     return result.rows[0]?.slot as string | undefined;
   }
 
