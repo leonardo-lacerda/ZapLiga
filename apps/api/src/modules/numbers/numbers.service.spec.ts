@@ -173,3 +173,19 @@ describe('NumbersService QR code', () => {
     expect(payload.qr_codes).toEqual(['2@new']);
   });
 });
+
+describe('NumbersService passCanary', () => {
+  it('releases the line, records a human canary_passed event and tells the CRM', async () => {
+    const db = { query: jest.fn(async (sql: string) => (sql.startsWith('UPDATE') ? { rows: [{ id: 'n1', canary_status: 'passed' }] } : { rows: [] })) };
+    const audit = { record: jest.fn(async () => undefined) };
+    const crmEvents = { recordLine: jest.fn(async () => undefined) };
+    const service = new NumbersService(db as any, {} as any, audit as any, {} as any, {} as any, {} as any, crmEvents as any);
+
+    await expect(service.passCanary('t1', 'u1', 'n1', 'aquecida à mão')).resolves.toMatchObject({ canary_status: 'passed' });
+
+    const [, params] = db.query.mock.calls.find(([sql]: [string]) => sql.includes('number_health_events')) as unknown as [string, unknown[]];
+    expect(params).toEqual(['t1', 'n1', JSON.stringify({ manual: true, reason: 'aquecida à mão' })]);
+    expect(audit.record).toHaveBeenCalledWith(expect.objectContaining({ action: 'number.canary_passed', entityId: 'n1' }));
+    expect(crmEvents.recordLine).toHaveBeenCalledWith('t1', 'n1', 'number.updated');
+  });
+});

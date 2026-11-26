@@ -101,6 +101,12 @@ export class AdminController {
     return result;
   }
 
+  @Post('/tenants/:tenantId/numbers/:numberId/pass-canary')
+  @UseGuards(TenantMembershipGuard)
+  passNumberCanary(@Param('tenantId') tenantId: string, @Param('numberId') numberId: string, @Body() body: { reason?: string }, @CurrentUser() actor: any) {
+    return this.numbers.passCanary(tenantId, actor.id, numberId, typeof body?.reason === 'string' ? body.reason.slice(0, 300) : null);
+  }
+
   @Post('/tenants/:tenantId/numbers/:numberId/clear-cooldown')
   @UseGuards(TenantMembershipGuard)
   async clearNumberCooldown(@Param('tenantId') tenantId: string, @Param('numberId') numberId: string, @Body() body: { reason?: string }, @CurrentUser() actor: any) {

@@ -377,6 +377,20 @@ export class NumbersService {
   }
 
   /**
+   * An admin releases a line from its canary without the team-phone call (e.g. after warming it up
+   * by hand), so it may call leads. Recorded as a human `canary_passed` health event and audited.
+   */
+  async passCanary(tenantId: string, actorUserId: string, id: string, reason: string | null) {
+    const result = await this.db.query(`UPDATE whatsapp_numbers SET canary_status = 'passed' WHERE id = $1 AND tenant_id = $2 AND status <> 'removed' RETURNING *`, [id, tenantId]);
+    if (!result.rows[0]) throw new NotFoundException('Número não encontrado');
+    const metadata = { manual: true, reason };
+    await this.db.query(`INSERT INTO number_health_events (tenant_id, number_id, event_type, actor_type, metadata, occurred_at) VALUES ($1, $2, 'canary_passed', 'human', $3::jsonb, now())`, [tenantId, id, JSON.stringify(metadata)]);
+    await this.audit.record({ actorUserId, tenantId, action: 'number.canary_passed', entityType: 'whatsapp_number', entityId: id, metadata });
+    this.emitCrmLine(tenantId, id, 'number.updated');
+    return result.rows[0];
+  }
+
+  /**
    * First step of the canary (DialerService.manualCallWithInput with `canary`): the line texts a
    * team phone, so the call that follows is not a cold first contact. Returns that phone, which
    * the canary call must dial; the team phone least used by past canaries goes first.
