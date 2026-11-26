@@ -79,3 +79,21 @@ existem para ler o que ele responde em vez de adivinhar, e para corrigir o encer
 
 A API guarda os sinais em `call_signal_events` (migração 078, `CallSignalService`), com os ms desde
 a oferta (`calls.offer_sent_at`).
+
+## Envio só pelo relay que responde (imagem `0.12.6-multirelay-v6-relay-select`)
+
+Desde a correção do áudio mudo (`docs/postmortem-audio-unidirecional.md`), o Waxum manda cada
+pacote de áudio para **todos** os relays da oferta (o principal e uns 2 extras), porque o celular
+do lead escolhe o relay dele depois de atender. Isso triplica o envio. Numa linha que sai por
+proxy, que é cobrada por GB, ficava em ~3 MB por minuto de ligação.
+
+O patch `whatsapp-rust-relay-select.patch` (`RelayActivity`, `transport/native.rs`) passa a:
+
+- mandar para todos os relays até o áudio do lead chegar e por mais 3 s depois disso;
+- depois, mandar só para o relay por onde o áudio do lead chega (ele fala e escuta no mesmo);
+- voltar a mandar para todos na hora em que esse relay fica 1,5 s sem trazer áudio, e
+  seguir o lead se ele mudar de relay.
+
+Os extras continuam alocados e com consentimento renovado a cada segundo, para a volta ao envio
+para todos ser imediata. O log `voip: outbound media only to …` / `back to every relay` mostra
+cada troca. Se aparecer áudio mudo do lado do lead, a volta é a imagem `v5-signal`.

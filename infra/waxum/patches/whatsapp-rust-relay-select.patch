@@ -1,0 +1,234 @@
+--- a/src/voip/transport/native.rs	2026-11-26 03:16:43.088287906 +0100
++++ b/src/voip/transport/native.rs	2026-11-26 03:16:43.093287883 +0100
+@@ -16,6 +16,7 @@
+ use std::net::SocketAddr;
+ use std::pin::Pin;
+ use std::sync::Arc;
++use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+ use std::time::Instant;
+ 
+ use anyhow::{Context, Result, anyhow, bail};
+@@ -943,6 +944,89 @@
+ /// endpoints the engine never learns about.
+ const EXTRA_RELAY_KEEPALIVE: std::time::Duration = std::time::Duration::from_secs(1);
+ 
++/// After the first inbound media packet, outbound media keeps going to every relay this long, so the
++/// answering device has settled on the relay it elected before we stop covering the others.
++const ACTIVE_RELAY_SETTLE_MS: u64 = 3_000;
++/// The relay that carries the peer's media stops being trusted once it has delivered nothing for
++/// this long: outbound media goes to every relay again until one delivers.
++const ACTIVE_RELAY_STALE_MS: u64 = 1_500;
++/// Route index of the primary relay in [`RelayActivity`]; extra relay `i` is route `i + 1`.
++const PRIMARY_ROUTE: usize = 0;
++const BROADCAST_ROUTE: usize = usize::MAX;
++
++/// Which relay the peer's media arrives on, and when.
++///
++/// # Why
++///
++/// Broadcasting every outbound RTP/RTCP packet to every bound relay (see
++/// [`MultiRelayMediaChannelFactory`]) fixed one-way audio but multiplies the outbound bandwidth by
++/// the number of relays -- on a metered residential proxy that is most of a call's cost. The
++/// answering device sends and listens on the one relay it elected, so once its media is seen
++/// arriving on a relay, our media only needs to go there. Until then, during a short settle window,
++/// and whenever that relay goes quiet, outbound falls back to the full broadcast -- the exact
++/// behaviour that fixed one-way audio -- so the saving never costs the call its audio path.
++struct RelayActivity {
++    started: Instant,
++    /// Milliseconds since `started` (+1, so 0 means never) of the first inbound media packet.
++    first_media_ms: AtomicU64,
++    /// Per route, milliseconds since `started` (+1; 0 = never) of the latest inbound media packet.
++    last_media_ms: Vec<AtomicU64>,
++    /// Route outbound media went to last time, only to log changes.
++    chosen: AtomicUsize,
++}
++
++impl RelayActivity {
++    fn new(routes: usize) -> Self {
++        Self {
++            started: Instant::now(),
++            first_media_ms: AtomicU64::new(0),
++            last_media_ms: (0..routes).map(|_| AtomicU64::new(0)).collect(),
++            chosen: AtomicUsize::new(BROADCAST_ROUTE),
++        }
++    }
++
++    fn now_ms(&self) -> u64 {
++        self.started.elapsed().as_millis() as u64 + 1
++    }
++
++    fn media_from(&self, route: usize) {
++        self.media_from_at(route, self.now_ms());
++    }
++
++    fn media_from_at(&self, route: usize, now_ms: u64) {
++        self.last_media_ms[route].store(now_ms, Ordering::Relaxed);
++        let _ = self
++            .first_media_ms
++            .compare_exchange(0, now_ms, Ordering::Relaxed, Ordering::Relaxed);
++    }
++
++    /// The one route outbound media should take at `now_ms`, or `None` to broadcast.
++    fn active_at(&self, now_ms: u64) -> Option<usize> {
++        let first = self.first_media_ms.load(Ordering::Relaxed);
++        if first == 0 || now_ms < first + ACTIVE_RELAY_SETTLE_MS {
++            return None;
++        }
++        let (route, last) = self
++            .last_media_ms
++            .iter()
++            .map(|at| at.load(Ordering::Relaxed))
++            .enumerate()
++            .max_by_key(|&(_, at)| at)?;
++        (last != 0 && now_ms.saturating_sub(last) <= ACTIVE_RELAY_STALE_MS).then_some(route)
++    }
++
++    fn note_choice(&self, route: Option<usize>) {
++        let route = route.unwrap_or(BROADCAST_ROUTE);
++        if self.chosen.swap(route, Ordering::Relaxed) != route {
++            match route {
++                BROADCAST_ROUTE => log::info!("voip: outbound media back to every relay"),
++                PRIMARY_ROUTE => log::info!("voip: outbound media only to the primary relay"),
++                extra => log::info!("voip: outbound media only to extra relay #{extra}"),
++            }
++        }
++    }
++}
++
+ /// A [`RelayTransportFactory`] that binds the primary relay endpoint the engine selected plus every
+ /// other usable relay the offer carried, and presents the lot to the engine as one
+ /// [`RelayTransport`].
+@@ -1014,13 +1098,20 @@
+ 
+         let (merged_tx, merged_rx) = async_channel::bounded(RELAY_EVENT_CAP);
+         let mut tasks = Vec::with_capacity(1 + self.extras.len());
++        let activity = Arc::new(RelayActivity::new(1 + self.extras.len()));
+ 
+         // Pass the primary's own events straight through -- it stays the stream the call's
+         // Connected/Disconnected state and its media come from.
+         {
+             let merged_tx = merged_tx.clone();
++            let activity = activity.clone();
+             tasks.push(self.runtime.spawn(Box::pin(async move {
+                 while let Ok(event) = primary_events.recv().await {
++                    if let RelayTransportEvent::PacketReceived(bytes) = &event
++                        && matches!(classify_relay_packet(bytes), RelayPacketKind::Rtp | RelayPacketKind::Rtcp)
++                    {
++                        activity.media_from(PRIMARY_ROUTE);
++                    }
+                     if merged_tx.send(event).await.is_err() {
+                         return;
+                     }
+@@ -1037,7 +1128,7 @@
+             );
+         }
+         let mut extra_outbound = Vec::with_capacity(self.extras.len());
+-        for extra in &self.extras {
++        for (index, extra) in self.extras.iter().enumerate() {
+             let (outbound_tx, outbound_rx) = async_channel::bounded(RELAY_SEND_CAP);
+             extra_outbound.push(outbound_tx);
+             tasks.push(self.runtime.spawn(Box::pin(drive_extra_relay(
+@@ -1046,6 +1137,8 @@
+                 self.runtime.clone(),
+                 outbound_rx,
+                 merged_tx.clone(),
++                activity.clone(),
++                index + 1,
+             ))));
+         }
+ 
+@@ -1053,6 +1146,7 @@
+             Arc::new(MultiRelayTransport {
+                 primary,
+                 extra_outbound,
++                activity,
+                 _tasks: tasks,
+             }),
+             merged_rx,
+@@ -1071,6 +1165,8 @@
+     runtime: Arc<dyn Runtime>,
+     outbound: async_channel::Receiver<Bytes>,
+     merged_tx: async_channel::Sender<RelayTransportEvent>,
++    activity: Arc<RelayActivity>,
++    route: usize,
+ ) {
+     // Same dial as the primary (advertised port raced against the web-client port): a host that
+     // only answers on 3480 would otherwise never be bound as an extra, and if the answering
+@@ -1146,6 +1242,7 @@
+                         match classify_relay_packet(&bytes) {
+                             RelayPacketKind::Rtp | RelayPacketKind::Rtcp => {
+                                 media_in += 1;
++                                activity.media_from(route);
+                                 if !first_media_logged {
+                                     first_media_logged = true;
+                                     log::info!("voip: extra relay {addr}: first inbound media packet");
+@@ -1187,12 +1284,14 @@
+     }
+ }
+ 
+-/// Broadcasts RTP/RTCP to the primary relay and every bound extra; everything else -- the engine's
+-/// own STUN allocate/consent for the primary -- goes only to the primary, the one relay that state
++/// Sends RTP/RTCP to the one relay the peer's media arrives on (see [`RelayActivity`]), or to the
++/// primary relay and every bound extra while that is not known; everything else -- the engine's own
++/// STUN allocate/consent for the primary -- goes only to the primary, the one relay that state
+ /// machine actually tracks.
+ struct MultiRelayTransport {
+     primary: Arc<dyn RelayTransport>,
+     extra_outbound: Vec<async_channel::Sender<Bytes>>,
++    activity: Arc<RelayActivity>,
+     /// Keeps the primary-event-forwarder and extra-relay driver tasks alive: each aborts on its own
+     /// `Drop` (see `Runtime::spawn`'s contract) once this transport itself is dropped, mirroring how
+     /// `RelayMediaChannel` holds its own driver's handle.
+@@ -1206,10 +1305,21 @@
+             classify_relay_packet(&data),
+             RelayPacketKind::Rtp | RelayPacketKind::Rtcp
+         ) {
+-            for tx in &self.extra_outbound {
+-                // Best-effort and non-blocking: one slow or gone extra relay must never hold up the
+-                // call's own send, which still has to reach the primary below.
+-                let _ = tx.try_send(data.clone());
++            let active = self.activity.active_at(self.activity.now_ms());
++            self.activity.note_choice(active);
++            match active {
++                Some(PRIMARY_ROUTE) => {}
++                Some(route) => {
++                    let _ = self.extra_outbound[route - 1].try_send(data);
++                    return Ok(());
++                }
++                None => {
++                    for tx in &self.extra_outbound {
++                        // Best-effort and non-blocking: one slow or gone extra relay must never hold
++                        // up the call's own send, which still has to reach the primary below.
++                        let _ = tx.try_send(data.clone());
++                    }
++                }
+             }
+         }
+         self.primary.send(data).await
+@@ -1230,6 +1340,26 @@
+     /// A relay that advertises 3478 must try the bidirectional web-client port first, keeping the
+     /// advertised port only as a delayed compatibility fallback.
+     #[test]
++    fn outbound_media_follows_the_relay_the_peer_answers_on() {
++        let activity = RelayActivity::new(3);
++        // Nothing heard yet: broadcast.
++        assert_eq!(activity.active_at(10_000), None);
++
++        activity.media_from_at(2, 1_000);
++        // Still settling: broadcast.
++        assert_eq!(activity.active_at(1_000 + ACTIVE_RELAY_SETTLE_MS - 1), None);
++        activity.media_from_at(2, 4_000);
++        assert_eq!(activity.active_at(4_000), Some(2));
++
++        // The peer moves to the primary: follow it.
++        activity.media_from_at(PRIMARY_ROUTE, 5_000);
++        assert_eq!(activity.active_at(5_100), Some(PRIMARY_ROUTE));
++
++        // The peer goes quiet: back to every relay.
++        assert_eq!(activity.active_at(5_000 + ACTIVE_RELAY_STALE_MS + 1), None);
++    }
++
++    #[test]
+     fn dial_candidates_adds_the_web_client_port() {
+         let advertised: SocketAddr = "57.144.43.57:3478".parse().unwrap();
+         assert_eq!(

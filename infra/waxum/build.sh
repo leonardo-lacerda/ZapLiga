@@ -13,12 +13,12 @@
 #   docker save zapliga-waxum:<tag> | gzip | ssh root@<vps> 'gunzip | docker load'
 #
 # Usage:
-#   infra/waxum/build.sh [tag]            # default tag: 0.12.6-multirelay-v5-signal
+#   infra/waxum/build.sh [tag]            # default tag: 0.12.6-multirelay-v6-relay-select
 #   WORKDIR=/some/dir infra/waxum/build.sh # keep the assembled source around
 #
 set -euo pipefail
 
-TAG="${1:-0.12.6-multirelay-v5-signal}"
+TAG="${1:-0.12.6-multirelay-v6-relay-select}"
 IMAGE="zapliga-waxum:${TAG}"
 
 # Pinned upstream sources. Bumping either means regenerating the patches:
@@ -33,7 +33,7 @@ PATCHES="${HERE}/patches"
 WORKDIR="${WORKDIR:-$(mktemp -d -t zapliga-waxum-build-XXXXXX)}"
 SRC="${WORKDIR}/waxum"
 
-for f in whatsapp-rust-zapliga.patch whatsapp-rust-call-codec.patch whatsapp-rust-zapliga-signal.patch waxum-zapliga.patch waxum-call-codec.patch waxum-zapliga-signal.patch; do
+for f in whatsapp-rust-zapliga.patch whatsapp-rust-call-codec.patch whatsapp-rust-zapliga-signal.patch whatsapp-rust-relay-select.patch waxum-zapliga.patch waxum-call-codec.patch waxum-zapliga-signal.patch; do
   [ -s "${PATCHES}/${f}" ] || { echo "patch ausente: ${PATCHES}/${f}" >&2; exit 1; }
 done
 command -v docker >/dev/null || { echo "docker nao encontrado" >&2; exit 1; }
@@ -67,6 +67,9 @@ echo "==> Applying patches"
 # Logs what every call offer carries and every answer to it (target zapliga.call), and lets a
 # single call choose its codec (the canary A/B); docs/waxum-version.md.
 (cd "${SRC}/whatsapp-rust" && patch -p1 --forward < "${PATCHES}/whatsapp-rust-zapliga-signal.patch")
+# Once the peer's media is seen on one relay, outbound media goes only there instead of to every
+# relay (back to all of them while settling or when it goes quiet): cuts the call's bandwidth.
+(cd "${SRC}/whatsapp-rust" && patch -p1 --forward < "${PATCHES}/whatsapp-rust-relay-select.patch")
 # waxum-zapliga.patch was cut from a Windows (CRLF) checkout; a Linux checkout is
 # LF, so give the files it touches CRLF first or every hunk is rejected.
 for f in Cargo.lock Cargo.toml Dockerfile docker-entrypoint.sh src/handlers/mex.rs; do
@@ -87,6 +90,8 @@ grep -q 'get_usable_relay_endpoints' "${SRC}/whatsapp-rust/wacore/src/voip/relay
   || { echo "patch nao trouxe get_usable_relay_endpoints; fonte incompleta" >&2; exit 1; }
 grep -q 'audio_with_config' "${SRC}/whatsapp-rust/src/voip/facade.rs" \
   || { echo "patch nao trouxe audio_with_config; fonte incompleta" >&2; exit 1; }
+grep -q 'struct RelayActivity' "${SRC}/whatsapp-rust/src/voip/transport/native.rs" \
+  || { echo "patch nao trouxe RelayActivity; fonte incompleta" >&2; exit 1; }
 grep -q 'lock_session_storage' "${SRC}/src/handlers/sessions.rs" \
   || { echo "patch nao trouxe lock_session_storage; fonte incompleta" >&2; exit 1; }
 
