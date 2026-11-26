@@ -625,20 +625,20 @@ test.describe.serial('Gate B - jornadas criticas', () => {
     expect(losses.length).toBeGreaterThanOrEqual(3);
   });
 
-  test('18. limite diario: linha pareada ha poucos dias para em 40 ligacoes no dia', async () => {
+  test('18. limite diario: linha pareada ha poucos dias para em 60 ligacoes no dia', async () => {
     const api = await context();
     await billingPool.query('UPDATE whatsapp_numbers SET last_paired_at = now() WHERE id = $1', [numberId]);
     const copies = await billingPool.query(`
       INSERT INTO calls SELECT (jsonb_populate_record(c, jsonb_build_object('id', 'e2e-cap-' || g || '-' || c.id, 'status', 'completed', 'created_at', now(), 'canary', false))).*
-      FROM calls c, generate_series(1, 40) g WHERE c.id = $1 RETURNING id
+      FROM calls c, generate_series(1, 60) g WHERE c.id = $1 RETURNING id
     `, [canaryCallId]);
-    expect(copies.rowCount).toBe(40);
+    expect(copies.rowCount).toBe(60);
     // A lista de números fica 1,5 s em cache: espera o dado novo.
     const listed = await waitFor(async () => {
       const item = (await expectOk(await api.get(`/api/tenants/${tenantA}/numbers`, { headers: headers(leaderToken, tenantA) }))).items.find((row: any) => row.id === numberId);
       return item.young ? item : false;
     }, 'linha jovem na lista');
-    expect(listed.calls_today).toBeGreaterThanOrEqual(40);
+    expect(listed.calls_today).toBeGreaterThanOrEqual(60);
     await openStation(api);
     const capped = await api.post(`/api/tenants/${tenantA}/calls/manual`, { headers: headers(sdrToken, tenantA), data: { phone: '5511988885555', numberId } });
     expect(capped.ok()).toBeFalsy();
