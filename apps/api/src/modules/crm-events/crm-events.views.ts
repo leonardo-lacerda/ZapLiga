@@ -1,4 +1,4 @@
-import { MANUAL_CALLS_PER_LINE } from '../dialer/dialer.rules';
+import { MANUAL_CALLS_PER_LINE, lineUnderDailyCapSql } from '../dialer/dialer.rules';
 
 /**
  * Shapes shared by the CRM integration API responses and the webhook events, so the CRM sees the
@@ -14,8 +14,18 @@ export const LINE_SELECT = `SELECT n.*,
   (SELECT max(c.created_at) FROM calls c WHERE c.tenant_id = n.tenant_id AND c.number_id = n.id) AS last_call_at,
   (SELECT count(*)::int FROM calls c WHERE c.tenant_id = n.tenant_id AND c.number_id = n.id AND c.created_at > now() - interval '24 hours') AS calls_24h,
   (SELECT count(*)::int FROM calls c WHERE c.tenant_id = n.tenant_id AND c.number_id = n.id AND c.created_at > now() - interval '24 hours'
-     AND c.status = 'failed' AND coalesce(c.failure_reason, '') NOT LIKE 'sem_whatsapp%') AS failed_calls_24h
+     AND c.status = 'failed' AND coalesce(c.failure_reason, '') NOT LIKE 'sem_whatsapp%') AS failed_calls_24h,
+  ${lineUnderDailyCapSql('n')} AS under_daily_cap
   FROM whatsapp_numbers n`;
+
+// Why the line may not call leads right now even though it is connected and rested: it still has to
+// pass its canary (the first call after a QR goes to a team phone) or it reached the young-line
+// daily cap. The CRM skips such a line instead of having the call refused.
+const leadCallsBlocked = (row: any) => {
+  if (row.canary_status && row.canary_status !== 'passed') return 'canary_pending';
+  if (row.under_daily_cap === false) return 'daily_cap';
+  return null;
+};
 
 export const lineView = (row: any) => {
   const quarantinedUntil = futureIso(row.flagged_until);
@@ -25,6 +35,7 @@ export const lineView = (row: any) => {
     verification_only: Boolean(row.verification_only),
     available_at: quarantinedUntil ?? futureIso(row.last_call_ended_at),
     quarantined_until: quarantinedUntil,
+    lead_calls_blocked: leadCallsBlocked(row),
     protection: { cooldown_seconds: row.cooldown_seconds, max_calls_per_window: row.max_calls_per_window, call_window_seconds: row.call_window_seconds, max_concurrent_calls: row.max_concurrent_calls },
     // Only rows read through LINE_SELECT know their usage; the others leave it out rather than report zeros
     ...('calls_24h' in row ? { usage: {

@@ -58,6 +58,12 @@ describe('CrmEventsService recording', () => {
     expect(lineView({ id: 'num-1', status: 'connected', last_call_at: null, calls_24h: 0, failed_calls_24h: 0 }).usage).toEqual({ last_call_at: null, calls_24h: 0, failed_calls_24h: 0 });
   });
 
+  it('tells the CRM why a connected line may not call leads yet', () => {
+    expect(lineView({ id: 'n', canary_status: 'pending', under_daily_cap: true }).lead_calls_blocked).toBe('canary_pending');
+    expect(lineView({ id: 'n', canary_status: 'passed', under_daily_cap: false }).lead_calls_blocked).toBe('daily_cap');
+    expect(lineView({ id: 'n', canary_status: 'passed', under_daily_cap: true }).lead_calls_blocked).toBeNull();
+  });
+
   it('skips the line lookup when the tenant has no connected integration', async () => {
     const { service, db } = makeService();
     await service.recordLine('tenant-1', 'num-1', 'number.removed');

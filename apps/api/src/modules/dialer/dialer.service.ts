@@ -2100,6 +2100,7 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
     this.log(passed ? `Canário aprovado: ${line.label} liberada para ligar para leads` : `Canário reprovado: ${line.label} descansa ${CANARY_RETRY_HOURS} h antes de tentar de novo`, passed ? 'info' : 'warning', callId, tenantId);
     this.gateway.sendToSdr(sdrId, { type: 'canary_result', callId, numberId, result: passed ? 'passed' : 'failed' });
     this.notifyOperationsChanged(tenantId, 'canary_finished', { kind: passed ? 'canary_passed' : 'canary_failed', numberId, label: line.label });
+    this.emitCrmLine(tenantId, numberId, 'number.status_changed');
   }
 
   async finishCall(callId: string, status: string, reason?: string, forceNoRetry = false, tenantId = legacyTenantId()) {
