@@ -370,6 +370,8 @@ services:
 
   waxum-edge-4:
     <<: *edge-waxum
+    # Kept on v4 while its lines move, one at a time and only when idle, to the v7 edges; then v7 too.
+    image: zapliga-waxum:0.12.6-multirelay-v4-opus
     network_mode: service:tailscale-edge-4
     environment:
       <<: *edge-waxum-environment
