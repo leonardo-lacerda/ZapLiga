@@ -344,6 +344,9 @@ services:
 
   waxum-edge-3:
     <<: *edge-waxum
+    # v8 first here: the identity per line, saved with the session (docs/stealth-profile.md). The
+    # other edges stay on v7 until a real call on edge-3 validates it.
+    image: zapliga-waxum:0.12.6-multirelay-v8-identity
     network_mode: service:tailscale-edge-3
     environment:
       <<: *edge-waxum-environment
