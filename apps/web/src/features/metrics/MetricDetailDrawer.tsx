@@ -67,6 +67,7 @@ export function MetricDetailDrawer({ target, baseParams, onClose, onApplyAsFilte
             <Badge tone={STATUS_TONE[call.status] ?? 'neutral'}>{labelStatus(call.status)}</Badge>
             {call.callResult && <Badge tone="info">{labelFor(CALL_RESULT_OPTIONS, call.callResult)}</Badge>}
             {call.pipelineStage && <Badge tone="purple">{labelFor(PIPELINE_STAGE_OPTIONS, call.pipelineStage)}</Badge>}
+            {call.ringDurationSeconds != null && <span className="metrics-drawer-duration">Toque {formatSecondsShort(call.ringDurationSeconds)}</span>}
             <span className="metrics-drawer-duration">{formatSecondsShort(call.connectedDurationSeconds ?? 0)}</span>
           </div>
           {call.failureReason && <div className="metrics-drawer-item-note">Falha: {formatCallReason(call.failureReason)}</div>}

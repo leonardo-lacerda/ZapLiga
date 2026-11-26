@@ -68,7 +68,7 @@ export const METRICS_EVENT_MAP = {
   'calls.connected_at': 'Chamada atendida pelo lead',
   'calls.ended_at': 'Chamada encerrada (qualquer desfecho)',
   'calls.duration_seconds': 'Duração total da chamada (toque + conexão) — mantido por compatibilidade',
-  'calls.ring_duration_seconds': 'Duração do toque, do início da discagem até atender ou desistir (migration 018)',
+  'calls.ring_duration_seconds': 'Duração do toque, da oferta enviada ao WhatsApp (offer_sent_at) até atender ou desistir (migrations 018 e 080)',
   'calls.connected_duration_seconds': 'Duração da conversa, da conexão até o encerramento (migration 018)',
   'calls.wrap_up_completed_at': 'SDR concluiu o pós-atendimento (registro de resultado/etapa)',
   'calls.call_result': 'Resultado comercial declarado no pós-atendimento',

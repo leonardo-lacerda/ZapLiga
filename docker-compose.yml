@@ -573,7 +573,9 @@ services:
 
   waxum-proxy-edge-1:
     <<: *edge-waxum
-    image: zapliga-waxum:0.12.6-multirelay-v5-signal
+    # Sends call media only to the relay the lead answers on (docs/waxum-version.md): the proxy is
+    # billed per GB. Edge PCs stay on v5-signal until this one is proven on real calls.
+    image: zapliga-waxum:0.12.6-multirelay-v6-relay-select
     network_mode: service:proxy-edge-1
     environment:
       <<: *edge-waxum-environment
