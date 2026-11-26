@@ -107,3 +107,24 @@ transporte multirelay classificava o pacote cru, e `0x09` tem os dois bits altos
 STUN. Assim o relay do lead nunca era reconhecido (o envio continuava para todos) e os relays extras
 descartavam a mídia que recebiam. A v7 tira o envelope antes de classificar
 (`inbound_relay_packet_kind`).
+
+## Identidade por linha (imagem `0.12.6-multirelay-v8-identity`)
+
+Até a v7 a identidade vinha do ambiente do contêiner: o edge-1 registrava as linhas como Chrome e
+fazia login em pt-BR, os outros como Desktop e en-US. Quando o pool trocava uma linha de PC, o login
+dela mudava de idioma no meio da vida do aparelho. O patch `waxum-zapliga-identity.patch`:
+
+- aceita `client_profile: { locale }` (e `{ reset: true }`) ao lado do `device` já existente em
+  `POST /sessions`, `/sessions/{id}/connect` e `/sessions/{id}/pair`;
+- grava o que a linha pediu em `{sessão}/zapliga-identity.json`, no volume compartilhado: a
+  identidade acompanha a linha em toda troca de PC e em todo restart, sem depender da API;
+- precedência: o pedido, o arquivo da sessão, o ambiente (`WA_DEVICE_*`, `WA_CLIENT_*`), o padrão da
+  biblioteca. Sessão que nunca pediu identidade sobe exatamente como na v7;
+- `WA_SESSION_IDENTITY=off` ignora os arquivos e o `client_profile` dos pedidos (o `device` do
+  pedido segue valendo, como antes);
+- publica `wa.events.<sessão>.call_ack`: o ack do servidor (`id`, `from`, `error`, ex.: `463`) de
+  cada stanza de ligação nossa, a oferta incluída. A API grava em `call_signal_events`.
+
+Quem decide a identidade de cada linha é a API (`docs/stealth-profile.md`). Primeiro só no edge-3:
+enquanto os outros edges estiverem na v7, uma linha com a opção que for movida para eles volta ao
+login do ambiente.

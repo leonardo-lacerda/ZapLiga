@@ -13,12 +13,12 @@
 #   docker save zapliga-waxum:<tag> | gzip | ssh root@<vps> 'gunzip | docker load'
 #
 # Usage:
-#   infra/waxum/build.sh [tag]            # default tag: 0.12.6-multirelay-v7-relay-unwrap
+#   infra/waxum/build.sh [tag]            # default tag: 0.12.6-multirelay-v8-identity
 #   WORKDIR=/some/dir infra/waxum/build.sh # keep the assembled source around
 #
 set -euo pipefail
 
-TAG="${1:-0.12.6-multirelay-v7-relay-unwrap}"
+TAG="${1:-0.12.6-multirelay-v8-identity}"
 IMAGE="zapliga-waxum:${TAG}"
 
 # Pinned upstream sources. Bumping either means regenerating the patches:
@@ -33,7 +33,7 @@ PATCHES="${HERE}/patches"
 WORKDIR="${WORKDIR:-$(mktemp -d -t zapliga-waxum-build-XXXXXX)}"
 SRC="${WORKDIR}/waxum"
 
-for f in whatsapp-rust-zapliga.patch whatsapp-rust-call-codec.patch whatsapp-rust-zapliga-signal.patch whatsapp-rust-relay-select.patch waxum-zapliga.patch waxum-call-codec.patch waxum-zapliga-signal.patch; do
+for f in whatsapp-rust-zapliga.patch whatsapp-rust-call-codec.patch whatsapp-rust-zapliga-signal.patch whatsapp-rust-relay-select.patch waxum-zapliga.patch waxum-call-codec.patch waxum-zapliga-signal.patch waxum-zapliga-identity.patch; do
   [ -s "${PATCHES}/${f}" ] || { echo "patch ausente: ${PATCHES}/${f}" >&2; exit 1; }
 done
 command -v docker >/dev/null || { echo "docker nao encontrado" >&2; exit 1; }
@@ -81,6 +81,10 @@ sed -i 's/\r$//' "${SRC}/docker-entrypoint.sh" "${SRC}/Dockerfile"
 # Publishes the cause of every logout, terminates with our own call creator once, takes a
 # per-session lock and reads the handshake profile from the environment; docs/waxum-version.md.
 (cd "${SRC}" && patch -p1 --forward < "${PATCHES}/waxum-zapliga-signal.patch")
+# The identity (registration props and login locale) per line instead of per container, saved with
+# the session so it follows the line across Waxums, and the server's acks of call stanzas published
+# as `call_ack`; docs/stealth-profile.md.
+(cd "${SRC}" && patch -p1 --forward < "${PATCHES}/waxum-zapliga-identity.patch")
 head -c 12 "${SRC}/docker-entrypoint.sh" | grep -q '#!/bin/sh' || { echo "docker-entrypoint.sh invalido apos patch" >&2; exit 1; }
 
 echo "==> Sanity: the multi-relay fix must be present"
@@ -94,6 +98,8 @@ grep -q 'struct RelayActivity' "${SRC}/whatsapp-rust/src/voip/transport/native.r
   || { echo "patch nao trouxe RelayActivity; fonte incompleta" >&2; exit 1; }
 grep -q 'lock_session_storage' "${SRC}/src/handlers/sessions.rs" \
   || { echo "patch nao trouxe lock_session_storage; fonte incompleta" >&2; exit 1; }
+grep -q 'zapliga-identity.json' "${SRC}/src/device_props.rs" \
+  || { echo "patch nao trouxe a identidade por sessao; fonte incompleta" >&2; exit 1; }
 
 echo "==> Building ${IMAGE} (release, LTO off in Dockerfile; expect 10-45 min cold)"
 docker build --progress=plain -t "${IMAGE}" "${SRC}"

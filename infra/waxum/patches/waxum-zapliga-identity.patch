@@ -1,0 +1,658 @@
+diff -ruN a/src/console/handlers.rs b/src/console/handlers.rs
+--- a/src/console/handlers.rs	2026-11-26 21:50:37.758619542 +0100
++++ b/src/console/handlers.rs	2026-11-26 22:41:26.342045056 +0100
+@@ -466,6 +466,7 @@
+         reuse: None,
+         webhook: None,
+         device: None,
++        client_profile: None,
+     };
+ 
+     match crate::handlers::sessions::create_session(State(state), Json(create_req)).await {
+diff -ruN a/src/device_props.rs b/src/device_props.rs
+--- a/src/device_props.rs	2026-11-26 21:50:40.478607313 +0100
++++ b/src/device_props.rs	2026-11-26 22:13:14.911438672 +0100
+@@ -50,15 +50,156 @@
+         profile.os_version = os_version.trim().to_string();
+     }
+     if let Some(locale) = locale {
+-        let mut parts = locale.trim().split(|c| c == '_' || c == '-');
+-        if let Some(language) = parts.next().filter(|part| !part.is_empty()) {
+-            profile.locale_language = language.to_ascii_lowercase();
++        apply_locale(&mut profile, &locale);
++    }
++    Some(profile)
++}
++
++/// `pt_BR` / `pt-BR` into the profile's ISO-639-1 language and ISO-3166 country.
++fn apply_locale(profile: &mut wacore::client_profile::ClientProfile, locale: &str) {
++    let mut parts = locale.trim().split(|c| c == '_' || c == '-');
++    if let Some(language) = parts.next().filter(|part| !part.is_empty()) {
++        profile.locale_language = language.to_ascii_lowercase();
++    }
++    if let Some(country) = parts.next().filter(|part| !part.is_empty()) {
++        profile.locale_country = country.to_ascii_uppercase();
++    }
++}
++
++/// ZapLiga: what one connect, pairing or adoption asks for (both optional).
++#[derive(Debug, Clone, Default)]
++pub struct IdentityRequest {
++    pub device: Option<crate::models::sessions::DevicePropsRequest>,
++    pub client_profile: Option<crate::models::sessions::ClientProfileRequest>,
++}
++
++/// The identity a client is built with: registration props (sent only when pairing) and the
++/// handshake profile (sent on every login; `None` keeps the library's web profile).
++#[derive(Debug, Clone)]
++pub struct ResolvedIdentity {
++    pub device: ResolvedDeviceProps,
++    pub client_profile: Option<wacore::client_profile::ClientProfile>,
++}
++
++/// File, next to the session's keys, with the identity the line asked for. Every Waxum mounts
++/// the same session volume, so it follows the line when the egress pool moves it.
++const IDENTITY_FILE: &str = "zapliga-identity.json";
++
++#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
++struct SavedIdentity {
++    #[serde(default, skip_serializing_if = "Option::is_none")]
++    device_os: Option<String>,
++    #[serde(default, skip_serializing_if = "Option::is_none")]
++    device_platform: Option<String>,
++    #[serde(default, skip_serializing_if = "Option::is_none")]
++    device_version: Option<String>,
++    #[serde(default, skip_serializing_if = "Option::is_none")]
++    locale: Option<String>,
++}
++
++/// ZapLiga: the identity of a session, per line instead of per container (docs/stealth-profile.md).
++/// Precedence: the request, then the identity saved with the session, then the env
++/// (`WA_DEVICE_*`, `WA_CLIENT_*`), then the library default. A request's identity is saved;
++/// `client_profile.reset` deletes it. A session that never asked for one builds exactly as before.
++/// `WA_SESSION_IDENTITY=off` (killswitch) ignores the saved identity and the request's
++/// `client_profile`, as before this existed; the request's `device` still applies, as it always did.
++pub fn resolve_session_identity(storage_path: &str, request: &IdentityRequest) -> ResolvedIdentity {
++    let enabled = std::env::var("WA_SESSION_IDENTITY")
++        .map(|value| !value.trim().eq_ignore_ascii_case("off"))
++        .unwrap_or(true);
++    resolve_session_identity_with(storage_path, request, enabled)
++}
++
++fn resolve_session_identity_with(
++    storage_path: &str,
++    request: &IdentityRequest,
++    enabled: bool,
++) -> ResolvedIdentity {
++    let saved = if enabled {
++        update_saved_identity(&std::path::Path::new(storage_path).join(IDENTITY_FILE), request)
++    } else {
++        SavedIdentity::default()
++    };
++    let device = request.device.as_ref();
++    let pick = |requested: Option<&str>, saved: &Option<String>| {
++        requested.and_then(non_empty).map(str::to_string).or_else(|| saved.clone())
++    };
++    let os = pick(device.and_then(|d| d.os.as_deref()), &saved.device_os);
++    let platform = pick(device.and_then(|d| d.platform.as_deref()), &saved.device_platform);
++    let version = pick(device.and_then(|d| d.version.as_deref()), &saved.device_version);
++    let client_profile = match saved.locale.as_deref() {
++        Some(locale) => {
++            let mut profile = client_profile_from_env()
++                .unwrap_or_else(wacore::client_profile::ClientProfile::web);
++            apply_locale(&mut profile, locale);
++            Some(profile)
+         }
+-        if let Some(country) = parts.next().filter(|part| !part.is_empty()) {
+-            profile.locale_country = country.to_ascii_uppercase();
++        None => client_profile_from_env(),
++    };
++    ResolvedIdentity {
++        device: resolve_with_override(os.as_deref(), platform.as_deref(), version.as_deref()),
++        client_profile,
++    }
++}
++
++/// Applies the request to the saved identity and writes it back when it changed.
++fn update_saved_identity(path: &std::path::Path, request: &IdentityRequest) -> SavedIdentity {
++    let reset = request.client_profile.as_ref().is_some_and(|c| c.reset);
++    let saved = if reset {
++        if let Err(e) = std::fs::remove_file(path) {
++            if e.kind() != std::io::ErrorKind::NotFound {
++                tracing::warn!("identity {}: not removed: {}", path.display(), e);
++            }
+         }
++        SavedIdentity::default()
++    } else {
++        read_saved_identity(path)
++    };
++    let mut next = saved.clone();
++    let set = |field: &mut Option<String>, value: Option<&str>| {
++        if let Some(value) = value.and_then(non_empty) {
++            *field = Some(value.to_string());
++        }
++    };
++    if let Some(device) = &request.device {
++        set(&mut next.device_os, device.os.as_deref());
++        set(&mut next.device_platform, device.platform.as_deref());
++        set(&mut next.device_version, device.version.as_deref());
++    }
++    if let Some(client) = &request.client_profile {
++        set(&mut next.locale, client.locale.as_deref());
++    }
++    if next != saved {
++        write_saved_identity(path, &next);
++    }
++    next
++}
++
++/// A missing or unreadable file is no identity: the line still connects, on the env defaults.
++fn read_saved_identity(path: &std::path::Path) -> SavedIdentity {
++    match std::fs::read(path) {
++        Ok(bytes) => serde_json::from_slice(&bytes).unwrap_or_else(|e| {
++            tracing::warn!("identity {}: unreadable, ignored: {}", path.display(), e);
++            SavedIdentity::default()
++        }),
++        Err(e) if e.kind() == std::io::ErrorKind::NotFound => SavedIdentity::default(),
++        Err(e) => {
++            tracing::warn!("identity {}: unreadable, ignored: {}", path.display(), e);
++            SavedIdentity::default()
++        }
++    }
++}
++
++/// Written to a temporary file and renamed, so a reader never sees half of it.
++fn write_saved_identity(path: &std::path::Path, identity: &SavedIdentity) {
++    let tmp = path.with_extension("json.tmp");
++    let result = serde_json::to_vec(identity)
++        .map_err(std::io::Error::other)
++        .and_then(|bytes| std::fs::write(&tmp, bytes))
++        .and_then(|_| std::fs::rename(&tmp, path));
++    if let Err(e) = result {
++        tracing::warn!("identity {}: not saved: {}", path.display(), e);
+     }
+-    Some(profile)
+ }
+ 
+ pub fn resolve_from_env() -> ResolvedDeviceProps {
+@@ -142,3 +283,125 @@
+         quinary: parts.get(4).copied(),
+     })
+ }
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++    use crate::models::sessions::{ClientProfileRequest, DevicePropsRequest};
++
++    fn stealth_request() -> IdentityRequest {
++        IdentityRequest {
++            device: Some(DevicePropsRequest {
++                os: Some("Windows".into()),
++                platform: Some("edge".into()),
++                version: None,
++            }),
++            client_profile: Some(ClientProfileRequest {
++                locale: Some("pt_BR".into()),
++                reset: false,
++            }),
++        }
++    }
++
++    fn platform_name(identity: &ResolvedIdentity) -> String {
++        format!("{:?}", identity.device.platform)
++    }
++
++    #[test]
++    fn zapliga_identity_session_without_one_builds_as_before() {
++        let dir = tempfile::tempdir().unwrap();
++        let path = dir.path().to_str().unwrap();
++
++        let identity = resolve_session_identity_with(path, &IdentityRequest::default(), true);
++
++        let env = resolve_from_env();
++        assert_eq!(identity.device.os, env.os);
++        assert_eq!(platform_name(&identity), format!("{:?}", env.platform));
++        assert_eq!(identity.client_profile.is_some(), client_profile_from_env().is_some());
++        assert!(!dir.path().join(IDENTITY_FILE).exists());
++    }
++
++    #[test]
++    fn zapliga_identity_is_saved_and_reused_by_later_logins() {
++        let dir = tempfile::tempdir().unwrap();
++        let path = dir.path().to_str().unwrap();
++
++        resolve_session_identity_with(path, &stealth_request(), true);
++        let later = resolve_session_identity_with(path, &IdentityRequest::default(), true);
++
++        assert_eq!(later.device.os, "Windows");
++        assert_eq!(platform_name(&later), format!("{:?}", parse_platform("edge")));
++        let profile = later.client_profile.expect("saved locale");
++        assert_eq!(profile.locale_language, "pt");
++        assert_eq!(profile.locale_country, "BR");
++    }
++
++    #[test]
++    fn zapliga_identity_changes_only_the_locale_of_the_web_profile() {
++        let dir = tempfile::tempdir().unwrap();
++        let path = dir.path().to_str().unwrap();
++
++        let profile = resolve_session_identity_with(path, &stealth_request(), true)
++            .client_profile
++            .expect("locale");
++
++        let web = wacore::client_profile::ClientProfile::web();
++        assert_eq!(profile.user_agent_platform, web.user_agent_platform);
++        assert_eq!(profile.device, web.device);
++        assert_eq!(profile.os_version, web.os_version);
++        assert_eq!(profile.manufacturer, web.manufacturer);
++        assert_eq!(profile.include_web_info, web.include_web_info);
++        assert!(profile.phone_id.is_none());
++    }
++
++    #[test]
++    fn zapliga_identity_reset_deletes_it() {
++        let dir = tempfile::tempdir().unwrap();
++        let path = dir.path().to_str().unwrap();
++        resolve_session_identity_with(path, &stealth_request(), true);
++
++        let reset = IdentityRequest {
++            device: None,
++            client_profile: Some(ClientProfileRequest { locale: None, reset: true }),
++        };
++        let identity = resolve_session_identity_with(path, &reset, true);
++
++        assert!(!dir.path().join(IDENTITY_FILE).exists());
++        assert_eq!(identity.device.os, resolve_from_env().os);
++        assert_eq!(identity.client_profile.is_some(), client_profile_from_env().is_some());
++    }
++
++    #[test]
++    fn zapliga_identity_killswitch_ignores_the_saved_one() {
++        let dir = tempfile::tempdir().unwrap();
++        let path = dir.path().to_str().unwrap();
++        resolve_session_identity_with(path, &stealth_request(), true);
++
++        let identity = resolve_session_identity_with(path, &IdentityRequest::default(), false);
++
++        assert_eq!(identity.device.os, resolve_from_env().os);
++        assert_eq!(identity.client_profile.is_some(), client_profile_from_env().is_some());
++    }
++
++    #[test]
++    fn zapliga_identity_killswitch_keeps_the_request_device_as_before() {
++        let dir = tempfile::tempdir().unwrap();
++        let path = dir.path().to_str().unwrap();
++
++        let identity = resolve_session_identity_with(path, &stealth_request(), false);
++
++        assert_eq!(platform_name(&identity), format!("{:?}", parse_platform("edge")));
++        assert!(!dir.path().join(IDENTITY_FILE).exists());
++    }
++
++    #[test]
++    fn zapliga_identity_unreadable_file_falls_back_to_the_env() {
++        let dir = tempfile::tempdir().unwrap();
++        let path = dir.path().to_str().unwrap();
++        std::fs::write(dir.path().join(IDENTITY_FILE), b"{not json").unwrap();
++
++        let identity = resolve_session_identity_with(path, &IdentityRequest::default(), true);
++
++        assert_eq!(identity.device.os, resolve_from_env().os);
++    }
++}
+diff -ruN a/src/handlers/sessions.rs b/src/handlers/sessions.rs
+--- a/src/handlers/sessions.rs	2026-11-26 21:50:40.479607308 +0100
++++ b/src/handlers/sessions.rs	2026-11-26 22:14:25.302116225 +0100
+@@ -9,7 +9,7 @@
+ use futures::stream::Stream;
+ use uuid::Uuid;
+ 
+-use crate::device_props::ResolvedDeviceProps;
++use crate::device_props::IdentityRequest;
+ use crate::error::ApiError;
+ use crate::models::common::SuccessResponse;
+ use crate::models::sessions::{
+@@ -48,9 +48,12 @@
+         if !request.reuse.unwrap_or(false) {
+             return Err(ApiError::AlreadyConnected);
+         }
+-        let connect_req = request
+-            .device
+-            .map(|d| Json(ConnectRequest { device: Some(d) }));
++        let connect_req = (request.device.is_some() || request.client_profile.is_some()).then(|| {
++            Json(ConnectRequest {
++                device: request.device,
++                client_profile: request.client_profile,
++            })
++        });
+         let _ = connect_session(State(state), Path(session_id), connect_req).await?;
+         return Ok(Json(CreateSessionResponse { session: existing }));
+     }
+@@ -92,18 +95,15 @@
+     let runtime = state.get_or_create_session(&session_id, &storage_path);
+     runtime.set_status(SessionStatus::Connecting);
+ 
+-    let device_override = request.device.as_ref().map(|d| {
+-        crate::device_props::resolve_with_override(
+-            d.os.as_deref(),
+-            d.platform.as_deref(),
+-            d.version.as_deref(),
+-        )
+-    });
++    let identity = IdentityRequest {
++        device: request.device,
++        client_profile: request.client_profile,
++    };
+ 
+     let state_clone = state.clone();
+     let session_id_clone = session_id.clone();
+     tokio::spawn(async move {
+-        if let Err(e) = connect_client(&state_clone, &session_id_clone, device_override).await {
++        if let Err(e) = connect_client(&state_clone, &session_id_clone, identity).await {
+             tracing::error!("Session {} connection failed: {}", session_id_clone, e);
+             if let Some(runtime) = state_clone.get_session(&session_id_clone) {
+                 runtime.set_status(SessionStatus::Disconnected);
+@@ -416,13 +416,12 @@
+     Path(session_id): Path<String>,
+     body: Option<Json<ConnectRequest>>,
+ ) -> Result<Json<SuccessResponse>, ApiError> {
+-    let device_override = body.and_then(|Json(req)| req.device).map(|d| {
+-        crate::device_props::resolve_with_override(
+-            d.os.as_deref(),
+-            d.platform.as_deref(),
+-            d.version.as_deref(),
+-        )
+-    });
++    let identity = body
++        .map(|Json(req)| IdentityRequest {
++            device: req.device,
++            client_profile: req.client_profile,
++        })
++        .unwrap_or_default();
+     let _ = state
+         .session_manager()
+         .get_session(&session_id)
+@@ -462,9 +461,8 @@
+ 
+     let state_clone = state.clone();
+     let session_id_clone = session_id.clone();
+-    let dp_override = device_override.clone();
+     tokio::spawn(async move {
+-        if let Err(e) = connect_client(&state_clone, &session_id_clone, dp_override).await {
++        if let Err(e) = connect_client(&state_clone, &session_id_clone, identity).await {
+             tracing::error!("Session {} connection failed: {}", session_id_clone, e);
+             let msg = e.to_string();
+             if let Some(runtime) = state_clone.get_session(&session_id_clone) {
+@@ -685,21 +683,21 @@
+     runtime.clear_reconnecting();
+     runtime.clear_lock_cooldown();
+ 
+-    let device_override =
+-        if query.os.is_some() || query.platform.is_some() || query.version.is_some() {
+-            Some(crate::device_props::resolve_with_override(
+-                query.os.as_deref(),
+-                query.platform.as_deref(),
+-                query.version.as_deref(),
+-            ))
+-        } else {
+-            None
+-        };
++    let identity = IdentityRequest {
++        device: (query.os.is_some() || query.platform.is_some() || query.version.is_some()).then(
++            || crate::models::sessions::DevicePropsRequest {
++                os: query.os.clone(),
++                platform: query.platform.clone(),
++                version: query.version.clone(),
++            },
++        ),
++        client_profile: None,
++    };
+ 
+     let state_clone = state.clone();
+     let session_id_clone = session_id.to_string();
+     tokio::spawn(async move {
+-        if let Err(e) = connect_client(&state_clone, &session_id_clone, device_override).await {
++        if let Err(e) = connect_client(&state_clone, &session_id_clone, identity).await {
+             tracing::error!("Session {} connection failed: {}", session_id_clone, e);
+             let msg = e.to_string();
+             if let Some(runtime) = state_clone.get_session(&session_id_clone) {
+@@ -790,13 +788,10 @@
+         let session_id_clone = session_id.clone();
+         let phone_number = request.phone_number.clone();
+         let show_notification = request.show_push_notification;
+-        let device_override = request.device.as_ref().map(|d| {
+-            crate::device_props::resolve_with_override(
+-                d.os.as_deref(),
+-                d.platform.as_deref(),
+-                d.version.as_deref(),
+-            )
+-        });
++        let identity = IdentityRequest {
++            device: request.device.clone(),
++            client_profile: request.client_profile.clone(),
++        };
+ 
+         tokio::spawn(async move {
+             if let Err(e) = connect_client_with_pair_code(
+@@ -804,7 +799,7 @@
+                 &session_id_clone,
+                 &phone_number,
+                 show_notification,
+-                device_override,
++                identity,
+             )
+             .await
+             {
+@@ -1263,7 +1258,7 @@
+         let sid = session.id.clone();
+         tokio::spawn(async move {
+             tracing::info!("[startup] reconnecting session {}", sid);
+-            if let Err(e) = connect_client(&state_clone, &sid, None).await {
++            if let Err(e) = connect_client(&state_clone, &sid, IdentityRequest::default()).await {
+                 tracing::warn!("[startup] reconnect failed for {}: {}", sid, e);
+                 if let Some(runtime) = state_clone.get_session(&sid) {
+                     runtime.set_status(SessionStatus::Disconnected);
+@@ -1375,7 +1370,7 @@
+             let state_clone = state.clone();
+             let session_id_clone = session_id.clone();
+             tokio::spawn(async move {
+-                if let Err(e) = connect_client(&state_clone, &session_id_clone, None).await {
++                if let Err(e) = connect_client(&state_clone, &session_id_clone, IdentityRequest::default()).await {
+                     tracing::error!(
+                         "reconnect watchdog: rebuild failed for {}: {}",
+                         session_id_clone,
+@@ -1438,7 +1433,7 @@
+ async fn connect_client(
+     state: &AppState,
+     session_id: &str,
+-    device_props: Option<ResolvedDeviceProps>,
++    identity: IdentityRequest,
+ ) -> Result<(), ApiError> {
+     use whatsapp_rust::bot::Bot;
+     use whatsapp_rust::TokioRuntime;
+@@ -1466,7 +1461,10 @@
+     let state_for_events = state.clone();
+     let session_id_for_events = session_id.to_string();
+ 
+-    let dp = device_props.unwrap_or_else(crate::device_props::resolve_from_env);
++    let crate::device_props::ResolvedIdentity {
++        device: dp,
++        client_profile,
++    } = crate::device_props::resolve_session_identity(&storage_path, &identity);
+ 
+     let bot = Bot::builder()
+         .with_backend(backend)
+@@ -1519,7 +1517,7 @@
+         .update_session_status(session_id, SessionStatus::WaitingForQr, false)
+         .await;
+ 
+-    if let Some(profile) = crate::device_props::client_profile_from_env() {
++    if let Some(profile) = client_profile {
+         bot.client().set_client_profile(profile).await;
+     }
+     bot.run().await;
+@@ -1542,7 +1540,7 @@
+     session_id: &str,
+     phone_number: &str,
+     show_notification: bool,
+-    device_props: Option<ResolvedDeviceProps>,
++    identity: IdentityRequest,
+ ) -> Result<(), ApiError> {
+     use whatsapp_rust::bot::Bot;
+     use whatsapp_rust::pair_code::PairCodeOptions;
+@@ -1571,7 +1569,10 @@
+     let state_for_events = state.clone();
+     let session_id_for_events = session_id.to_string();
+ 
+-    let dp = device_props.unwrap_or_else(crate::device_props::resolve_from_env);
++    let crate::device_props::ResolvedIdentity {
++        device: dp,
++        client_profile,
++    } = crate::device_props::resolve_session_identity(&storage_path, &identity);
+     let pair_options = PairCodeOptions {
+         phone_number: phone_number.to_string(),
+         show_push_notification: show_notification,
+@@ -1626,7 +1627,7 @@
+         runtime.set_client(Some(c));
+     }
+ 
+-    if let Some(profile) = crate::device_props::client_profile_from_env() {
++    if let Some(profile) = client_profile {
+         bot.client().set_client_profile(profile).await;
+     }
+     bot.run().await;
+@@ -1944,6 +1945,8 @@
+         Event::CallLogSync(_) => "call_log_sync".to_string(),
+         Event::StreamError(_) => "stream_error".to_string(),
+         Event::EncDecryptFailed(_) => "enc_decrypt_failed".to_string(),
++        // ZapLiga: the server's ack (or nack, e.g. 463) of our call stanzas, the offer included.
++        Event::ServerAck(ack) if ack.class.as_deref() == Some("call") => "call_ack".to_string(),
+         _ => "unknown".to_string(),
+     }
+ }
+@@ -2524,6 +2527,14 @@
+                 "reason": format!("{:?}", failed.reason),
+             })
+         }
++        Event::ServerAck(ack) if ack.class.as_deref() == Some("call") => {
++            serde_json::json!({
++                "id": ack.id,
++                "from": ack.from.as_ref().map(|jid| jid.to_string()),
++                "error": ack.error,
++                "server_timestamp": ack.timestamp.map(|t| t.timestamp()),
++            })
++        }
+         _ => serde_json::json!({}),
+     };
+ 
+@@ -2540,6 +2551,50 @@
+     use super::*;
+ 
+     #[test]
++    fn zapliga_call_ack_is_published_with_its_error() {
++        use wacore::types::events::{Event, ServerAck};
++
++        let nack = Event::ServerAck(
++            ServerAck::builder()
++                .id("3EB0".to_string())
++                .class("call".to_string())
++                .error("463".to_string())
++                .build(),
++        );
++        assert_eq!(get_event_type(&nack), "call_ack");
++        let json = event_to_json(&nack, "s1");
++        assert_eq!(json["data"]["id"], "3EB0");
++        assert_eq!(json["data"]["error"], "463");
++
++        let message_ack = Event::ServerAck(
++            ServerAck::builder()
++                .id("m1".to_string())
++                .class("message".to_string())
++                .build(),
++        );
++        assert_eq!(get_event_type(&message_ack), "unknown");
++    }
++
++    #[tokio::test]
++    async fn zapliga_session_lock_refuses_a_session_open_in_another_waxum() {
++        let dir = tempfile::tempdir().unwrap();
++        let path = dir.path().to_str().unwrap().to_string();
++        // Another container holding the session: its own open file description of the lock file.
++        let other_waxum = std::fs::OpenOptions::new()
++            .create(true)
++            .write(true)
++            .truncate(false)
++            .open(dir.path().join(".session.lock"))
++            .unwrap();
++        other_waxum.try_lock().unwrap();
++
++        assert!(lock_session_storage(&path, "zapliga-lock-test").await.is_err());
++
++        drop(other_waxum);
++        assert!(lock_session_storage(&path, "zapliga-lock-test").await.is_ok());
++    }
++
++    #[test]
+     fn new_event_variants_map_to_their_webhook_names() {
+         use wacore::types::events::{CallLogSync, EncDecryptFailed, Event, StreamError};
+ 
+diff -ruN a/src/main.rs b/src/main.rs
+--- a/src/main.rs	2026-11-26 21:50:37.767619502 +0100
++++ b/src/main.rs	2026-11-26 22:12:37.494609835 +0100
+@@ -301,6 +301,7 @@
+             models::sessions::PairCodeResponse,
+             models::sessions::ConnectRequest,
+             models::sessions::DevicePropsRequest,
++            models::sessions::ClientProfileRequest,
+             models::sessions::QrCodeResponse,
+             models::sessions::SessionStatusResponse,
+             models::sessions::DeviceInfo,
+diff -ruN a/src/models/sessions.rs b/src/models/sessions.rs
+--- a/src/models/sessions.rs	2026-11-26 21:50:37.769619492 +0100
++++ b/src/models/sessions.rs	2026-11-26 22:12:37.492609844 +0100
+@@ -119,6 +119,8 @@
+     /// Optional device props override applied to the auto-spawned QR connect.
+     /// Only honored on the first pair — subsequent connects reuse persisted props.
+     pub device: Option<DevicePropsRequest>,
++    /// ZapLiga: handshake profile of the line, kept with the session (see [`ClientProfileRequest`]).
++    pub client_profile: Option<ClientProfileRequest>,
+ }
+ 
+ /// Response after creating a session
+@@ -154,11 +156,26 @@
+     pub version: Option<String>,
+ }
+ 
++/// ZapLiga: the handshake profile a line presents on every login. Saved at
++/// `{session}/zapliga-identity.json` together with the `device` props of the same request, so it
++/// follows the line to any Waxum and survives restarts (`crate::device_props::resolve_session_identity`).
++#[derive(Debug, Clone, Default, Deserialize, ToSchema)]
++pub struct ClientProfileRequest {
++    /// `language_COUNTRY` sent as the login locale, e.g. "pt_BR".
++    #[schema(example = "pt_BR")]
++    pub locale: Option<String>,
++    /// Deletes the saved identity of the session: the next logins go back to the env defaults.
++    #[serde(default)]
++    pub reset: bool,
++}
++
+ /// Request to start QR connect with optional device override
+ #[derive(Debug, Default, Deserialize, ToSchema)]
+ pub struct ConnectRequest {
+     /// Optional per-session device props override (first-pair only)
+     pub device: Option<DevicePropsRequest>,
++    /// ZapLiga: handshake profile of the line, kept with the session (see [`ClientProfileRequest`]).
++    pub client_profile: Option<ClientProfileRequest>,
+ }
+ 
+ /// Request to connect with pair code
+@@ -172,6 +189,8 @@
+     pub show_push_notification: bool,
+     /// Optional per-session device props override (first-pair only)
+     pub device: Option<DevicePropsRequest>,
++    /// ZapLiga: handshake profile of the line, kept with the session (see [`ClientProfileRequest`]).
++    pub client_profile: Option<ClientProfileRequest>,
+ }
+ 
+ /// Response with pair code

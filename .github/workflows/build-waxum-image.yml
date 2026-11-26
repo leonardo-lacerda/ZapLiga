@@ -61,14 +61,17 @@ jobs:
           sed -i "s|^HERE=.*|HERE=$GITHUB_WORKSPACE/infra/waxum|" "$RUNNER_TEMP/assemble.sh"
           WORKDIR="$RUNNER_TEMP/wx" bash "$RUNNER_TEMP/assemble.sh" "$TAG"
 
-      - name: Testes de VoIP do whatsapp-rust
+      # Also our own Waxum tests (names start with zapliga_: identity per line, session lock, call acks).
+      # curl: Waxum's Swagger UI build script downloads the UI with it, as in the Dockerfile.
+      - name: Testes de VoIP do whatsapp-rust e do Waxum
         run: |
           set -euo pipefail
           docker run --rm -v "$RUNNER_TEMP/wx/waxum:/app" -w /app/whatsapp-rust \
             -e CMAKE_POLICY_VERSION_MINIMUM=3.5 rust:slim-bookworm bash -c '
-              apt-get update -qq && apt-get install -y -qq pkg-config libssl-dev libsqlite3-dev cmake build-essential git >/dev/null &&
+              apt-get update -qq && apt-get install -y -qq pkg-config libssl-dev libsqlite3-dev cmake build-essential git curl >/dev/null &&
               rustup default nightly-2026-09-09 &&
-              cargo test -p whatsapp-rust --features voip,tracing voip'
+              cargo test -p whatsapp-rust --features voip,tracing voip &&
+              cd /app && cargo test --lib zapliga_'
 
       - name: Construir a imagem
         env:
