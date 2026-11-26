@@ -1,5 +1,5 @@
 --- a/src/voip/transport/native.rs	2026-11-26 03:16:43.088287906 +0100
-+++ b/src/voip/transport/native.rs	2026-11-26 03:16:43.093287883 +0100
++++ b/src/voip/transport/native.rs	2026-11-26 14:18:40.243641035 +0100
 @@ -16,6 +16,7 @@
  use std::net::SocketAddr;
  use std::pin::Pin;
@@ -8,7 +8,16 @@
  use std::time::Instant;
  
  use anyhow::{Context, Result, anyhow, bail};
-@@ -943,6 +944,89 @@
+@@ -61,7 +62,7 @@
+ /// The retransmit count [`MEDIA_CHANNEL_TYPE`] carries: never retransmit, abandon instead.
+ const MEDIA_MAX_RETRANSMITS: u32 = 0;
+ 
+-use wacore::voip::demux::{RelayPacketKind, classify_relay_packet};
++use wacore::voip::demux::{RelayPacketKind, classify_relay_packet, unwrap_group_forwarding_packet};
+ 
+ use super::{ExtraRelayEndpoint, RelayAllocateContext};
+ 
+@@ -943,6 +944,101 @@
  /// endpoints the engine never learns about.
  const EXTRA_RELAY_KEEPALIVE: std::time::Duration = std::time::Duration::from_secs(1);
  
@@ -18,6 +27,18 @@
 +/// The relay that carries the peer's media stops being trusted once it has delivered nothing for
 +/// this long: outbound media goes to every relay again until one delivers.
 +const ACTIVE_RELAY_STALE_MS: u64 = 1_500;
++/// What an inbound relay packet carries once the relay's forwarding envelope (`0x09 ...`, see
++/// [`unwrap_group_forwarding_packet`]) is removed -- the same reading the engine's `on_packet` does.
++/// Classifying the raw bytes instead calls every enveloped media packet STUN (`0x09` has the top two
++/// bits clear), so the relay carrying the peer's media is never recognised and extra relays never
++/// forward it.
++fn inbound_relay_packet_kind(data: &[u8]) -> RelayPacketKind {
++    match unwrap_group_forwarding_packet(data) {
++        Ok(packet) => classify_relay_packet(packet.payload),
++        Err(_) => RelayPacketKind::Other,
++    }
++}
++
 +/// Route index of the primary relay in [`RelayActivity`]; extra relay `i` is route `i + 1`.
 +const PRIMARY_ROUTE: usize = 0;
 +const BROADCAST_ROUTE: usize = usize::MAX;
@@ -98,7 +119,7 @@
  /// A [`RelayTransportFactory`] that binds the primary relay endpoint the engine selected plus every
  /// other usable relay the offer carried, and presents the lot to the engine as one
  /// [`RelayTransport`].
-@@ -1014,13 +1098,20 @@
+@@ -1014,13 +1110,20 @@
  
          let (merged_tx, merged_rx) = async_channel::bounded(RELAY_EVENT_CAP);
          let mut tasks = Vec::with_capacity(1 + self.extras.len());
@@ -112,14 +133,14 @@
              tasks.push(self.runtime.spawn(Box::pin(async move {
                  while let Ok(event) = primary_events.recv().await {
 +                    if let RelayTransportEvent::PacketReceived(bytes) = &event
-+                        && matches!(classify_relay_packet(bytes), RelayPacketKind::Rtp | RelayPacketKind::Rtcp)
++                        && matches!(inbound_relay_packet_kind(bytes), RelayPacketKind::Rtp | RelayPacketKind::Rtcp)
 +                    {
 +                        activity.media_from(PRIMARY_ROUTE);
 +                    }
                      if merged_tx.send(event).await.is_err() {
                          return;
                      }
-@@ -1037,7 +1128,7 @@
+@@ -1037,7 +1140,7 @@
              );
          }
          let mut extra_outbound = Vec::with_capacity(self.extras.len());
@@ -128,7 +149,7 @@
              let (outbound_tx, outbound_rx) = async_channel::bounded(RELAY_SEND_CAP);
              extra_outbound.push(outbound_tx);
              tasks.push(self.runtime.spawn(Box::pin(drive_extra_relay(
-@@ -1046,6 +1137,8 @@
+@@ -1046,6 +1149,8 @@
                  self.runtime.clone(),
                  outbound_rx,
                  merged_tx.clone(),
@@ -137,7 +158,7 @@
              ))));
          }
  
-@@ -1053,6 +1146,7 @@
+@@ -1053,6 +1158,7 @@
              Arc::new(MultiRelayTransport {
                  primary,
                  extra_outbound,
@@ -145,7 +166,7 @@
                  _tasks: tasks,
              }),
              merged_rx,
-@@ -1071,6 +1165,8 @@
+@@ -1071,6 +1177,8 @@
      runtime: Arc<dyn Runtime>,
      outbound: async_channel::Receiver<Bytes>,
      merged_tx: async_channel::Sender<RelayTransportEvent>,
@@ -154,15 +175,19 @@
  ) {
      // Same dial as the primary (advertised port raced against the web-client port): a host that
      // only answers on 3480 would otherwise never be bound as an extra, and if the answering
-@@ -1146,6 +1242,7 @@
-                         match classify_relay_packet(&bytes) {
+@@ -1143,9 +1251,10 @@
+             event = events.recv() => {
+                 match event {
+                     Ok(RelayTransportEvent::PacketReceived(bytes)) => {
+-                        match classify_relay_packet(&bytes) {
++                        match inbound_relay_packet_kind(&bytes) {
                              RelayPacketKind::Rtp | RelayPacketKind::Rtcp => {
                                  media_in += 1;
 +                                activity.media_from(route);
                                  if !first_media_logged {
                                      first_media_logged = true;
                                      log::info!("voip: extra relay {addr}: first inbound media packet");
-@@ -1187,12 +1284,14 @@
+@@ -1187,12 +1296,14 @@
      }
  }
  
@@ -179,7 +204,7 @@
      /// Keeps the primary-event-forwarder and extra-relay driver tasks alive: each aborts on its own
      /// `Drop` (see `Runtime::spawn`'s contract) once this transport itself is dropped, mirroring how
      /// `RelayMediaChannel` holds its own driver's handle.
-@@ -1206,10 +1305,21 @@
+@@ -1206,10 +1317,21 @@
              classify_relay_packet(&data),
              RelayPacketKind::Rtp | RelayPacketKind::Rtcp
          ) {
@@ -205,10 +230,19 @@
              }
          }
          self.primary.send(data).await
-@@ -1230,6 +1340,26 @@
+@@ -1230,6 +1352,35 @@
      /// A relay that advertises 3478 must try the bidirectional web-client port first, keeping the
      /// advertised port only as a delayed compatibility fallback.
      #[test]
++    fn enveloped_inbound_media_counts_as_media() {
++        let enveloped = [0x09, 0x02, 0x33, 0x6e, 0x01, 0x00, 0x01, 0x88, 0x90, 0xe1, 0x00, 0x13, 0x00, 0x12, 0x0c, 0x96, 0x77, 0x2e, 0x6a, 0xa9];
++        assert_eq!(classify_relay_packet(&enveloped), RelayPacketKind::Stun);
++        assert_eq!(inbound_relay_packet_kind(&enveloped), RelayPacketKind::Rtp);
++        let stun = [0x01, 0x01, 0x00, 0x00, 0x21, 0x12, 0xa4, 0x42];
++        assert_eq!(inbound_relay_packet_kind(&stun), RelayPacketKind::Stun);
++    }
++
++    #[test]
 +    fn outbound_media_follows_the_relay_the_peer_answers_on() {
 +        let activity = RelayActivity::new(3);
 +        // Nothing heard yet: broadcast.

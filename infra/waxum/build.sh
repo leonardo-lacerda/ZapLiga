@@ -13,12 +13,12 @@
 #   docker save zapliga-waxum:<tag> | gzip | ssh root@<vps> 'gunzip | docker load'
 #
 # Usage:
-#   infra/waxum/build.sh [tag]            # default tag: 0.12.6-multirelay-v6-relay-select
+#   infra/waxum/build.sh [tag]            # default tag: 0.12.6-multirelay-v7-relay-unwrap
 #   WORKDIR=/some/dir infra/waxum/build.sh # keep the assembled source around
 #
 set -euo pipefail
 
-TAG="${1:-0.12.6-multirelay-v6-relay-select}"
+TAG="${1:-0.12.6-multirelay-v7-relay-unwrap}"
 IMAGE="zapliga-waxum:${TAG}"
 
 # Pinned upstream sources. Bumping either means regenerating the patches:

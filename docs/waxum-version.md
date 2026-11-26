@@ -97,3 +97,13 @@ O patch `whatsapp-rust-relay-select.patch` (`RelayActivity`, `transport/native.r
 Os extras continuam alocados e com consentimento renovado a cada segundo, para a volta ao envio
 para todos ser imediata. O log `voip: outbound media only to …` / `back to every relay` mostra
 cada troca. Se aparecer áudio mudo do lado do lead, a volta é a imagem `v5-signal`.
+
+### Envelope `0x09` (imagem `0.12.6-multirelay-v7-relay-unwrap`)
+
+Na v6 o consumo não caiu: no dia 26/11 a vaga da proxy mandou 16,9 MB e recebeu 15,2 MB em ~11 min
+de ligação, os dois sentidos ~3 vezes o normal. Os relays entregam a mídia com um envelope de
+encaminhamento (`0x09 …`, `unwrap_group_forwarding_packet`), que o motor tira antes de ler. O
+transporte multirelay classificava o pacote cru, e `0x09` tem os dois bits altos zerados: virava
+STUN. Assim o relay do lead nunca era reconhecido (o envio continuava para todos) e os relays extras
+descartavam a mídia que recebiam. A v7 tira o envelope antes de classificar
+(`inbound_relay_packet_kind`).
