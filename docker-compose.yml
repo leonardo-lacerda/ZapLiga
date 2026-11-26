@@ -78,7 +78,9 @@ x-edge-tailscale: &edge-tailscale
     - NET_RAW
 
 x-edge-waxum: &edge-waxum
-  image: zapliga-waxum:0.12.6-multirelay-v4-opus
+  # v7: call media goes only to the relay the lead answers on (docs/waxum-version.md), which cuts each
+  # call's upload through the attendants' shared office internet to about a third.
+  image: zapliga-waxum:0.12.6-multirelay-v7-relay-unwrap
   entrypoint: ["/bin/sh", "/usr/local/bin/waxum-edge-guard.sh"]
   command: ["/app/waxum"]
   restart: unless-stopped
@@ -278,9 +280,8 @@ services:
 
   waxum-edge-1:
     <<: *edge-waxum
-    # Rollout of the call-signal image (docs/waxum-version.md, "Sinais de chamada"): edge-1 (the
-    # owner's PC) first, then the other edges and the main waxum once a real call checks out.
-    image: zapliga-waxum:0.12.6-multirelay-v5-signal
+    # Same image as the other edges; edge-1 also declares the Windows/pt-BR identity (new pairings).
+    image: zapliga-waxum:0.12.6-multirelay-v7-relay-unwrap
     network_mode: service:tailscale-edge-1
     environment:
       <<: *edge-waxum-environment
