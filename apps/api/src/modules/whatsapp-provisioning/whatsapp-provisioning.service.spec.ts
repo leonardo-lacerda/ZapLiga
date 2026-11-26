@@ -640,7 +640,8 @@ describe('WhatsappProvisioningService — link to ZapLiga', () => {
 
     const job = await ctx.service.decideLink(TENANT, USER, id, true);
 
-    expect(ctx.waxum.reconnect).toHaveBeenCalledWith('session-1');
+    // A line without camouflage sends no identity.
+    expect(ctx.waxum.reconnect).toHaveBeenCalledWith('session-1', undefined);
     expect(ctx.numbers.pairCode).toHaveBeenCalledTimes(2);
     expect(ctx.worker.sendInput).toHaveBeenLastCalledWith(id, { type: 'pair_code', code: PAIR_CODE });
     expect(job).toMatchObject({ step: 'entering_pair_code' });

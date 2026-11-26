@@ -60,6 +60,8 @@ export class ManualActionDto {
 
 export class LinkDecisionDto {
   @IsBoolean() connect!: boolean;
+  // Creates the line with its camouflage profile (docs/stealth-profile.md); super admin only.
+  @IsOptional() @IsBoolean() stealth?: boolean;
 }
 
 export class AssignEgressNodeDto {

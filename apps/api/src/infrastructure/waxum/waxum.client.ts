@@ -2,6 +2,7 @@ import { Injectable, OnModuleDestroy } from '@nestjs/common';
 import { connect, NatsConnection, StringCodec } from 'nats';
 import WebSocket from 'ws';
 import { DatabaseService } from '../../database/database.service';
+import type { SessionIdentity } from './session-identity';
 
 type WaxumSession = { id: string; name?: string; phone_number?: string; status?: string };
 
@@ -122,8 +123,10 @@ export class WaxumClient implements OnModuleDestroy {
     throw new Error('Waxum request failed');
   }
 
-  async createSession(name: string, node: string) {
-    const { session } = await this.request<{ session: WaxumSession }>('/api/v1/sessions', { method: 'POST', body: JSON.stringify({ name }) }, 3, node);
+  // `identity` (docs/stealth-profile.md) rides next to the request's own fields; without it the
+  // bodies below are the ones Waxum always got.
+  async createSession(name: string, node: string, identity?: SessionIdentity) {
+    const { session } = await this.request<{ session: WaxumSession }>('/api/v1/sessions', { method: 'POST', body: JSON.stringify({ name, ...identity }) }, 3, node);
     this.rememberNode(session.id, node);
     return session;
   }
@@ -137,9 +140,9 @@ export class WaxumClient implements OnModuleDestroy {
     return this.request<any>(`/api/v1/sessions/${encodeURIComponent(sessionId)}/disconnect`, { method: 'POST' }, 1, node);
   }
 
-  async adoptSession(sessionId: string, name: string, node: string) {
+  async adoptSession(sessionId: string, name: string, node: string, identity?: SessionIdentity) {
     // `reuse` reconnects a session this Waxum already knows (it held the line before).
-    const result = await this.request<any>('/api/v1/sessions', { method: 'POST', body: JSON.stringify({ id: sessionId, name, reuse: true }) }, 1, node);
+    const result = await this.request<any>('/api/v1/sessions', { method: 'POST', body: JSON.stringify({ id: sessionId, name, reuse: true, ...identity }) }, 1, node);
     this.rememberNode(sessionId, node);
     return result;
   }
@@ -154,8 +157,8 @@ export class WaxumClient implements OnModuleDestroy {
   }
   // Links the line by typing an 8-character code on the phone instead of reading the QR.
   // Waxum waits up to 20 s for WhatsApp to hand out the code, hence the longer timeout.
-  pairCode(sessionId: string, phone: string) {
-    return this.request<{ code: string; timeout_seconds: number }>(`/api/v1/sessions/${encodeURIComponent(sessionId)}/pair`, { method: 'POST', body: JSON.stringify({ phone_number: phone }), signal: AbortSignal.timeout(30000) }, 1);
+  pairCode(sessionId: string, phone: string, identity?: SessionIdentity) {
+    return this.request<{ code: string; timeout_seconds: number }>(`/api/v1/sessions/${encodeURIComponent(sessionId)}/pair`, { method: 'POST', body: JSON.stringify({ phone_number: phone, ...identity }), signal: AbortSignal.timeout(30000) }, 1);
   }
   // A plain WhatsApp text from the line to a phone (digits with country code).
   sendText(sessionId: string, phone: string, text: string) {
@@ -186,7 +189,7 @@ export class WaxumClient implements OnModuleDestroy {
   getQr(sessionId: string) { return this.request<any>(`/api/v1/sessions/${encodeURIComponent(sessionId)}/qr`); }
   getStatus(sessionId: string) { return this.request<any>(`/api/v1/sessions/${encodeURIComponent(sessionId)}/status`, {}, 1); }
   disconnect(sessionId: string) { return this.request<any>(`/api/v1/sessions/${encodeURIComponent(sessionId)}/disconnect`, { method: 'POST' }, 1); }
-  reconnect(sessionId: string) { return this.request<any>(`/api/v1/sessions/${encodeURIComponent(sessionId)}/connect`, { method: 'POST', body: JSON.stringify({}) }).catch((error: Error & { statusCode?: number }) => { if (error.statusCode === 409) return { already_connecting: true }; throw error; }); }
+  reconnect(sessionId: string, identity?: SessionIdentity) { return this.request<any>(`/api/v1/sessions/${encodeURIComponent(sessionId)}/connect`, { method: 'POST', body: JSON.stringify({ ...identity }) }).catch((error: Error & { statusCode?: number }) => { if (error.statusCode === 409) return { already_connecting: true }; throw error; }); }
   // WhatsApp VoIP needs the callee's LID to derive media keys; a phone-number
   // JID (`<pn>@s.whatsapp.net`) is rejected with "no known LID for the PN
   // callee". A cold number's LID is not in the local store, but a usync

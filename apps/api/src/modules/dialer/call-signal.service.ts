@@ -2,7 +2,7 @@ import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { DatabaseService } from '../../database/database.service';
 import { WaxumClient } from '../../infrastructure/waxum/waxum.client';
 
-// A logout or stream error this soon after a line's offer is read as WhatsApp's answer to it
+// A logout, stream error or call ack this soon after a line's offer is read as WhatsApp's answer to it
 // (devices were removed 1.4-3.8 s after the offer, 2026-11-25).
 const OFFER_WINDOW_SECONDS = 120;
 const DETAIL_MAX_CHARS = 4000;
@@ -10,8 +10,8 @@ const DETAIL_MAX_CHARS = 4000;
 /**
  * Stores every WhatsApp signal around a call in `call_signal_events` (migration 078): the
  * answers to the offer (Waxum's `incoming_call` events carry every `<call>` stanza, ours
- * included) and the logouts and stream errors of the line right after an offer, each with the
- * ms since the offer. One API instance stores each event (NATS queue group).
+ * included), the server's acks of our call stanzas (`call_ack`, with its error, e.g. 463: Waxum v8)
+ * and the logouts and stream errors of the line right after an offer, each with the ms since the offer. One API instance stores each event (NATS queue group).
  */
 @Injectable()
 export class CallSignalService implements OnModuleInit {
@@ -20,7 +20,7 @@ export class CallSignalService implements OnModuleInit {
   constructor(private readonly db: DatabaseService, private readonly waxum: WaxumClient) {}
 
   onModuleInit() {
-    void this.waxum.subscribeSessionEvents(['incoming_call', 'logged_out', 'stream_error', 'account_locked'], (sessionId, type, payload) => this.store(sessionId, type, payload), 'zapliga-call-signals')
+    void this.waxum.subscribeSessionEvents(['incoming_call', 'call_ack', 'logged_out', 'stream_error', 'account_locked'], (sessionId, type, payload) => this.store(sessionId, type, payload), 'zapliga-call-signals')
       .catch((error) => this.logger.error(`Call signals not subscribed: ${String((error as Error)?.message ?? error).slice(0, 300)}`));
   }
 

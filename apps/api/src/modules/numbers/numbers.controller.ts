@@ -1,9 +1,10 @@
-import { Body, Controller, Delete, Get, Param, Patch, Post, Query, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, ForbiddenException, Get, Param, Patch, Post, Query, UseGuards } from '@nestjs/common';
 import { AuthGuard, CurrentTenant, CurrentUser, Roles, RolesGuard, TenantMembershipGuard } from '../auth/auth.guards';
 import { CreateNumberDto } from './dto/create-number.dto';
 import { PairNumberDto } from './dto/pair-number.dto';
 import { UpdateNumberDto } from './dto/update-number.dto';
 import { NumbersService } from './numbers.service';
+import { STEALTH_ADMIN_ONLY_MESSAGE } from '../stealth/stealth-profile';
 
 @Controller()
 @UseGuards(AuthGuard, TenantMembershipGuard, RolesGuard)
@@ -12,7 +13,10 @@ export class NumbersController {
 
   @Roles('leader', 'super_admin')
   @Post(['/api/numbers', '/api/tenants/:tenantId/numbers'])
-  create(@Body() body: CreateNumberDto, @CurrentTenant() tenantId: string, @CurrentUser() user: any) { return this.numbers.create(tenantId, user.id, body); }
+  create(@Body() body: CreateNumberDto, @CurrentTenant() tenantId: string, @CurrentUser() user: any) {
+    if (body.stealth && user.platformRole !== 'super_admin') throw new ForbiddenException(STEALTH_ADMIN_ONLY_MESSAGE);
+    return this.numbers.create(tenantId, user.id, body);
+  }
 
   @Roles('leader', 'super_admin')
   @Get(['/api/numbers', '/api/tenants/:tenantId/numbers'])

@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Badge, Button, Icon, Panel } from '../../components/ui';
+import { STEALTH_HINT, STEALTH_LABEL } from '../numbers/stealth.copy';
 import { JobTimeline } from './JobTimeline';
 import { LiveScreen } from './LiveScreen';
 import { ProfileForm } from './ProfileForm';
@@ -18,6 +19,8 @@ type Props = {
   onBack: () => void;
   onNewJob: (prefill?: WizardPrefill) => void;
   onOpenNumbers: () => void;
+  /** Super admin: the link may create the line with its camouflage (docs/stealth-profile.md). */
+  canUseStealth?: boolean;
 };
 
 const linkingSteps = new Set(['creating_line', 'opening_link_screen', 'waiting_pair_code', 'entering_pair_code', 'linking']);
@@ -34,7 +37,7 @@ const retryPrefill = (job: Job): WizardPrefill => {
 };
 
 /** Tela de progresso: consulta o job a cada 2 s e pede ao usuário o que o robô precisa. */
-export function JobProgress({ tenantId, jobId, pollIntervalMs = JOB_POLL_INTERVAL_MS, onBack, onNewJob, onOpenNumbers }: Props) {
+export function JobProgress({ tenantId, jobId, pollIntervalMs = JOB_POLL_INTERVAL_MS, onBack, onNewJob, onOpenNumbers, canUseStealth = false }: Props) {
   const { job, applyJob, loadError, notFound } = useProvisioningJob(tenantId, jobId, pollIntervalMs);
   const [actionError, setActionError] = useState('');
   const [cancelling, setCancelling] = useState(false);
@@ -93,7 +96,7 @@ export function JobProgress({ tenantId, jobId, pollIntervalMs = JOB_POLL_INTERVA
       {actionError && <div className="alert" role="alert"><Icon name="alert" size={17} /><span>{actionError}</span><button type="button" onClick={() => setActionError('')} aria-label="Fechar erro"><Icon name="close" size={16} /></button></div>}
 
       <div className="provisioning-action">
-        <JobAction job={job} tenantId={tenantId} run={run} onNewJob={onNewJob} onOpenNumbers={onOpenNumbers} />
+        <JobAction job={job} tenantId={tenantId} run={run} onNewJob={onNewJob} onOpenNumbers={onOpenNumbers} canUseStealth={canUseStealth} />
       </div>
       {canTakeOver && <div className="provisioning-takeover">
         <Button variant="secondary" icon="phone" onClick={() => void takeOver()} disabled={takingOver || pausing}>{pausing ? 'Pausando o robô…' : takingOver ? 'Pedindo…' : 'Assumir o controle'}</Button>
@@ -121,9 +124,10 @@ type ActionProps = {
   run: (action: () => Promise<Job>) => Promise<boolean>;
   onNewJob: (prefill?: WizardPrefill) => void;
   onOpenNumbers: () => void;
+  canUseStealth?: boolean;
 };
 
-function JobAction({ job, tenantId, run, onNewJob, onOpenNumbers }: ActionProps) {
+function JobAction({ job, tenantId, run, onNewJob, onOpenNumbers, canUseStealth = false }: ActionProps) {
   if (job.status === 'done' && isNetworkCheck(job)) {
     return <div className="provisioning-result is-success" role="status">
       <Icon name="check" size={20} />
@@ -180,7 +184,7 @@ function JobAction({ job, tenantId, run, onNewJob, onOpenNumbers }: ActionProps)
       <ProfileForm onSubmit={(input) => run(() => submitProfile(tenantId, job.id, input))} />
     </div>;
   }
-  if (job.status === 'waiting_input' && job.awaiting === 'link_decision') return <LinkDecision job={job} tenantId={tenantId} run={run} />;
+  if (job.status === 'waiting_input' && job.awaiting === 'link_decision') return <LinkDecision job={job} tenantId={tenantId} run={run} canUseStealth={canUseStealth} />;
   if (job.status === 'waiting_input' && job.step === 'rescue_offer') return <RescueOffer job={job} tenantId={tenantId} run={run} />;
   if (job.status === 'waiting_input' && job.awaiting === 'manual') return <ManualHelp job={job} tenantId={tenantId} run={run} />;
 
@@ -288,12 +292,13 @@ function ManualHelp({ job, tenantId, run }: { job: Job; tenantId: string; run: A
   </div>;
 }
 
-function LinkDecision({ job, tenantId, run }: { job: Job; tenantId: string; run: ActionProps['run'] }) {
+function LinkDecision({ job, tenantId, run, canUseStealth }: { job: Job; tenantId: string; run: ActionProps['run']; canUseStealth: boolean }) {
   const [connect, setConnect] = useState(true);
+  const [stealth, setStealth] = useState(false);
   const [busy, setBusy] = useState(false);
   const submit = async () => {
     setBusy(true);
-    try { await run(() => submitLinkDecision(tenantId, job.id, connect)); } finally { setBusy(false); }
+    try { await run(() => submitLinkDecision(tenantId, job.id, connect, connect && stealth)); } finally { setBusy(false); }
   };
   return <div className="provisioning-input-card">
     <h3>Número registrado no WhatsApp</h3>
@@ -302,6 +307,10 @@ function LinkDecision({ job, tenantId, run }: { job: Job; tenantId: string; run:
       <input type="checkbox" role="switch" checked={connect} onChange={(event) => setConnect(event.target.checked)} />
       <span>Conectar ao ZapLiga por telefone + código (sem QR Code)</span>
     </label>
+    {canUseStealth && connect && <label className="provisioning-switch">
+      <input type="checkbox" role="switch" checked={stealth} onChange={(event) => setStealth(event.target.checked)} />
+      <span>{STEALTH_LABEL}<small>{STEALTH_HINT}</small></span>
+    </label>}
     <div className="provisioning-inline-actions">
       <Button icon={connect ? 'plug' : 'check'} onClick={() => void submit()} disabled={busy}>{busy ? 'Enviando…' : connect ? 'Conectar ao ZapLiga' : 'Concluir sem conectar'}</Button>
     </div>

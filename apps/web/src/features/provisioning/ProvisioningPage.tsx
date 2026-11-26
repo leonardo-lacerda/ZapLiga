@@ -16,12 +16,14 @@ type Props = {
   allowed: boolean;
   onOpenNumbers: () => void;
   pollIntervalMs?: number;
+  /** Super admin: the link may create the line with its camouflage (docs/stealth-profile.md). */
+  canUseStealth?: boolean;
 };
 
 type View = { kind: 'wizard'; prefill?: WizardPrefill; key: number } | { kind: 'job'; jobId: string };
 
 /** `/app/numeros/cadastrar` — assistente de cadastro de WhatsApp em cloud phones do GeeLark. */
-export function ProvisioningPage({ tenantId, currentUserId, allowed, onOpenNumbers, pollIntervalMs }: Props) {
+export function ProvisioningPage({ tenantId, currentUserId, allowed, onOpenNumbers, pollIntervalMs, canUseStealth = false }: Props) {
   const [view, setView] = useState<View>({ kind: 'wizard', key: 0 });
 
   const heading = <div className="page-heading">
@@ -38,7 +40,7 @@ export function ProvisioningPage({ tenantId, currentUserId, allowed, onOpenNumbe
   return <div className="provisioning-page">
     {heading}
     {view.kind === 'job'
-      ? <JobProgress key={view.jobId} tenantId={tenantId} jobId={view.jobId} pollIntervalMs={pollIntervalMs} onBack={() => newWizard()} onNewJob={newWizard} onOpenNumbers={onOpenNumbers} />
+      ? <JobProgress key={view.jobId} tenantId={tenantId} jobId={view.jobId} pollIntervalMs={pollIntervalMs} onBack={() => newWizard()} onNewJob={newWizard} onOpenNumbers={onOpenNumbers} canUseStealth={canUseStealth} />
       : <>
         <ProvisioningWizard key={view.key} tenantId={tenantId} currentUserId={currentUserId} prefill={view.prefill} onJobCreated={(job) => setView({ kind: 'job', jobId: job.id })} />
         <RecentJobs tenantId={tenantId} onOpen={(jobId) => setView({ kind: 'job', jobId })} />

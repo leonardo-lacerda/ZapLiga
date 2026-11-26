@@ -30,7 +30,8 @@ describe('NumbersService QR code', () => {
     const payload = await service.qr('t1', 'n1');
 
     expect(payload.qr_codes).toEqual(['2@abc']);
-    expect(waxum.reconnect).toHaveBeenCalledWith('s1');
+    // A line without camouflage sends no identity.
+    expect(waxum.reconnect).toHaveBeenCalledWith('s1', undefined);
     expect(calls.slice(0, 3)).toEqual(['status', 'connect', 'qr']);
   });
 
@@ -105,6 +106,108 @@ describe('NumbersService QR code', () => {
     });
   });
 
+  describe('camouflage', () => {
+    const profile = { version: 1, surface: 'WEB_BROWSER', device: { os: 'Windows', platform: 'edge' }, client: { locale: 'pt_BR' } };
+    const stealthLine = { ...number, stealth_enabled: true, stealth_profile: profile, stealth_profile_frozen_at: '2026-11-26T12:00:00Z' };
+    const identity = { device: { os: 'Windows', platform: 'edge' }, client_profile: { locale: 'pt_BR' } };
+
+    const creating = () => {
+      const client = { query: jest.fn(async (_sql: string, _params: unknown[]) => ({ rows: [{ id: 'n9' }] })) };
+      const db = {
+        query: jest.fn(async (sql: string) => (sql.includes('FROM egress_pcs') ? { rows: [{ slot: 'edge-2' }] } : { rows: [] })),
+        transaction: jest.fn(async (run: (c: typeof client) => unknown) => run(client)),
+      };
+      const waxum = { createSession: jest.fn(async () => ({ id: 's9' })), deleteSession: jest.fn() };
+      const redis = { client: { ttl: jest.fn(async () => -2) }, acquireLock: jest.fn(async () => true), releaseLock: jest.fn(async () => undefined) };
+      const service = new NumbersService(db as any, waxum as any, { record: jest.fn(async () => undefined) } as any, redis as any, { assertAction: jest.fn(async () => undefined) } as any, { assertCanAddNumbers: jest.fn(async () => undefined) } as any);
+      const insertParams = () => client.query.mock.calls[0][1];
+      return { service, waxum, insertParams };
+    };
+
+    it('creates a line with the switch on with its profile, frozen before its first QR', async () => {
+      const { service, waxum, insertParams } = creating();
+
+      await service.create('t1', 'u1', { label: 'Previtas 20', stealth: true });
+
+      const [, , sent] = waxum.createSession.mock.calls[0] as unknown as [string, string, { device: { platform: string }; client_profile: { locale: string } }];
+      expect(sent.client_profile).toEqual({ locale: 'pt_BR' });
+      expect(JSON.parse(String(insertParams()[10]))).toMatchObject({ version: 1, device: { platform: sent.device.platform } });
+    });
+
+    it('creates a line without the switch exactly as before', async () => {
+      const { service, waxum, insertParams } = creating();
+
+      await service.create('t1', 'u1', { label: 'Previtas 21' });
+
+      expect(waxum.createSession).toHaveBeenCalledWith('Previtas 21', 'edge-2', undefined);
+      expect(insertParams()[10]).toBeNull();
+    });
+
+    it('logs a camouflaged line in with its identity', async () => {
+      const db = { query: jest.fn(async () => ({ rows: [stealthLine] })) };
+      const waxum = { reconnect: jest.fn(async () => ({})) };
+      const service = new NumbersService(db as any, waxum as any, { record: jest.fn(async () => undefined) } as any, {} as any, { assertAction: jest.fn(async () => undefined) } as any, {} as any);
+
+      await service.reconnect('t1', 'u1', 'n1');
+
+      expect(waxum.reconnect).toHaveBeenCalledWith('s1', identity);
+    });
+
+    it('starts the pairing QR of a camouflaged line with its identity', async () => {
+      const db = { query: jest.fn(async () => ({ rows: [stealthLine] })) };
+      const waxum = {
+        getStatus: jest.fn(async () => ({ status: 'disconnected', is_logged_in: false, socket_alive: false })),
+        reconnect: jest.fn(async () => ({})),
+        getQr: jest.fn(async () => ({ status: 'waiting_for_qr', qr_codes: ['2@abc'], timeout_seconds: 60 })),
+      };
+      const service = new NumbersService(db as any, waxum as any, {} as any, {} as any, {} as any, {} as any);
+
+      await service.qr('t1', 'n1');
+
+      expect(waxum.reconnect).toHaveBeenCalledWith('s1', identity);
+    });
+
+    describe('moving a line whose source Waxum is unreachable', () => {
+      const edgeNodes = process.env.WAXUM_EDGE_NODES;
+      beforeEach(() => { process.env.WAXUM_EDGE_NODES = 'edge-1=http://edge-1:3451,edge-2=http://edge-2:3451'; });
+      afterEach(() => { if (edgeNodes === undefined) delete process.env.WAXUM_EDGE_NODES; else process.env.WAXUM_EDGE_NODES = edgeNodes; });
+      const moving = (adopt: jest.Mock) => {
+        const db = {
+          query: jest.fn(async (sql: string) => {
+            if (sql.includes('AS online')) return { rows: [{ online: true }] };
+            if (sql.includes('FROM calls')) return { rows: [] };
+            return { rows: [{ ...stealthLine, waxum_node: 'edge-1', status: 'connected' }] };
+          }),
+        };
+        const waxum = {
+          releaseSession: jest.fn(async () => { throw new Error('fetch failed'); }),
+          adoptSession: adopt,
+          statusOn: jest.fn(async () => ({ status: 'connected', is_logged_in: true, socket_alive: true })),
+        };
+        const redis = { acquireLock: jest.fn(async () => true), releaseLock: jest.fn(async () => undefined) };
+        const service = new NumbersService(db as any, waxum as any, { record: jest.fn(async () => undefined) } as any, redis as any, {} as any, {} as any);
+        return { service, db, waxum };
+      };
+
+      it('opens the session on the target with the line identity', async () => {
+        const { service, waxum } = moving(jest.fn(async () => ({})));
+
+        await service.moveToWaxumNode('t1', null, 'n1', 'edge-2');
+
+        expect(waxum.adoptSession).toHaveBeenCalledWith('s1', 'numero 1', 'edge-2', identity);
+      });
+
+      it('goes back to the source and marks the line disconnected when the target fails', async () => {
+        const adopt = jest.fn(async (_session: string, _name: string, node: string) => { if (node === 'edge-2') throw new Error('Waxum 500'); return {}; });
+        const { service, db } = moving(adopt);
+
+        await expect(service.moveToWaxumNode('t1', null, 'n1', 'edge-2')).rejects.toThrow('Waxum 500');
+        expect(adopt).toHaveBeenLastCalledWith('s1', 'numero 1', 'edge-1', identity);
+        expect(db.query).toHaveBeenCalledWith("UPDATE whatsapp_numbers SET status = 'disconnected' WHERE id = $1", ['n1']);
+      });
+    });
+  });
+
   it('never moves a line to the VPS', async () => {
     const redis = { acquireLock: jest.fn(async () => true), releaseLock: jest.fn(async () => undefined) };
     const service = new NumbersService({ query: jest.fn() } as any, {} as any, {} as any, redis as any, {} as any, {} as any);
@@ -167,7 +270,7 @@ describe('NumbersService QR code', () => {
 
     const payload = await service.qr('t1', 'n1');
 
-    expect(waxum.createSession).toHaveBeenCalledWith('numero 1', 'edge-2');
+    expect(waxum.createSession).toHaveBeenCalledWith('numero 1', 'edge-2', undefined);
     expect(waxum.deleteSession).toHaveBeenCalledWith('s1');
     expect(waxum.getQr).toHaveBeenCalledWith('s2');
     expect(payload.qr_codes).toEqual(['2@new']);

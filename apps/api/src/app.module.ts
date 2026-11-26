@@ -38,9 +38,10 @@ import { BillingModule } from './modules/billing/billing.module';
 import { CrmIntegrationsModule } from './modules/crm-integrations/crm-integrations.module';
 import { WhatsappProvisioningModule } from './modules/whatsapp-provisioning/whatsapp-provisioning.module';
 import { McpModule } from './modules/mcp/mcp.module';
+import { StealthModule } from './modules/stealth/stealth.module';
 
 @Module({
-  imports: [DatabaseModule, RedisModule, BillingModule, FeatureFlagsModule, AuthModule, AuditModule, InvitationsModule, MembershipsModule, TenantsModule, UsersModule, ContactComplianceModule, DialerScheduleModule, DialerModule, CallbacksModule, OnboardingModule, PrivacyModule, AdminModule, LeadFoldersModule, MetricsModule, LeadIngestionModule, CampaignsModule, RecommendationsModule, OperationHealthModule, AnalyticsEventsModule, AnalyticsLearningModule, ExperimentsModule, BenchmarksModule, NumbersModule, CrmIntegrationsModule, EgressModule, WhatsappProvisioningModule, McpModule],
+  imports: [DatabaseModule, RedisModule, BillingModule, FeatureFlagsModule, AuthModule, AuditModule, InvitationsModule, MembershipsModule, TenantsModule, UsersModule, ContactComplianceModule, DialerScheduleModule, DialerModule, CallbacksModule, OnboardingModule, PrivacyModule, AdminModule, LeadFoldersModule, MetricsModule, LeadIngestionModule, CampaignsModule, RecommendationsModule, OperationHealthModule, AnalyticsEventsModule, AnalyticsLearningModule, ExperimentsModule, BenchmarksModule, NumbersModule, CrmIntegrationsModule, EgressModule, WhatsappProvisioningModule, McpModule, StealthModule],
   controllers: [CallsController, DialerController, HealthController, LeadsController, SdrsController],
   providers: [{ provide: APP_INTERCEPTOR, useClass: OperationalMetricsInterceptor }],
 })

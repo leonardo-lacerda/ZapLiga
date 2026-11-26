@@ -9,6 +9,7 @@ import { AuditService } from '../audit/audit.service';
 import { EntitlementService } from '../billing/entitlement.service';
 import { EgressService } from '../egress/egress.service';
 import { NumbersService } from '../numbers/numbers.service';
+import { sessionIdentity } from '../stealth/stealth-profile';
 import { ANDROID_VERSIONS, AndroidVersion } from './dto/provisioning.dto';
 import { egressSocksConfig, socksProxiesFor } from './egress-socks';
 
@@ -489,7 +490,8 @@ export class WhatsappProvisioningService implements OnModuleInit, OnModuleDestro
     return this.toJob(next);
   }
 
-  async decideLink(tenantId: string, actorUserId: string, id: string, connect: boolean) {
+  // `stealth`: the line is created with its camouflage profile (docs/stealth-profile.md).
+  async decideLink(tenantId: string, actorUserId: string, id: string, connect: boolean, stealth = false) {
     await this.entitlement.assertAction(tenantId, 'write', actorUserId);
     const row = this.assertOpen(await this.findRow(tenantId, id));
     if (!connect) return this.toJob(await this.withWorker(row, actorUserId, () => this.worker.sendInput(row.id, { type: 'finish' })));
@@ -498,7 +500,7 @@ export class WhatsappProvisioningService implements OnModuleInit, OnModuleDestro
     const locked = await this.redis.acquireLock(lockKey, token, this.timing.pairCodeWaitMs + 90_000).catch(() => false);
     if (!locked) throw new ConflictException('A conexão deste número ao ZapLiga já está em andamento.');
     try {
-      return this.toJob(await this.runLink(row, actorUserId));
+      return this.toJob(await this.runLink(row, actorUserId, stealth));
     } finally {
       await this.redis.releaseLock(lockKey, token).catch(() => undefined);
     }
@@ -680,7 +682,7 @@ export class WhatsappProvisioningService implements OnModuleInit, OnModuleDestro
    * requested and handed to the worker. The following GETs follow the Waxum
    * session in step `linking`.
    */
-  private async runLink(row: ProvisioningJobRow, actorUserId: string): Promise<ProvisioningJobRow> {
+  private async runLink(row: ProvisioningJobRow, actorUserId: string, stealth = false): Promise<ProvisioningJobRow> {
     let current = row;
     if (current.awaiting !== 'pair_code') {
       current = await this.withWorker(current, actorUserId, () => this.worker.sendInput(row.id, { type: 'link' }));
@@ -710,7 +712,14 @@ export class WhatsappProvisioningService implements OnModuleInit, OnModuleDestro
         sessionId = existing.waxum_session_id;
       } else {
         const phone = registeredPhone(current);
-        const line = await this.numbers.create(current.tenant_id, actorUserId, { label: current.phone_name?.trim() || phone, phone }, pc.slot);
+        // A GeeLark phone hosts at most one camouflaged line (its WhatsApp and its WhatsApp Business).
+        const taken = stealth ? (await this.db.query(`
+          SELECT n.label FROM provisioning_jobs other
+          JOIN whatsapp_numbers n ON n.id = other.number_id AND n.stealth_enabled AND n.status <> 'removed'
+          WHERE other.geelark_phone_id = $1 LIMIT 1
+        `, [current.geelark_phone_id])).rows[0] : undefined;
+        if (taken) throw new ConflictException(`este celular GeeLark já tem outra linha com camuflagem (${taken.label})`);
+        const line = await this.numbers.create(current.tenant_id, actorUserId, { label: current.phone_name?.trim() || phone, phone, ...(stealth ? { stealth } : {}) }, pc.slot);
         sessionId = line.waxum_session_id;
         const updated = (await this.db.query('UPDATE provisioning_jobs SET number_id = $3, updated_at = now() WHERE id = $1 AND tenant_id = $2 RETURNING *', [current.id, current.tenant_id, line.id])).rows[0] as ProvisioningJobRow | undefined;
         current = updated ?? { ...current, number_id: line.id };
@@ -749,8 +758,9 @@ export class WhatsappProvisioningService implements OnModuleInit, OnModuleDestro
       return await this.numbers.pairCode(job.tenant_id, actorUserId, numberId, phone);
     } catch (error) {
       if ((error as { statusCode?: number }).statusCode !== 503) throw error;
-      const line = (await this.db.query('SELECT id, waxum_session_id FROM whatsapp_numbers WHERE id = $1 AND tenant_id = $2', [numberId, job.tenant_id])).rows[0];
-      await this.waxum.reconnect(line?.waxum_session_id ?? sessionId);
+      const line = (await this.db.query('SELECT id, waxum_session_id, stealth_enabled, stealth_profile, stealth_profile_frozen_at FROM whatsapp_numbers WHERE id = $1 AND tenant_id = $2', [numberId, job.tenant_id])).rows[0];
+      // The client this /connect starts is the one the code pairs: it carries the line's identity.
+      await this.waxum.reconnect(line?.waxum_session_id ?? sessionId, line ? sessionIdentity(line) : undefined);
       return this.numbers.pairCode(job.tenant_id, actorUserId, numberId, phone);
     }
   }

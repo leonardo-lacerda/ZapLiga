@@ -10,6 +10,8 @@ x-api-environment: &api-environment
   WAXUM_API_KEY: ${WAXUM_API_KEY:-zapcall-local-waxum-token}
   WAXUM_JWT_SECRET: ${WAXUM_JWT_SECRET:-zapcall-local-jwt-secret-change-me}
   NATS_URL: nats://nats:4222
+  # true = no line sends its camouflage identity, as if every switch were off (docs/stealth-profile.md).
+  STEALTH_KILLSWITCH: ${STEALTH_KILLSWITCH:-false}
   JWT_ACCESS_SECRET: ${JWT_ACCESS_SECRET:-zapcall-local-access-secret-change-me}
   LEGACY_TENANT_ID: ${LEGACY_TENANT_ID:-tenant-legado}
   LEGACY_TENANT_NAME: ${LEGACY_TENANT_NAME:-Operação legada}

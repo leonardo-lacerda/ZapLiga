@@ -1,9 +1,10 @@
-import { Body, Controller, Delete, Get, Header, HttpCode, Param, Post, Put, Query, StreamableFile, UploadedFile, UseGuards, UseInterceptors } from '@nestjs/common';
+import { Body, Controller, Delete, ForbiddenException, Get, Header, HttpCode, Param, Post, Put, Query, StreamableFile, UploadedFile, UseGuards, UseInterceptors } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { AuthGuard, CurrentTenant, CurrentUser, Roles, RolesGuard, TenantMembershipGuard } from '../auth/auth.guards';
 import { FeatureFlagGuard, RequiresFeature } from '../feature-flags/feature-flags.guard';
 import { AssignEgressNodeDto, CreatePhoneDto, CreateProvisioningJobDto, LinkDecisionDto, ManualActionDto, RenamePhoneDto, RequestCodeDto, SubmitProfileDto, SubmitSmsCodeDto } from './dto/provisioning.dto';
 import { MAX_PROFILE_PHOTO_BYTES, WhatsappProvisioningService } from './whatsapp-provisioning.service';
+import { STEALTH_ADMIN_ONLY_MESSAGE } from '../stealth/stealth-profile';
 
 /** WhatsApp registration on GeeLark cloud phones (internal; docs/provisioning-contract.md section 3). */
 @Controller('/api/tenants/:tenantId/provisioning')
@@ -94,7 +95,10 @@ export class WhatsappProvisioningController {
 
   @Post('/jobs/:id/link')
   @HttpCode(200)
-  link(@Param('id') id: string, @Body() body: LinkDecisionDto, @CurrentTenant() tenantId: string, @CurrentUser() user: any) { return this.provisioning.decideLink(tenantId, user.id, id, body.connect); }
+  link(@Param('id') id: string, @Body() body: LinkDecisionDto, @CurrentTenant() tenantId: string, @CurrentUser() user: any) {
+    if (body.stealth && user.platformRole !== 'super_admin') throw new ForbiddenException(STEALTH_ADMIN_ONLY_MESSAGE);
+    return this.provisioning.decideLink(tenantId, user.id, id, body.connect, body.stealth ?? false);
+  }
 
   @Post('/jobs/:id/cancel')
   @HttpCode(200)

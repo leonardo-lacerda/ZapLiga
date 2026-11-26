@@ -6,8 +6,8 @@ import { vi } from 'vitest';
 import { server } from '../../test/setup';
 import { NumbersPage } from './NumbersPage';
 
-function Harness({ onCreate, canProvision = false, onOpenProvisioning, numbers = [] }: { onCreate: (payload: Record<string, unknown>) => void; canProvision?: boolean; onOpenProvisioning?: () => void; numbers?: Record<string, unknown>[] }) {
-  const [numberForm, setNumberForm] = useState({ label: '', phone: '' });
+function Harness({ onCreate, canProvision = false, onOpenProvisioning, numbers = [], canManageStealth = false }: { onCreate: (payload: Record<string, unknown>) => void; canProvision?: boolean; onOpenProvisioning?: () => void; numbers?: Record<string, unknown>[]; canManageStealth?: boolean }) {
+  const [numberForm, setNumberForm] = useState<Record<string, unknown>>({ label: '', phone: '' });
   const createNumber = (event: FormEvent) => {
     event.preventDefault();
     onCreate(numberForm);
@@ -30,6 +30,7 @@ function Harness({ onCreate, canProvision = false, onOpenProvisioning, numbers =
       canManageNumbers
       canProvision={canProvision}
       onOpenProvisioning={onOpenProvisioning}
+      canManageStealth={canManageStealth}
     />
   );
 }
@@ -152,4 +153,27 @@ it('libera pelo painel uma linha no bloqueio sem a ligação de teste', async ()
   await userEvent.click(screen.getByRole('button', { name: /Liberar sem teste/ }));
   await waitFor(() => expect(released).toBe(true));
   expect(screen.queryByText('Aguardando canário')).not.toBeInTheDocument();
+});
+
+it('esconde a camuflagem de quem não é admin do ZapLiga', () => {
+  render(<Harness onCreate={vi.fn()} numbers={[{ id: 'n7', label: 'Previtas 16', status: 'connected', canary_status: 'passed' }]} />);
+  expect(screen.queryByText('Camuflagem de navegador (teste)')).not.toBeInTheDocument();
+});
+
+it('cria a linha já com a camuflagem quando o admin marca a opção', async () => {
+  const onCreate = vi.fn();
+  render(<Harness onCreate={onCreate} canManageStealth />);
+  await userEvent.type(screen.getByPlaceholderText('Ex.: Comercial SP'), 'Previtas 20');
+  await userEvent.click(screen.getByRole('checkbox', { name: /Camuflagem de navegador/ }));
+  await userEvent.click(screen.getByRole('button', { name: 'Criar sessão' }));
+  expect(onCreate).toHaveBeenCalledWith(expect.objectContaining({ label: 'Previtas 20', stealth: true }));
+});
+
+it('liga a camuflagem de uma linha e avisa quando ela só vale no login', async () => {
+  let body: unknown;
+  server.use(http.patch('/api/numbers/n8/stealth', async ({ request }) => { body = await request.json(); return HttpResponse.json({ id: 'n8', stealth_enabled: true, stealth_coverage: 'PARTIAL' }); }));
+  render(<NumbersPage numbers={[{ id: 'n8', label: 'Previtas 17', status: 'connected', canary_status: 'passed' }]} numbersTotal={1} numbersOffset={0} onNumbersPageChange={() => undefined} numberForm={{ label: '', phone: '' }} setNumberForm={() => undefined} createNumber={() => undefined} showQr={() => undefined} reconnectNumber={() => undefined} removeNumber={() => undefined} qrLoading={false} qr={null} closeQr={() => undefined} canManageStealth />);
+  await userEvent.click(screen.getByRole('checkbox', { name: /Camuflagem de navegador/ }));
+  expect(await screen.findByText('Parcial: refaça o QR para valer no registro')).toBeInTheDocument();
+  expect(body).toEqual({ enabled: true });
 });

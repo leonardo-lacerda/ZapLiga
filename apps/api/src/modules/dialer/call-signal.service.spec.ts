@@ -32,6 +32,16 @@ describe('CallSignalService', () => {
     expect(insert(db)[1].slice(0, 5)).toEqual(['t1', 'n1', 'call-2', 'WA2', 'logged_out']);
   });
 
+  it('stores the server ack of a call stanza with its error (463: offer without a privacy token)', async () => {
+    const { service, db } = make({ id: 'call-3', offer_sent_at: new Date(Date.now() - 300).toISOString(), waxum_call_id: 'WA3' });
+
+    await service.store('s1', 'call_ack', { data: { id: '3EB0', from: '55279@lid', error: '463' } });
+
+    const [, params] = insert(db);
+    expect(params.slice(0, 5)).toEqual(['t1', 'n1', 'call-3', 'WA3', 'call_ack']);
+    expect(JSON.parse(params[6])).toMatchObject({ error: '463' });
+  });
+
   it('keeps a session event with no recent offer, without a call', async () => {
     const { service, db } = make(undefined);
 

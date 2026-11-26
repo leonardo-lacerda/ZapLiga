@@ -59,8 +59,9 @@ export const submitProfile = (tenantId: string, jobId: string, input: { name: st
   return json(`${jobPath(tenantId, jobId)}/profile`, { method: 'POST', body: form });
 };
 
-export const submitLinkDecision = (tenantId: string, jobId: string, connect: boolean): Promise<Job> =>
-  json(`${jobPath(tenantId, jobId)}/link`, { method: 'POST', body: JSON.stringify({ connect }) });
+// `stealth`: the line is created with its camouflage profile (docs/stealth-profile.md); super admin only.
+export const submitLinkDecision = (tenantId: string, jobId: string, connect: boolean, stealth = false): Promise<Job> =>
+  json(`${jobPath(tenantId, jobId)}/link`, { method: 'POST', body: JSON.stringify({ connect, ...(stealth ? { stealth } : {}) }) });
 
 export const cancelJob = (tenantId: string, jobId: string): Promise<Job> =>
   json(`${jobPath(tenantId, jobId)}/cancel`, { method: 'POST' });

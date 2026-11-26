@@ -1,5 +1,5 @@
 import { vi } from 'vitest';
-import { submitProfile } from './provisioning.api';
+import { submitLinkDecision, submitProfile } from './provisioning.api';
 import { job } from './provisioning.fixtures';
 
 it('envia o perfil como multipart (name + photo) sem forçar content-type', async () => {
@@ -24,4 +24,13 @@ it('omite a foto quando o usuário não escolhe uma', async () => {
   await submitProfile('tenant-1', 'job-1', { name: 'Comercial', photo: null });
   const form = (fetchSpy.mock.calls[0][1] as RequestInit).body as FormData;
   expect(form.has('photo')).toBe(false);
+});
+
+it('só manda a camuflagem no vínculo quando o admin a liga', async () => {
+  const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => new Response(JSON.stringify(job()), { status: 200 }));
+
+  await submitLinkDecision('tenant-1', 'job-1', true);
+  await submitLinkDecision('tenant-1', 'job-1', true, true);
+
+  expect(fetchSpy.mock.calls.map(([, init]) => (init as RequestInit).body)).toEqual(['{"connect":true}', '{"connect":true,"stealth":true}']);
 });

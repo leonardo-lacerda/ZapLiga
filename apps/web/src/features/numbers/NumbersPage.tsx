@@ -6,6 +6,7 @@ import type { AnyRow } from '../../types';
 import { Badge, Button, EmptyState, Icon, Pagination, Panel, SectionHeader } from '../../components/ui';
 import { PAGE_SIZE, formatNumber, labelStatus } from '../../shared/format';
 import { formatBytes } from '../access/AdminProxyPanel';
+import { STEALTH_COVERAGE_COPY, STEALTH_HINT, STEALTH_LABEL } from './stealth.copy';
 
 const connectedStatuses = ['connected', 'online', 'ready', 'authenticated', 'logged_in'];
 
@@ -14,7 +15,8 @@ function updateNumberField(setNumberForm: AnyRow['setNumberForm'], numberForm: A
 }
 
 // `canProvision`: flag whatsapp_provisioning + papel leader/super_admin (calculado em App com canUseProvisioning).
-export function NumbersPage({ numbers, numbersTotal, numbersOffset, onNumbersPageChange, numberForm, setNumberForm, createNumber, showQr, reconnectNumber, removeNumber, qrLoading, qr, qrNumberId, closeQr, canManageNumbers = false, canProvision = false, onOpenProvisioning, canaryCall, stationReady = false }: AnyRow) {
+// `canManageStealth`: super admin; liga a camuflagem por linha (docs/stealth-profile.md).
+export function NumbersPage({ numbers, numbersTotal, numbersOffset, onNumbersPageChange, numberForm, setNumberForm, createNumber, showQr, reconnectNumber, removeNumber, qrLoading, qr, qrNumberId, closeQr, canManageNumbers = false, canProvision = false, onOpenProvisioning, canaryCall, stationReady = false, canManageStealth = false }: AnyRow) {
   const [pairNumber, setPairNumber] = useState<AnyRow | null>(null);
   return <>
     <div className="page-heading">
@@ -61,6 +63,11 @@ export function NumbersPage({ numbers, numbersTotal, numbersOffset, onNumbersPag
           </div>
         </div>
 
+        {canManageStealth && <label className="admin-flag-row">
+          <span>{STEALTH_LABEL}<small>{STEALTH_HINT}</small></span>
+          <input type="checkbox" name="stealth" checked={Boolean(numberForm.stealth)} onChange={(e) => setNumberForm({ ...numberForm, stealth: e.target.checked })} />
+        </label>}
+
         <div className="number-form-footer">
           <p className="form-hint">A linha nasce com os limites de <strong>Configurações do discador</strong> (chamadas simultâneas e proteção entre chamadas). Depois de criar, conecte pelo card da sessão: <strong>Abrir QR</strong> (escanear com o celular) ou <strong>Conectar por código</strong> (digitar um código no WhatsApp do celular).</p>
           <Button icon="plus">Criar sessão</Button>
@@ -77,6 +84,7 @@ export function NumbersPage({ numbers, numbersTotal, numbersOffset, onNumbersPag
         <LineHealth number={number} />
         {canManageNumbers && <CanaryStep number={number} canaryCall={canaryCall} stationReady={stationReady} />}
         <VerificationOnlyToggle number={number} canManage={canManageNumbers} />
+        <StealthToggle number={number} canManage={canManageStealth} />
         {canManageNumbers && <div className="card-actions">{!connectedStatuses.includes(String(number.status).toLowerCase()) && <><Button variant="secondary" icon="qr" disabled={qrLoading} onClick={() => void showQr(number.id)}>Abrir QR</Button><Button variant="secondary" icon="phone" disabled={qrLoading} onClick={() => setPairNumber(number)}>Conectar por código</Button></>}<Button variant="ghost" icon="refresh" disabled={qrLoading} onClick={() => void reconnectNumber(number.id)}>Reconectar</Button><Button variant="danger" icon="close" disabled={qrLoading} onClick={() => void removeNumber(number.id, number.label)}>Remover</Button></div>}
       </div>)}
       {!numbers.length && <div className="full-span"><EmptyState title="Nenhum número cadastrado" description={canManageNumbers ? 'Adicione uma sessão para conectar seu WhatsApp.' : 'Os números serão configurados pelo administrador da plataforma.'} /></div>}
@@ -179,6 +187,30 @@ export function VerificationOnlyToggle({ number, canManage }: { number: AnyRow; 
       <span>Só para verificação de WhatsApp<small>A linha só confere se um telefone tem WhatsApp e não faz ligações.</small></span>
       <input type="checkbox" checked={enabled} disabled={saving} onChange={(event) => void change(event.target.checked)} />
     </label>
+    {error && <div className="alert" role="alert"><Icon name="alert" /><span>{error}</span></div>}
+  </>;
+}
+
+/** Camuflagem de navegador da linha (só o admin do ZapLiga): vale no próximo login; o registro, no próximo QR. */
+export function StealthToggle({ number, canManage }: { number: AnyRow; canManage: boolean }) {
+  const [line, setLine] = useState<{ enabled: boolean; coverage: string | null }>({ enabled: Boolean(number.stealth_enabled), coverage: number.stealth_coverage ?? null });
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState('');
+  if (!canManage) return null;
+  const change = async (next: boolean) => {
+    setSaving(true); setError('');
+    try {
+      const saved = await json(`/api/numbers/${number.id}/stealth`, { method: 'PATCH', body: JSON.stringify({ enabled: next }) });
+      setLine({ enabled: Boolean(saved?.stealth_enabled ?? next), coverage: saved?.stealth_coverage ?? null });
+    } catch (failure) { setError(failure instanceof Error ? failure.message : String(failure)); }
+    finally { setSaving(false); }
+  };
+  return <>
+    <label className="admin-flag-row">
+      <span>{STEALTH_LABEL}<small>{STEALTH_HINT}</small></span>
+      <input type="checkbox" checked={line.enabled} disabled={saving} onChange={(event) => void change(event.target.checked)} />
+    </label>
+    {line.enabled && line.coverage && <div className="resource-meta"><span>Camuflagem</span><Badge tone={line.coverage === 'FULL' ? 'success' : 'warning'}>{STEALTH_COVERAGE_COPY[line.coverage] ?? line.coverage}</Badge></div>}
     {error && <div className="alert" role="alert"><Icon name="alert" /><span>{error}</span></div>}
   </>;
 }
