@@ -322,6 +322,21 @@ jobs:
             [ "${active:-0}" = "0" ] || echo "Aviso: $active cadastro(s) ainda em andamento após 25 min; atualizando mesmo assim" >&2
           fi
 
+          # Calls in progress live in the API's memory and in each Waxum: restarting either drops them.
+          # No call starts while the drain key exists (DEPLOY_DRAIN_KEY, dial-intents.ts); the deploy
+          # waits for the calls in progress to end (up to 10 min) and deletes the key once both APIs
+          # are up. The key expires by itself if the deploy dies halfway.
+          "${COMPOSE[@]}" exec -T redis redis-cli SET zapcall:global:deploy-drain 1 EX 1500 </dev/null >/dev/null \
+            || echo "Aviso: não consegui pausar as ligações novas" >&2
+          for _ in $(seq 1 60); do
+            calls=$("${COMPOSE[@]}" exec -T postgres sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -tAc "SELECT count(*) FROM calls WHERE status IN ('"'"'reserved'"'"','"'"'dialing'"'"','"'"'media_active'"'"') AND created_at > now() - interval '"'"'2 hours'"'"'"' </dev/null 2>/dev/null | tr -d '[:space:]')
+            calls=${calls:-0}
+            [ "$calls" = "0" ] && break
+            echo "Esperando $calls ligação(ões) em andamento terminar antes de reiniciar..."
+            sleep 10
+          done
+          [ "${calls:-0}" = "0" ] || echo "Aviso: $calls ligação(ões) ainda em andamento após 10 min; reiniciando mesmo assim" >&2
+
           edge_services=$("${COMPOSE[@]}" config --services | grep -- '-edge-' || true)
           if ! docker image inspect "$WORKER_IMAGE" >/dev/null 2>&1; then
             edge_services=$(printf '%s\n' "$edge_services" | grep -v '^socks-edge-' || true)
@@ -423,6 +438,7 @@ jobs:
           }
           deploy_instance api-a 3000 "$IMAGE_API_A"
           deploy_instance api-b 3001 "$IMAGE_API_B"
+          "${COMPOSE[@]}" exec -T redis redis-cli DEL zapcall:global:deploy-drain </dev/null >/dev/null || true
 
           # The web image is content-addressed by Vite asset hashes, but the
           # Compose service itself has no config change when only frontend

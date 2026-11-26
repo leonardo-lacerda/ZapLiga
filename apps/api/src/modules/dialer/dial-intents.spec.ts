@@ -1,7 +1,7 @@
 import 'reflect-metadata';
 jest.mock('@nestjs/jwt', () => ({ JwtService: class JwtService {} }));
 import { DialerService } from './dialer.service';
-import { DialRefusedError, dialIntentKey, sanitizeExternalRef } from './dial-intents';
+import { DEPLOY_DRAIN_KEY, DialRefusedError, dialIntentKey, sanitizeExternalRef } from './dial-intents';
 
 describe('sanitizeExternalRef', () => {
   it('keeps a flat map of short identifiers and drops empty values', () => {
@@ -21,7 +21,7 @@ describe('sanitizeExternalRef', () => {
 describe('DialerService dial intents', () => {
   const line = { id: 'num-1', tenant_id: 'tenant-1', phone: '5585900000000', status: 'connected', flagged_until: null, last_call_ended_at: null, max_concurrent_calls: 1, active_calls: 0, on_pc_network: true, canary_status: 'passed', under_daily_cap: true };
 
-  const makeService = (overrides: { sdrs?: any[]; numbers?: any[]; suppressed?: boolean; busy?: boolean; stationAlive?: boolean; storedIntent?: any } = {}) => {
+  const makeService = (overrides: { sdrs?: any[]; numbers?: any[]; suppressed?: boolean; busy?: boolean; stationAlive?: boolean; storedIntent?: any; draining?: boolean } = {}) => {
     const query = jest.fn(async (sql: string) => {
       if (sql.includes('FROM sdrs s WHERE s.tenant_id = $1 AND s.id = $2')) return { rows: overrides.sdrs ?? [{ id: 'sdr-1', connection_instance_id: 'instance-a' }] };
       if (sql.includes('FROM whatsapp_numbers n')) return { rows: overrides.numbers ?? [line] };
@@ -34,7 +34,7 @@ describe('DialerService dial intents', () => {
     const db = { query, transaction: jest.fn(async (cb: any) => cb(client)) };
     const redis = {
       client: {
-        exists: jest.fn().mockResolvedValue(overrides.stationAlive === false ? 0 : 1),
+        exists: jest.fn(async (key: string) => (key === DEPLOY_DRAIN_KEY ? (overrides.draining ? 1 : 0) : overrides.stationAlive === false ? 0 : 1)),
         set: jest.fn().mockResolvedValue('OK'),
         getdel: jest.fn().mockResolvedValue(overrides.storedIntent === undefined ? null : JSON.stringify(overrides.storedIntent)),
       },
@@ -44,6 +44,11 @@ describe('DialerService dial intents', () => {
   };
 
   const input = { tenantId: 'tenant-1', integrationId: 'int-1', sdrId: 'sdr-1', numberId: 'num-1', phone: '+55 (11) 99999-0000', name: 'Ana', externalRef: { contact_id: 7 } };
+
+  it('refuses while a deploy waits for the calls in progress to end', async () => {
+    const { service } = makeService({ draining: true });
+    await expect(service.createDialIntent(input)).rejects.toMatchObject({ code: 'system_updating', retryAfterSeconds: 60 });
+  });
 
   it('stores a single-use intent with a short TTL when every check passes', async () => {
     const { service, redis } = makeService();

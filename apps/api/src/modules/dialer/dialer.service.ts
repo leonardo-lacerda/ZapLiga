@@ -43,7 +43,7 @@ import {
   canaryCodec,
   YOUNG_LINE_DAILY_CALLS,
 } from './dialer.rules';
-import { DIAL_INTENT_TTL_SECONDS, DialIntent, DialRefusedError, dialIntentKey } from './dial-intents';
+import { DIAL_INTENT_TTL_SECONDS, DialIntent, DialRefusedError, dialIntentKey, DEPLOY_DRAIN_KEY, DEPLOY_DRAIN_RETRY_SECONDS } from './dial-intents';
 import { OFF_PC_NETWORK_CODE, OFF_PC_NETWORK_MESSAGE, onPcNetworkSql } from '../egress/pc-network';
 import { CrmCallEventType, CrmEventsService, CrmLineEventType } from '../crm-events/crm-events.service';
 import { CallRecordingsService } from '../call-recordings/call-recordings.service';
@@ -844,6 +844,7 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
     const { tenantId } = input;
     await this.entitlement?.assertCanOperate(tenantId);
     if (this.schedule) await this.schedule.assertAllowed(tenantId);
+    await this.assertNoDeployDrain();
     const phone = normalizePhone(input.phone);
     if (phone.length < 10 || phone.length > 15) throw new DialRefusedError('invalid_phone', 'Informe um telefone válido com DDD');
     const [sdrs, numbers, suppressed, busy] = await Promise.all([
@@ -1290,6 +1291,7 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
       const settings = await this.getSettings(tenantId);
       if (!settings?.running) return;
       if (this.schedule && !(await this.schedule.evaluate(tenantId)).allowed) return;
+      if (await this.redis.client.exists(DEPLOY_DRAIN_KEY)) return;
       const decisionEngineEnabled = this.featureFlags ? await this.featureFlags.enabled(tenantId, 'decision_engine') : false;
       const [sdrs, numbers, leads, activeFolderCount] = await Promise.all([
         this.db.query(`
@@ -1541,6 +1543,11 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
     }));
   }
 
+  // A deploy is waiting for the calls in progress to end (DEPLOY_DRAIN_KEY): refuse new ones.
+  private async assertNoDeployDrain() {
+    if (await this.redis.client.exists(DEPLOY_DRAIN_KEY)) throw new DialRefusedError('system_updating', 'O sistema está sendo atualizado: tente ligar de novo em 1 minuto', DEPLOY_DRAIN_RETRY_SECONDS);
+  }
+
   private async startReservedCall(sdr: any, number: any, lead: any, settings: any, token: string, source: string, tenantId = legacyTenantId(), integration?: IntegrationCallContext, canary = false) {
     const callId = randomUUID();
     // A call stays 'reserved' until answered, and expireReservations() cancels reserved calls past
@@ -1554,6 +1561,7 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
       // reservadas quando a janela encerra entre a seleção e a transação.
       await this.entitlement?.assertCanOperate(tenantId);
       if (this.schedule) await this.schedule.assertAllowed(tenantId);
+      await this.assertNoDeployDrain();
       await this.db.transaction(async (client) => {
         if (this.planLimits) await this.planLimits.assertCanReserveCall(tenantId, client);
         const folder = await client.query(`

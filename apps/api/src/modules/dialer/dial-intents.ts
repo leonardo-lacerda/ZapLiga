@@ -21,6 +21,14 @@ export type DialIntent = {
 };
 
 /** A refusal the CRM can act on (pick another line, retry later, reconnect the station). */
+/**
+ * Set by the deploy (.github/workflows/deploy.yml) while it waits for the calls in progress to end
+ * before restarting Waxum and the API: no call starts meanwhile. It expires by itself (EX) if a
+ * deploy dies halfway.
+ */
+export const DEPLOY_DRAIN_KEY = 'zapcall:global:deploy-drain';
+export const DEPLOY_DRAIN_RETRY_SECONDS = 60;
+
 export class DialRefusedError extends Error {
   constructor(readonly code: string, message: string, readonly retryAfterSeconds?: number) {
     super(message);
