@@ -28,7 +28,7 @@ export const MANUAL_CALLS_PER_LINE = 1;
 // later, 2026-11-25). So after every pairing the first call of a line is a canary to a team
 // phone, and a young line has a daily cap; a line WhatsApp took away this many times is retired.
 export const YOUNG_LINE_DAYS = 7;
-export const YOUNG_LINE_DAILY_CALLS = 40;
+export const YOUNG_LINE_DAILY_CALLS = 60;
 export const LINE_RETIRED_AFTER_LOSSES = 2;
 // The canary passes when its call lasted this long and the line was still connected
 // CANARY_CHECK_DELAY_MS after it started; a failed one rests CANARY_RETRY_HOURS.

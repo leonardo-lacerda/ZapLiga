@@ -66,6 +66,6 @@ describe('DialerService canary', () => {
     const cap = lineUnderDailyCapSql('n');
     expect(cap).toContain("n.last_paired_at < now() - interval '7 days'");
     expect(cap).toContain('c.number_id = n.id');
-    expect(cap).toContain(') < 40)');
+    expect(cap).toContain(') < 60)');
   });
 });

@@ -125,7 +125,7 @@ it('mostra por que a linha caiu, as ligações de hoje da linha jovem e as recon
   ]} />);
   expect(screen.getByText(/Removida pelo WhatsApp/)).toBeInTheDocument();
   expect(screen.getByText(/Aposentada: o WhatsApp tirou este número 2 vezes/)).toBeInTheDocument();
-  expect(screen.getByText('12/40')).toBeInTheDocument();
+  expect(screen.getByText('12/60')).toBeInTheDocument();
   expect(screen.getByText('Reconexões em 24 h')).toBeInTheDocument();
 });
 

@@ -103,7 +103,7 @@ function CallBlock({ flaggedUntil }: { flaggedUntil?: string | null }) {
 }
 
 const RETIRED_AFTER_LOSSES = 2;
-const YOUNG_LINE_DAILY_CALLS = 40;
+const YOUNG_LINE_DAILY_CALLS = 60;
 const lossCopy: Record<string, string> = {
   device_removed: 'Removida pelo WhatsApp: precisa de QR novo e descanso',
   account_locked: 'Conta travada: resolva no celular antes do QR',
