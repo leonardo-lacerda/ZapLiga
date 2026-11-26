@@ -13,11 +13,11 @@ export function leadIsEligible(input: {
 }
 
 /**
- * TEMPORARY (2026-11-19): a line takes up to this many manual calls at once, instead of
- * whatsapp_numbers.max_concurrent_calls and the exclusive line/session lock. Asked for while
- * there is a single working line; restore one call per line when the limit is wanted back.
+ * A line places one manual call at a time, under the exclusive line/session lock. Up to 4 were
+ * allowed from 2026-11-19 to 2026-11-26; a second offer from a line already in a call was
+ * followed 2 s later by WhatsApp locking the account (Previtas 2, 2026-11-26 17:10 UTC).
  */
-export const MANUAL_CALLS_PER_LINE = 4;
+export const MANUAL_CALLS_PER_LINE = 1;
 
 // A manual call is a human deciding to dial now, so it skips the automatic
 // dialer's pacing (the per-line cooldown between calls). What it must still

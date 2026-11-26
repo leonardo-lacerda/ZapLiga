@@ -682,7 +682,7 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
     const token = randomUUID();
     const reserved = await this.redis.reserve({
       tenantId, token, globalMax: MANUAL_TENANT_CONCURRENCY,
-      numberMax: MANUAL_CALLS_PER_LINE, exclusiveLine: false, numberId: number.id, waxumSessionId: numberSessionId(number),
+      numberMax: MANUAL_CALLS_PER_LINE, exclusiveLine: true, numberId: number.id, waxumSessionId: numberSessionId(number),
       ...manualPacingConfig(number),
       leadId: lead.id, sdrId: sdr.id,
       ttlMs: (MANUAL_RING_SAFETY_SECONDS + 60) * 1000,
@@ -825,7 +825,7 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
     const token = randomUUID();
     const reserved = await this.redis.reserve({
       tenantId, token, globalMax: MANUAL_TENANT_CONCURRENCY,
-      numberMax: MANUAL_CALLS_PER_LINE, exclusiveLine: false, numberId: number.id, waxumSessionId: numberSessionId(number),
+      numberMax: MANUAL_CALLS_PER_LINE, exclusiveLine: true, numberId: number.id, waxumSessionId: numberSessionId(number),
       ...manualPacingConfig(number),
       leadId: lead.id, sdrId: sdr.id,
       ttlMs: (MANUAL_RING_SAFETY_SECONDS + 60) * 1000,
