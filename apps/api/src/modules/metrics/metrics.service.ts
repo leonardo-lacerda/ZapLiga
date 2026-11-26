@@ -184,6 +184,7 @@ export class MetricsService {
         current.callsAnswered, current.callsMade,
       ),
       connectedSeconds: toMetricValue(current.connectedSeconds, previous.connectedSeconds),
+      ringSeconds: toMetricValue(current.ringSeconds, previous.ringSeconds),
       avgDurationSeconds: toMetricValue(
         avgConnectedDurationSeconds(current.connectedSeconds, current.callsAnswered),
         avgConnectedDurationSeconds(previous.connectedSeconds, previous.callsAnswered),

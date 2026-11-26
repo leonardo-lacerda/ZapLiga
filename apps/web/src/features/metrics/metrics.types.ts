@@ -35,6 +35,7 @@ export type MetricsKpis = {
   callsAnswered: MetricValue;
   answerRate: MetricValue;
   connectedSeconds: MetricValue;
+  ringSeconds: MetricValue;
   avgDurationSeconds: MetricValue;
   positiveResults: MetricValue;
   wrapUpRate: MetricValue;

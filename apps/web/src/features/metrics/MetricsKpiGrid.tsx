@@ -10,6 +10,7 @@ const KPI_DEFS: { key: keyof MetricsKpis; label: string; icon: string; tone: str
   { key: 'callsAnswered', label: 'Chamadas atendidas', icon: 'check', tone: 'green', format: 'number', detail: 'Conexão registrada' },
   { key: 'answerRate', label: 'Taxa de atendimento', icon: 'chart', tone: 'blue', format: 'percent', detail: 'Atendidas ÷ realizadas' },
   { key: 'connectedSeconds', label: 'Tempo conectado', icon: 'headset', tone: 'purple', format: 'duration', detail: 'Soma do tempo de conversa' },
+  { key: 'ringSeconds', label: 'Tempo de discagem', icon: 'phone', tone: 'orange', format: 'duration', detail: 'Soma do tempo tocando no celular do lead' },
   { key: 'avgDurationSeconds', label: 'Duração média', icon: 'history', tone: 'orange', format: 'duration', detail: 'Tempo conectado ÷ atendidas' },
   { key: 'positiveResults', label: 'Resultados positivos', icon: 'sparkles', tone: 'green', format: 'number', detail: 'Inclui conversões' },
   { key: 'wrapUpRate', label: 'Taxa de pós-atendimento', icon: 'check', tone: 'blue', format: 'percent', detail: 'Atendidas com registro concluído' },
@@ -17,7 +18,7 @@ const KPI_DEFS: { key: keyof MetricsKpis; label: string; icon: string; tone: str
   { key: 'leadsInQueue', label: 'Leads na fila', icon: 'users', tone: 'orange', format: 'number', detail: 'Retrato do momento, sem comparação' },
 ];
 
-export const PRIMARY_KPI_KEYS: (keyof MetricsKpis)[] = ['callsMade', 'uniqueLeadsWorked', 'answerRate', 'positiveResults', 'connectedSeconds'];
+export const PRIMARY_KPI_KEYS: (keyof MetricsKpis)[] = ['callsMade', 'uniqueLeadsWorked', 'answerRate', 'positiveResults', 'connectedSeconds', 'ringSeconds'];
 export const SECONDARY_KPI_KEYS: (keyof MetricsKpis)[] = ['callsAnswered', 'avgDurationSeconds', 'wrapUpRate', 'activeSdrs', 'leadsInQueue'];
 
 function formatValue(value: number, format: KpiFormat) {

@@ -67,6 +67,7 @@ export const METRIC_DEFINITIONS: { label: string; formula: string }[] = [
   { label: 'Taxa de atendimento', formula: 'Atendidas ÷ chamadas realizadas' },
   { label: 'Tentativas médias por lead', formula: 'Chamadas ÷ leads únicos trabalhados' },
   { label: 'Tempo conectado', formula: 'Soma do tempo de conversa (separado do tempo de toque)' },
+  { label: 'Tempo de discagem', formula: 'Soma do tempo de toque: da oferta enviada ao WhatsApp até o lead atender ou a ligação acabar (inclui as não atendidas)' },
   { label: 'Duração média', formula: 'Tempo conectado ÷ chamadas atendidas' },
   { label: 'Taxa de pós-atendimento', formula: 'Atendidas com registro concluído ÷ atendidas' },
   { label: 'Avanço de etapa', formula: 'Leads que mudaram de etapa no período (histórico, não apenas o estado atual)' },

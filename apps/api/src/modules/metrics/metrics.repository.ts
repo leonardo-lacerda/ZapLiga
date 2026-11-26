@@ -22,6 +22,7 @@ export type CallAggregates = {
   uniqueLeadsWorked: number;
   callsAnswered: number;
   connectedSeconds: number;
+  ringSeconds: number;
   wrapUpsCompleted: number;
   positiveResults: number;
   activeSdrCount: number;
@@ -103,6 +104,7 @@ export class MetricsRepository {
         count(DISTINCT sdr_id)::int AS active_sdr_count,
         count(*) FILTER (WHERE connected_at IS NOT NULL)::int AS calls_answered,
         COALESCE(sum(connected_duration_seconds) FILTER (WHERE connected_at IS NOT NULL), 0)::int AS connected_seconds,
+        COALESCE(sum(ring_duration_seconds), 0)::int AS ring_seconds,
         count(*) FILTER (WHERE connected_at IS NOT NULL AND wrap_up_completed_at IS NOT NULL)::int AS wrap_ups_completed,
         count(*) FILTER (WHERE call_result = ANY($${positiveParamIndex}::text[]))::int AS positive_results,
         count(*) FILTER (WHERE status = 'failed')::int AS failed_calls
@@ -115,6 +117,7 @@ export class MetricsRepository {
       uniqueLeadsWorked: Number(row.unique_leads_worked ?? 0),
       callsAnswered: Number(row.calls_answered ?? 0),
       connectedSeconds: Number(row.connected_seconds ?? 0),
+      ringSeconds: Number(row.ring_seconds ?? 0),
       wrapUpsCompleted: Number(row.wrap_ups_completed ?? 0),
       positiveResults: Number(row.positive_results ?? 0),
       activeSdrCount: Number(row.active_sdr_count ?? 0),
