@@ -3,6 +3,7 @@ import type React from 'react';
 import { Badge, Button, EmptyState, Icon, Panel, SectionHeader } from '../../components/ui';
 import { json } from '../../services/api';
 import type { AnyRow } from '../../types';
+import { AdminProxyPanel } from './AdminProxyPanel';
 
 // Internet exit through an attendant's PC (docs/saida-pelo-pc-do-atendente.md).
 
@@ -145,5 +146,6 @@ export function AdminEgressPanel() {
       })}
       {!items.length && <EmptyState title="Nenhum PC ainda" description="Rode o comando de instalação no PC de um atendente." />}
     </Panel>
+    <AdminProxyPanel />
   </>;
 }

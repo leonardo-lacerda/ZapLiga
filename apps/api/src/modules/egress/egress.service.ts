@@ -19,7 +19,7 @@ const PC_KEY_SECONDS = 90 * 24 * 3600;
 const PC_KEY_RENEW_SECONDS = 7 * 24 * 3600;
 const EDGE_KEY_SECONDS = 3600;
 // The slot watcher reports every 10 s; past this the slot itself is down.
-import { REPORT_STALE_SECONDS } from './pc-network';
+import { isProxySlot, REPORT_STALE_SECONDS } from './pc-network';
 
 export { REPORT_STALE_SECONDS };
 // How often the tailnet's devices are read again while a slot waits for its PC.
@@ -47,7 +47,7 @@ export class EgressService {
 
   constructor(private readonly db: DatabaseService, private readonly audit: AuditService, private readonly numbers: NumbersService) {}
 
-  slots() { return [...waxumNodes().keys()].filter((node) => node !== MAIN_WAXUM_NODE); }
+  slots() { return [...waxumNodes().keys()].filter((node) => node !== MAIN_WAXUM_NODE && !isProxySlot(node)); }
 
   async settings() {
     const result = await this.db.query('SELECT tailscale_client_id, pool_enabled, max_numbers_per_pc, offline_grace_seconds FROM egress_settings');
@@ -190,10 +190,13 @@ export class EgressService {
     return { removed: true };
   }
 
-  // The exits a line can be moved to: every slot with a PC. Never the VPS.
+  // The exits a line can be moved to: every slot with a PC or a proxy. Never the VPS.
   async nodes() {
     const pcs = await this.pcExits();
-    return { items: pcs.map((pc) => ({ node: pc.slot, label: pc.name, online: pc.online })) };
+    const proxies = (await this.db.query(`
+      SELECT slot, name, COALESCE(route = 'proxy' AND route_reported_at > now() - make_interval(secs => $1), false) AS online FROM egress_proxies ORDER BY created_at
+    `, [REPORT_STALE_SECONDS])).rows;
+    return { items: [...pcs.map((pc) => ({ node: pc.slot, label: pc.name, online: pc.online })), ...proxies.map((proxy) => ({ node: proxy.slot, label: `Proxy: ${proxy.name}`, online: proxy.online === true }))] };
   }
 
   /**

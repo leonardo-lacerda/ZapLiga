@@ -1,6 +1,6 @@
 import { NumbersService } from './numbers.service';
 
-const number = { id: 'n1', tenant_id: 't1', label: 'numero 1', status: 'disconnected', waxum_session_id: 's1' };
+const number = { id: 'n1', tenant_id: 't1', label: 'numero 1', status: 'disconnected', waxum_session_id: 's1', online: true };
 
 const build = (waxum: Record<string, jest.Mock>) => {
   const db = { query: jest.fn(async () => ({ rows: [number] })) };
@@ -149,7 +149,7 @@ describe('NumbersService QR code', () => {
     const onDeadPc = { ...number, waxum_node: 'edge-3' };
     const db = {
       query: jest.fn(async (sql: string) => {
-        if (sql.includes('FROM egress_pcs WHERE slot')) return { rows: [] };
+        if (sql.includes('AS online')) return { rows: [{ online: false }] };
         if (sql.includes('SELECT p.slot')) return { rows: [{ slot: 'edge-2' }] };
         if (sql.startsWith('UPDATE whatsapp_numbers SET waxum_node')) return { rows: [{ ...onDeadPc, waxum_node: 'edge-2', waxum_session_id: 's2' }] };
         return { rows: [onDeadPc] };

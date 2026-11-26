@@ -343,6 +343,15 @@ jobs:
                 stale_slots="$stale_slots $(printf '%s\n' "$edge_services" | grep -E "^(tailscale|waxum|socks)-$slot\$" | tr '\n' ' ')"
               fi
             done
+            # Proxy slots (proxy-edge-N + waxum-proxy-edge-N), same rule with their own script.
+            for service in $(printf '%s\n' "$edge_services" | grep '^proxy-edge-' || true); do
+              px_id=$("${COMPOSE[@]}" ps -q "$service" 2>/dev/null || true)
+              wx_id=$("${COMPOSE[@]}" ps -q "waxum-$service" 2>/dev/null || true)
+              if { [ -n "$px_id" ] && ! docker exec "$px_id" cat /usr/local/bin/proxy-entrypoint.sh 2>/dev/null | cmp -s - infra/egress/proxy-entrypoint.sh; } \
+                || { [ -n "$wx_id" ] && ! docker exec "$wx_id" cat /usr/local/bin/waxum-edge-guard.sh 2>/dev/null | cmp -s - infra/egress/waxum-edge-guard.sh; }; then
+                stale_slots="$stale_slots $service waxum-$service"
+              fi
+            done
             if [ -n "$stale_slots" ]; then
               echo "Recriando vagas com script de saída desatualizado:$stale_slots"
               # shellcheck disable=SC2086

@@ -5,8 +5,9 @@ describe('EgressService PC exits', () => {
     { id: 'pc-1', name: 'PC da Ana', slot: 'edge-1', online: true },
     { id: 'pc-2', name: 'PC do Bruno', slot: 'edge-2', online: null },
   ];
+  const proxies = [{ slot: 'proxy-1', name: 'Roundproxies', online: true }];
   const make = () => {
-    const db = { query: jest.fn(async (_sql: string, params: unknown[]) => ({ rows: params[1] ? rows.filter((row) => row.id === params[1]) : rows })) };
+    const db = { query: jest.fn(async (sql: string, params: unknown[]) => (sql.includes('FROM egress_proxies') ? { rows: proxies } : { rows: params[1] ? rows.filter((row) => row.id === params[1]) : rows })) };
     return { db, service: new EgressService(db as any, { record: jest.fn() } as any, {} as any) };
   };
 
@@ -29,11 +30,12 @@ describe('EgressService PC exits', () => {
     expect(db.query.mock.calls[0][1]).toEqual([REPORT_STALE_SECONDS, 'pc-2']);
   });
 
-  it('offers only PC slots as exits, never the VPS', async () => {
+  it('offers PC and proxy slots as exits, never the VPS', async () => {
     const { service } = make();
     expect(await service.nodes()).toEqual({ items: [
       { node: 'edge-1', label: 'PC da Ana', online: true },
       { node: 'edge-2', label: 'PC do Bruno', online: false },
+      { node: 'proxy-1', label: 'Proxy: Roundproxies', online: true },
     ] });
   });
 });

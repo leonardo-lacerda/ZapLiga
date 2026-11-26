@@ -6,7 +6,7 @@
 set -eu
 
 echo "Aguardando a vaga ${EGRESS_SLOT:-} ter um PC..."
-until grep -qxE 'pc|offline' "$EGRESS_ROUTE_FILE" 2>/dev/null; do
+until grep -qxE 'pc|offline|proxy' "$EGRESS_ROUTE_FILE" 2>/dev/null; do
   sleep 2
 done
 exec /bin/sh /usr/local/bin/waxum-entrypoint-guard.sh "$@"

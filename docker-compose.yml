@@ -6,7 +6,7 @@ x-api-environment: &api-environment
   WAXUM_URL: http://waxum:3451
   # The PC slots below: Waxums that go out through an attendant's PC
   # (docs/saida-pelo-pc-do-atendente.md). Admin → Saídas de internet assigns them.
-  WAXUM_EDGE_NODES: ${WAXUM_EDGE_NODES:-edge-1=http://tailscale-edge-1:3451,edge-2=http://tailscale-edge-2:3451,edge-3=http://tailscale-edge-3:3451,edge-4=http://tailscale-edge-4:3451,edge-5=http://tailscale-edge-5:3451,edge-6=http://tailscale-edge-6:3451,edge-7=http://tailscale-edge-7:3451,edge-8=http://tailscale-edge-8:3451,edge-9=http://tailscale-edge-9:3451,edge-10=http://tailscale-edge-10:3451}
+  WAXUM_EDGE_NODES: ${WAXUM_EDGE_NODES:-edge-1=http://tailscale-edge-1:3451,edge-2=http://tailscale-edge-2:3451,edge-3=http://tailscale-edge-3:3451,edge-4=http://tailscale-edge-4:3451,edge-5=http://tailscale-edge-5:3451,edge-6=http://tailscale-edge-6:3451,edge-7=http://tailscale-edge-7:3451,edge-8=http://tailscale-edge-8:3451,edge-9=http://tailscale-edge-9:3451,edge-10=http://tailscale-edge-10:3451,proxy-1=http://proxy-edge-1:3451}
   WAXUM_API_KEY: ${WAXUM_API_KEY:-zapcall-local-waxum-token}
   WAXUM_JWT_SECRET: ${WAXUM_JWT_SECRET:-zapcall-local-jwt-secret-change-me}
   NATS_URL: nats://nats:4222
@@ -552,6 +552,46 @@ services:
       - tailscale-edge-10
       - nats
 
+  # Proxy slot (docs/saida-por-proxy.md): everything the slot's Waxum sends goes out through a
+  # residential SOCKS5 proxy registered in Admin → Saídas de internet → Proxies, UDP included,
+  # so its line keeps an IP of its own. No proxy, or a dead one, leaves the slot without internet.
+  proxy-edge-1:
+    image: xjasonlyu/tun2socks:v2.6.0@sha256:aa931665f4a3ad9be7bc1ea5117c41471c20a770a62490e38090c839c1fef107
+    entrypoint: ["/bin/sh", "/usr/local/bin/proxy-entrypoint.sh"]
+    restart: unless-stopped
+    hostname: zapliga-proxy-1
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    cap_add:
+      - NET_ADMIN
+    environment:
+      EGRESS_SLOT: proxy-1
+      WAXUM_API_KEY: ${WAXUM_API_KEY:-zapcall-local-waxum-token}
+    volumes:
+      - egress_proxy_1:/egress
+      - ./infra/egress/proxy-entrypoint.sh:/usr/local/bin/proxy-entrypoint.sh:ro
+
+  waxum-proxy-edge-1:
+    <<: *edge-waxum
+    image: zapliga-waxum:0.12.6-multirelay-v5-signal
+    network_mode: service:proxy-edge-1
+    environment:
+      <<: *edge-waxum-environment
+      EGRESS_SLOT: proxy-1
+      WA_DEVICE_PLATFORM: chrome
+      WA_DEVICE_OS: Windows
+      WA_CLIENT_LOCALE: pt_BR
+    volumes:
+      - waxum_data:/app/whatsapp_sessions
+      - waxum_proxy_1_data:/app/registry
+      - egress_proxy_1:/egress:ro
+      - ./infra/egress/waxum-edge-guard.sh:/usr/local/bin/waxum-edge-guard.sh:ro
+      - ./infra/waxum/entrypoint-guard.sh:/usr/local/bin/waxum-entrypoint-guard.sh:ro
+      - ./infra/waxum/healthcheck.sh:/usr/local/bin/waxum-healthcheck.sh:ro
+    depends_on:
+      - proxy-edge-1
+      - nats
+
   api-a:
     <<: *api-common
     image: zapliga-api-a:latest
@@ -765,4 +805,6 @@ volumes:
   tailscale_edge_10:
   egress_edge_10:
   waxum_edge_10_data:
+  egress_proxy_1:
+  waxum_proxy_1_data:
   geelark_worker_data:

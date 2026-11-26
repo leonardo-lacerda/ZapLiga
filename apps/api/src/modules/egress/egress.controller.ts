@@ -1,6 +1,7 @@
 import { BadRequestException, Body, Controller, Delete, Get, Header, Headers, Param, Patch, Post, Query, UnauthorizedException, UseGuards } from '@nestjs/common';
 import { AuthGuard, CurrentUser, Roles, RolesGuard } from '../auth/auth.guards';
 import { EgressService } from './egress.service';
+import { EgressProxyService, ProxyReport } from './egress-proxy.service';
 
 const text = (value: unknown, field: string, max = 200) => {
   if (typeof value !== 'string' || !value.trim() || value.length > max) throw new BadRequestException(`${field} inválido`);
@@ -11,7 +12,18 @@ const text = (value: unknown, field: string, max = 200) => {
 @UseGuards(AuthGuard, RolesGuard)
 @Roles('super_admin')
 export class EgressAdminController {
-  constructor(private readonly egress: EgressService) {}
+  constructor(private readonly egress: EgressService, private readonly proxies: EgressProxyService) {}
+
+  @Get('/proxies')
+  listProxies() { return this.proxies.list(); }
+
+  @Post('/proxies')
+  addProxy(@Body() body: { name?: unknown; proxy?: unknown }, @CurrentUser() actor: any) {
+    return this.proxies.create(actor.id, { name: text(body?.name, 'Nome', 60), proxy: text(body?.proxy, 'Proxy', 500) });
+  }
+
+  @Delete('/proxies/:id')
+  removeProxy(@Param('id') id: string, @CurrentUser() actor: any) { return this.proxies.remove(actor.id, id); }
 
   @Get('/settings')
   settings() { return this.egress.settings(); }
@@ -58,12 +70,39 @@ export class EgressAdminController {
 // with the key they already share with the API.
 @Controller('/api/internal/egress')
 export class EgressInternalController {
-  constructor(private readonly egress: EgressService) {}
+  constructor(private readonly egress: EgressService, private readonly proxies: EgressProxyService) {}
+
+  private authorize(authorization?: string) {
+    if (!process.env.WAXUM_API_KEY || authorization !== `Bearer ${process.env.WAXUM_API_KEY}`) throw new UnauthorizedException();
+  }
+
+  // The proxy slot watcher (infra/egress/proxy-entrypoint.sh).
+  @Get('/proxy-slots/:slot')
+  @Header('Content-Type', 'text/plain; charset=utf-8')
+  proxySlot(@Param('slot') slot: string, @Headers('authorization') authorization?: string) {
+    this.authorize(authorization);
+    return this.proxies.slotConfig(slot);
+  }
+
+  @Post('/proxy-slots/:slot/report')
+  proxyReport(@Param('slot') slot: string, @Body() body: Partial<ProxyReport>, @Headers('authorization') authorization?: string) {
+    this.authorize(authorization);
+    const bytes = (value: unknown) => (Number.isSafeInteger(value) && (value as number) >= 0 ? value as number : 0);
+    if (!['proxy', 'offline'].includes(String(body?.route))) throw new BadRequestException('route inválida');
+    return this.proxies.report(slot, {
+      route: String(body.route),
+      rxBytes: bytes(body.rxBytes), txBytes: bytes(body.txBytes), udpRxBytes: bytes(body.udpRxBytes), udpTxBytes: bytes(body.udpTxBytes),
+      exitIp: typeof body.exitIp === 'string' ? body.exitIp.slice(0, 64) : '',
+      udpOk: body.udpOk === true,
+      latencyMs: Number.isSafeInteger(body.latencyMs) ? body.latencyMs as number : null,
+      error: typeof body.error === 'string' ? body.error.slice(0, 200) : '',
+    });
+  }
 
   @Get('/slots/:slot')
   @Header('Content-Type', 'text/plain; charset=utf-8')
   slot(@Param('slot') slot: string, @Query('route') route: string, @Query('loggedIn') loggedIn: string, @Headers('authorization') authorization?: string) {
-    if (!process.env.WAXUM_API_KEY || authorization !== `Bearer ${process.env.WAXUM_API_KEY}`) throw new UnauthorizedException();
+    this.authorize(authorization);
     if (!['pc', 'offline', 'idle', 'none'].includes(route)) throw new BadRequestException('route inválida');
     return this.egress.slotConfig(slot, route, loggedIn === '1');
   }

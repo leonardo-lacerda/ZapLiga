@@ -63,7 +63,7 @@ export class EgressPoolService implements OnModuleInit, OnModuleDestroy {
     `, [REPORT_STALE_SECONDS, settings.offline_grace_seconds, STEADY_ONLINE_SECONDS])).rows;
     const lines = (await this.db.query(`
       SELECT id, tenant_id, waxum_node, status FROM whatsapp_numbers
-      WHERE status <> 'removed' AND phone IS NOT NULL AND loss_reason IS NULL
+      WHERE status <> 'removed' AND phone IS NOT NULL AND loss_reason IS NULL AND waxum_node NOT LIKE 'proxy-%'
         AND (last_paired_at IS NULL OR last_paired_at < now() - make_interval(mins => $1))
       ORDER BY created_at
     `, [PAIRING_SETTLE_MINUTES])).rows;

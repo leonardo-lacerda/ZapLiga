@@ -8,7 +8,7 @@ import { RedisService } from '../../infrastructure/redis/redis.service';
 import { EntitlementService } from '../billing/entitlement.service';
 import { PlanLimitsService } from '../billing/plan-limits.service';
 import { CrmEventsService, CrmLineEventType } from '../crm-events/crm-events.service';
-import { STEADY_ONLINE_SECONDS } from '../egress/pc-network';
+import { STEADY_ONLINE_SECONDS, slotOnlineSql } from '../egress/pc-network';
 import { LINE_RETIRED_AFTER_LOSSES, YOUNG_LINE_DAYS } from '../dialer/dialer.rules';
 
 const digits = (value: unknown) => String(value ?? '').replace(/\D/g, '');
@@ -110,7 +110,10 @@ export class NumbersService {
           AND c.created_at >= date_trunc('day', now() AT TIME ZONE tz.timezone) AT TIME ZONE tz.timezone) AS calls_today,
         (SELECT count(*)::int FROM number_status_history h WHERE h.tenant_id = n.tenant_id AND h.number_id = n.id
           AND h.changed_at > now() - interval '24 hours' AND lower(h.to_status) IN ('connected', 'online', 'ready', 'authenticated')) AS reconnects_24h,
-        (n.last_paired_at IS NOT NULL AND n.last_paired_at > now() - make_interval(days => $4)) AS young
+        (n.last_paired_at IS NOT NULL AND n.last_paired_at > now() - make_interval(days => $4)) AS young,
+        -- Bytes through the line's own proxy (proxy slots only, migration 079): today and this month.
+        (SELECT sum(u.rx_bytes + u.tx_bytes)::bigint FROM egress_proxy_usage u WHERE u.number_id = n.id AND u.day = (now() AT TIME ZONE 'America/Sao_Paulo')::date) AS network_today_bytes,
+        (SELECT sum(u.rx_bytes + u.tx_bytes)::bigint FROM egress_proxy_usage u WHERE u.number_id = n.id AND u.day >= date_trunc('month', now() AT TIME ZONE 'America/Sao_Paulo')::date) AS network_month_bytes
       FROM whatsapp_numbers n WHERE n.tenant_id = $1 AND n.status <> 'removed' ORDER BY n.created_at DESC LIMIT $2 OFFSET $3
     `, [tenantId, safeLimit, safeOffset, YOUNG_LINE_DAYS]);
     const response = { items: items.rows, total: Number(total.rows[0]?.total ?? 0), limit: safeLimit, offset: safeOffset };
@@ -217,8 +220,8 @@ export class NumbersService {
       const number = await this.find(id, tenantId);
       if (number.status === 'removed') throw new NotFoundException('Número não encontrado');
       if (number.waxum_node === node) return number;
-      const pc = await this.db.query("SELECT 1 FROM egress_pcs WHERE slot = $1 AND route = 'pc' AND route_reported_at > now() - interval '1 minute'", [node]);
-      if (!pc.rows[0]) throw new BadRequestException('O PC dessa saída não está online. Confira em Admin → Saídas de internet.');
+      const target = await this.db.query(`SELECT ${slotOnlineSql('$1::text')} AS online`, [node]);
+      if (!target.rows[0]?.online) throw new BadRequestException('Essa saída (PC ou proxy) não está online. Confira em Admin → Saídas de internet.');
       // Out of the dialer first, then check for calls: none can start halfway through the move.
       await this.db.query("UPDATE whatsapp_numbers SET status = 'reconnecting' WHERE id = $1", [id]);
       const active = await this.db.query("SELECT 1 FROM calls WHERE number_id = $1 AND status IN ('reserved', 'dialing', 'media_active') LIMIT 1", [id]);
@@ -265,8 +268,8 @@ export class NumbersService {
    * there: WhatsApp would see the new device's first login from a datacenter IP.
    */
   private async pairOnHealthySlot(number: any) {
-    const online = await this.db.query(`SELECT 1 FROM egress_pcs WHERE slot = $1 AND route = 'pc' AND route_reported_at > now() - interval '1 minute'`, [number.waxum_node]);
-    if (online.rows[0]) return number;
+    const online = await this.db.query(`SELECT ${slotOnlineSql('$1::text')} AS online`, [number.waxum_node]);
+    if (online.rows[0]?.online) return number;
     const status = normalizeWaxumStatus(await this.waxum.getStatus(number.waxum_session_id).catch(() => ({})));
     if (status.connected || status.phone) return number;
     const node = await this.pickPcSlot();

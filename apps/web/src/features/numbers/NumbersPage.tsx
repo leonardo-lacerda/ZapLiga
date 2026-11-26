@@ -5,6 +5,7 @@ import { json } from '../../services/api';
 import type { AnyRow } from '../../types';
 import { Badge, Button, EmptyState, Icon, Pagination, Panel, SectionHeader } from '../../components/ui';
 import { PAGE_SIZE, formatNumber, labelStatus } from '../../shared/format';
+import { formatBytes } from '../access/AdminProxyPanel';
 
 const connectedStatuses = ['connected', 'online', 'ready', 'authenticated', 'logged_in'];
 
@@ -108,6 +109,7 @@ function LineHealth({ number }: { number: AnyRow }) {
     {!retired && number.loss_reason && <div className="resource-meta"><span>Queda</span><Badge tone="error">{lossCopy[number.loss_reason] ?? number.loss_reason}</Badge></div>}
     {number.young && <div className="resource-meta"><span>Ligações hoje</span><strong>{number.calls_today ?? 0}/{YOUNG_LINE_DAILY_CALLS}</strong></div>}
     {Number(number.reconnects_24h ?? 0) > 0 && <div className="resource-meta"><span>Reconexões em 24 h</span><strong>{number.reconnects_24h}</strong></div>}
+    {number.network_month_bytes != null && <div className="resource-meta"><span>Rede da proxy</span><strong>hoje {formatBytes(number.network_today_bytes)} · mês {formatBytes(number.network_month_bytes)}</strong></div>}
   </>;
 }
 
