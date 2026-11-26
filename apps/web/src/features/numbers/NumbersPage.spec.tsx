@@ -143,3 +143,13 @@ it('não oferece o canário enquanto a linha está no bloqueio de 24 h', () => {
   expect(screen.getByText('Aguardando canário')).toBeInTheDocument();
   expect(screen.queryByRole('button', { name: /Enviar mensagem/ })).not.toBeInTheDocument();
 });
+
+it('libera pelo painel uma linha no bloqueio sem a ligação de teste', async () => {
+  let released = false;
+  server.use(http.post('/api/numbers/n6/canary/pass', () => { released = true; return HttpResponse.json({ id: 'n6', canary_status: 'passed' }); }));
+  vi.spyOn(window, 'confirm').mockReturnValue(true);
+  render(<Harness onCreate={vi.fn()} numbers={[{ id: 'n6', label: 'Previtas 15', status: 'connected', canary_status: 'pending', flagged_until: new Date(Date.now() + 3_600_000).toISOString() }]} />);
+  await userEvent.click(screen.getByRole('button', { name: /Liberar sem teste/ }));
+  await waitFor(() => expect(released).toBe(true));
+  expect(screen.queryByText('Aguardando canário')).not.toBeInTheDocument();
+});

@@ -179,7 +179,8 @@ describe('NumbersService passCanary', () => {
     const db = { query: jest.fn(async (sql: string) => (sql.startsWith('UPDATE') ? { rows: [{ id: 'n1', canary_status: 'passed' }] } : { rows: [] })) };
     const audit = { record: jest.fn(async () => undefined) };
     const crmEvents = { recordLine: jest.fn(async () => undefined) };
-    const service = new NumbersService(db as any, {} as any, audit as any, {} as any, {} as any, {} as any, crmEvents as any);
+    const entitlement = { assertAction: jest.fn(async () => undefined) };
+    const service = new NumbersService(db as any, {} as any, audit as any, {} as any, entitlement as any, {} as any, crmEvents as any);
 
     await expect(service.passCanary('t1', 'u1', 'n1', 'aquecida à mão')).resolves.toMatchObject({ canary_status: 'passed' });
 

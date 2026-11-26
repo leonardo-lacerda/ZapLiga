@@ -35,6 +35,10 @@ export class NumbersController {
   canaryMessage(@Param('id') id: string, @CurrentTenant() tenantId: string, @CurrentUser() user: any) { return this.numbers.sendCanaryMessage(tenantId, user.id, id); }
 
   @Roles('leader', 'super_admin')
+  @Post(['/api/numbers/:id/canary/pass', '/api/tenants/:tenantId/numbers/:id/canary/pass'])
+  canaryPass(@Param('id') id: string, @CurrentTenant() tenantId: string, @CurrentUser() user: any) { return this.numbers.passCanary(tenantId, user.id, id, 'Liberada pelo painel sem a ligação de teste'); }
+
+  @Roles('leader', 'super_admin')
   @Post(['/api/numbers/:id/reconnect', '/api/tenants/:tenantId/numbers/:id/reconnect'])
   reconnect(@Param('id') id: string, @CurrentTenant() tenantId: string, @CurrentUser() user: any) { return this.numbers.reconnect(tenantId, user.id, id); }
 

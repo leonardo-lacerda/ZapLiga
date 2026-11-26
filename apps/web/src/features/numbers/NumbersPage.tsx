@@ -122,7 +122,8 @@ function CanaryStep({ number, canaryCall, stationReady }: { number: AnyRow; cana
   const [phone, setPhone] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
-  if (number.canary_status === 'passed' || number.loss_reason || Number(number.removal_count ?? 0) >= RETIRED_AFTER_LOSSES) return null;
+  const [released, setReleased] = useState(false);
+  if (released || number.canary_status === 'passed' || number.loss_reason || Number(number.removal_count ?? 0) >= RETIRED_AFTER_LOSSES) return null;
   const blocked = number.flagged_until && new Date(number.flagged_until).getTime() > Date.now();
   const connected = connectedStatuses.includes(String(number.status).toLowerCase());
   const sendMessage = async () => {
@@ -137,6 +138,13 @@ function CanaryStep({ number, canaryCall, stationReady }: { number: AnyRow; cana
     catch (failure) { setError(failure instanceof Error ? failure.message : String(failure)); }
     finally { setBusy(false); }
   };
+  const release = async () => {
+    if (!window.confirm(`Liberar ${number.label} para ligar para leads sem a ligação de teste? Se o WhatsApp for derrubar a linha na primeira ligação, isso vai acontecer com um lead.`)) return;
+    setBusy(true); setError('');
+    try { await json(`/api/numbers/${number.id}/canary/pass`, { method: 'POST' }); setReleased(true); }
+    catch (failure) { setError(failure instanceof Error ? failure.message : String(failure)); }
+    finally { setBusy(false); }
+  };
   return <div className="admin-flag-row">
     <span>{number.canary_status === 'failed' ? 'Canário reprovado: tente de novo depois do descanso' : 'Aguardando canário'}<small>A primeira ligação depois do QR vai para o celular de alguém da equipe, nunca para um lead. Só depois a linha liga para leads.</small></span>
     {connected && !blocked && <div className="card-actions">
@@ -144,6 +152,7 @@ function CanaryStep({ number, canaryCall, stationReady }: { number: AnyRow; cana
       {phone && <><small>Mensagem enviada para {phone}. Peça para a pessoa responder, ligue, converse uns 30 segundos e desligue.</small><Button variant="secondary" icon="phone" disabled={busy || !stationReady} onClick={() => void call()}>2. Ligar para {phone}</Button></>}
       {phone && !stationReady && <small>Conecte sua estação de ligação para ligar.</small>}
     </div>}
+    <div className="card-actions"><Button variant="ghost" icon="check" disabled={busy} onClick={() => void release()}>Liberar sem teste</Button></div>
     {error && <div className="alert" role="alert"><Icon name="alert" /><span>{error}</span></div>}
   </div>;
 }
