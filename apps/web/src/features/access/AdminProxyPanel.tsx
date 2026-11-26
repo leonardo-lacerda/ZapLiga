@@ -64,6 +64,7 @@ export function AdminProxyPanel() {
         <strong>{item.name}</strong>
         <small>{item.slot} · saída {item.exit_ip ?? '—'} · {item.latency_ms != null ? `${item.latency_ms} ms` : 'latência —'} · {(item.lines ?? []).map((line: AnyRow) => line.label).join(', ') || 'sem linha'}</small>
         <small>Rede hoje {formatBytes(item.today_bytes)} (ligações {formatBytes(item.today_udp_bytes)}) · mês {formatBytes(item.month_bytes)} · projeção do mês {formatBytes(monthProjection(item.month_bytes))}</small>
+        <small>Ligações hoje: enviado {formatBytes(item.today_udp_tx_bytes)} · recebido {formatBytes(item.today_udp_rx_bytes)}</small>
         {item.last_error && <small>Último erro: {item.last_error}</small>}
         {(item.events ?? []).slice(0, 3).map((event: AnyRow, index: number) => <small key={index}>{new Date(event.occurred_at).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })} · {eventCopy[event.kind] ?? event.kind}{event.kind === 'ip_changed' ? ` (${event.detail?.from} → ${event.detail?.to})` : ''}</small>)}
       </div>

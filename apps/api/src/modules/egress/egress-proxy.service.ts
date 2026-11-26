@@ -54,6 +54,9 @@ export class EgressProxyService {
         (SELECT json_agg(json_build_object('id', n.id, 'label', n.label, 'status', n.status)) FROM whatsapp_numbers n WHERE n.waxum_node = p.slot AND n.status <> 'removed') AS lines,
         (SELECT COALESCE(sum(u.rx_bytes + u.tx_bytes), 0)::bigint FROM egress_proxy_usage u WHERE u.slot = p.slot AND u.day = (now() AT TIME ZONE $2)::date) AS today_bytes,
         (SELECT COALESCE(sum(u.udp_rx_bytes + u.udp_tx_bytes), 0)::bigint FROM egress_proxy_usage u WHERE u.slot = p.slot AND u.day = (now() AT TIME ZONE $2)::date) AS today_udp_bytes,
+        -- Sent (tx) and received (rx) apart: the call media we send is what the relay choice cuts.
+        (SELECT COALESCE(sum(u.udp_tx_bytes), 0)::bigint FROM egress_proxy_usage u WHERE u.slot = p.slot AND u.day = (now() AT TIME ZONE $2)::date) AS today_udp_tx_bytes,
+        (SELECT COALESCE(sum(u.udp_rx_bytes), 0)::bigint FROM egress_proxy_usage u WHERE u.slot = p.slot AND u.day = (now() AT TIME ZONE $2)::date) AS today_udp_rx_bytes,
         (SELECT COALESCE(sum(u.rx_bytes + u.tx_bytes), 0)::bigint FROM egress_proxy_usage u WHERE u.slot = p.slot AND u.day >= date_trunc('month', now() AT TIME ZONE $2)::date) AS month_bytes,
         (SELECT json_agg(e ORDER BY e.occurred_at DESC) FROM (SELECT kind, detail, occurred_at FROM egress_proxy_events WHERE slot = p.slot ORDER BY occurred_at DESC LIMIT 10) e) AS events
       FROM egress_proxies p ORDER BY p.created_at
