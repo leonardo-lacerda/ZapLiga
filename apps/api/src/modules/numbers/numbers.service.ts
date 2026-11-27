@@ -17,7 +17,7 @@ export const LOSS_SUMMARY_DAYS = 30;
 import type { SessionIdentity } from '../../infrastructure/waxum/session-identity';
 import { STEALTH_KILLSWITCH_MESSAGE, generateStealthProfile, profileIdentity, stealthCoverage, stealthKillswitchOn } from '../stealth/stealth-profile';
 import { deviceProfileState, lineIdentity, usesDeviceProfile, type DeviceProfileLine } from '../device-profile/device-profile';
-import { DeviceProfileService } from '../device-profile/device-profile.service';
+import { APP_REQUIRED_MESSAGE, DeviceProfileService } from '../device-profile/device-profile.service';
 
 const digits = (value: unknown) => String(value ?? '').replace(/\D/g, '');
 
@@ -29,7 +29,7 @@ function assertNotRetired(number: any) {
 
 // `stealth`: the line is born with its camouflage profile (docs/stealth-profile.md); super admin only.
 // `multiloginPhoneId`: the line is born with the new camouflage, as that cloud phone (docs/device-profile.md); super admin only.
-export type CreateNumberInput = { label?: string; phone?: string; maxConcurrentCalls?: number; cooldownSeconds?: number; maxCallsPerWindow?: number; callWindowSeconds?: number; stealth?: boolean; multiloginPhoneId?: string };
+export type CreateNumberInput = { label?: string; phone?: string; maxConcurrentCalls?: number; cooldownSeconds?: number; maxCallsPerWindow?: number; callWindowSeconds?: number; stealth?: boolean; multiloginPhoneId?: string; business?: boolean };
 export type UpdateNumberInput = { label?: string; maxConcurrentCalls?: number; cooldownSeconds?: number; maxCallsPerWindow?: number; callWindowSeconds?: number; verificationOnly?: boolean };
 
 /**
@@ -86,7 +86,8 @@ export class NumbersService {
     const profile = body.stealth ? generateStealthProfile(id) : null;
     if (profile && body.multiloginPhoneId) throw new BadRequestException('Escolha só uma camuflagem para a linha.');
     // The new camouflage, copied before the session exists so the first QR or code already carries it.
-    const deviceProfile = body.multiloginPhoneId ? await this.deviceProfiles.profileFor(body.multiloginPhoneId) : null;
+    if (body.multiloginPhoneId && body.business === undefined) throw new BadRequestException(APP_REQUIRED_MESSAGE);
+    const deviceProfile = body.multiloginPhoneId ? await this.deviceProfiles.profileFor(body.multiloginPhoneId, body.business as boolean) : null;
     const deviceLine = { device_profile_enabled: true, device_profile: deviceProfile };
     let createdSessionId: string | undefined;
     let persisted = false;

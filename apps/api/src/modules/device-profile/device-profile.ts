@@ -10,15 +10,16 @@ import { sessionIdentity, type StealthLine } from '../stealth/stealth-profile';
  * exactly as it does until its next QR or code.
  *
  * - registration (`DeviceProps`, at pairing): an Android phone;
- * - login (`ClientPayload.UserAgent`, every login): the phone's Android version, brand, model and
- *   carrier, pt-BR, and a `phone_id` fixed for the line. The library warns that a `phone_id` that
+ * - login (`ClientPayload.UserAgent`, every login): WhatsApp or WhatsApp Business as the account is
+ *   (a Business account refuses a second phone that is not Business), the phone's Android version,
+ *   brand, model and carrier, pt-BR, and a `phone_id` fixed for the line. The library warns that a `phone_id` that
  *   changes per login gets sessions dropped; this one never changes.
  */
 export type DeviceProfileV1 = {
   version: 1;
   surface: 'ANDROID_PHONE';
   source: { multilogin_phone_id: string; name: string };
-  android: { os_version: string; manufacturer: string; device: string; mcc: string; mnc: string; phone_id: string };
+  android: { os_version: string; manufacturer: string; device: string; mcc: string; mnc: string; phone_id: string; business: boolean };
   client: { locale: typeof DEVICE_PROFILE_LOCALE };
 };
 /** `pending`: chosen, waiting for the next pairing. `active`: the line paired with it. */
@@ -53,12 +54,12 @@ function carrierFor(phone: MultiloginPhone) {
 }
 
 /** Copies the cloud phone once; `phone_id` is generated here and never again for the line. */
-export function buildDeviceProfile(phone: MultiloginPhone, phoneId: string = randomUUID()): DeviceProfileV1 {
+export function buildDeviceProfile(phone: MultiloginPhone, business: boolean, phoneId: string = randomUUID()): DeviceProfileV1 {
   return {
     version: 1,
     surface: 'ANDROID_PHONE',
     source: { multilogin_phone_id: phone.id, name: phone.name },
-    android: { os_version: phone.androidVersion, manufacturer: phone.brand, device: phone.model, ...carrierFor(phone), phone_id: phoneId },
+    android: { os_version: phone.androidVersion, manufacturer: phone.brand, device: phone.model, ...carrierFor(phone), phone_id: phoneId, business },
     client: { locale: DEVICE_PROFILE_LOCALE },
   };
 }
@@ -78,6 +79,7 @@ export function parseDeviceProfile(value: unknown): DeviceProfileV1 {
   if (!android.manufacturer?.trim() || !android.device?.trim()) return fail('sem marca ou modelo');
   if (!/^\d{3}$/.test(android.mcc) || !/^\d{2,3}$/.test(android.mnc)) return fail(`operadora ${String(android.mcc)}/${String(android.mnc)}`);
   if (!UUID.test(android.phone_id)) return fail('phone_id');
+  if (typeof android.business !== 'boolean') return fail('sem o app (WhatsApp ou Business)');
   if (!profile.source?.multilogin_phone_id) return fail('sem celular de origem');
   if (profile.client?.locale !== DEVICE_PROFILE_LOCALE) return fail(`idioma ${String(profile.client?.locale)}`);
   return profile as DeviceProfileV1;

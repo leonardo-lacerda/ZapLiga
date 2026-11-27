@@ -4,4 +4,6 @@ export class SetDeviceProfileDto {
   @IsBoolean() enabled!: boolean;
   // The Multilogin cloud phone the number was registered on; required the first time.
   @IsOptional() @IsString() @MinLength(1) @MaxLength(64) multiloginPhoneId?: string;
+  // WhatsApp Business account; required with a new phone.
+  @IsOptional() @IsBoolean() business?: boolean;
 }

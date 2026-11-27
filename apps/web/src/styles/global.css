@@ -1484,10 +1484,9 @@ input, select { min-height: 35px; min-width: 0; padding: 8px 10px; border: 1px s
 .line-stats > .is-wide, .line-stats > div:nth-child(odd):last-child, .line-stats > div:nth-child(odd):has(+ .is-wide) { grid-column: 1 / -1; }
 .line-stats dt { color: var(--muted); font-size: 11px; }
 .line-stats dd { margin: 2px 0 0; color: var(--text); font-size: 13px; font-weight: 600; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
-.line-task { display: grid; gap: 8px; padding: 10px 12px; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--surface-subtle); font-size: 13px; font-weight: 600; }
+.line-task { display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px; padding: 10px 12px; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--surface-subtle); font-size: 13px; font-weight: 600; }
 .line-task > span small, .line-task > .card-actions small { display: block; margin-top: 3px; color: var(--muted); font-size: 12px; font-weight: 400; line-height: 1.45; }
 .line-task .card-actions { margin: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
-.line-task .form-row select { min-width: 0; }
 .line-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .line-actions-more { display: flex; gap: 8px; margin-left: auto; }
 .line-settings { padding-top: 10px; border-top: 1px solid var(--border-subtle); }
@@ -1497,13 +1496,17 @@ input, select { min-height: 35px; min-width: 0; padding: 8px 10px; border: 1px s
 .line-settings[open] summary::before { transform: rotate(45deg); }
 .line-settings summary small { color: var(--muted); font-weight: 400; }
 .line-settings summary:focus-visible { outline: 2px solid var(--primary); outline-offset: 3px; border-radius: 4px; }
-.line-settings-body { display: grid; gap: 8px; margin-top: 10px; }
+.line-settings-body { display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px; margin-top: 10px; }
 .line-setting { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; padding: 10px 12px; border: 1px solid var(--border-subtle); border-radius: var(--radius-md); background: var(--surface-subtle); color: var(--text); font-size: 13px; font-weight: 600; }
 .line-setting > span { min-width: 0; }
 .line-setting small { display: block; margin-top: 3px; color: var(--muted); font-size: 12px; font-weight: 400; line-height: 1.45; }
 .line-setting input[type="checkbox"] { flex: none; width: 16px; height: 16px; min-height: 0; margin-top: 2px; accent-color: var(--primary); }
 .line-setting.is-dirty { border-color: var(--primary); }
-.line-settings-body .form-row select { min-width: 0; }
+.line-card > * { min-width: 0; }
+/* Inside a card the controls stack, full width: a card can be ~320 px and phone names are long. */
+.line-card .form-row, .line-settings .form-row { flex-direction: column; flex-wrap: nowrap; align-items: stretch; }
+.line-card .form-row > *, .line-settings .form-row > * { flex: none; width: 100%; max-width: 100%; min-width: 0; }
+.line-card select, .line-settings select { width: 100%; max-width: 100%; min-width: 0; text-overflow: ellipsis; }
 .line-settings-body .resource-meta { gap: 8px; padding: 4px 2px; border-top: 0; font-size: 12px; }
 .line-settings-body .resource-meta strong { text-align: right; overflow-wrap: anywhere; }
 @media (prefers-reduced-motion: reduce) { .line-settings summary::before { transition: none; } }

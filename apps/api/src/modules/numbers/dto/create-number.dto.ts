@@ -11,4 +11,6 @@ export class CreateNumberDto {
   @IsOptional() @IsBoolean() stealth?: boolean;
   // Born with the new camouflage, as this Multilogin cloud phone (docs/device-profile.md); super admin only.
   @IsOptional() @IsString() @MinLength(1) @MaxLength(64) multiloginPhoneId?: string;
+  // The number is WhatsApp Business; required with multiloginPhoneId.
+  @IsOptional() @IsBoolean() business?: boolean;
 }

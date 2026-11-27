@@ -12,7 +12,7 @@ export class DeviceProfileController {
   @Roles('super_admin')
   @Patch(['/api/numbers/:id/device-profile', '/api/tenants/:tenantId/numbers/:id/device-profile'])
   set(@Param('id') id: string, @Body() body: SetDeviceProfileDto, @CurrentTenant() tenantId: string, @CurrentUser() user: { id: string }) {
-    return this.deviceProfile.setChoice(tenantId, user.id, id, body.enabled, body.multiloginPhoneId);
+    return this.deviceProfile.setChoice(tenantId, user.id, id, body.enabled, body.multiloginPhoneId, body.business);
   }
 
   @Roles('super_admin')

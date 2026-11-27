@@ -209,7 +209,7 @@ describe('NumbersService QR code', () => {
   });
 
   describe('new camouflage (#5, docs/device-profile.md)', () => {
-    const android = { os_version: '16', manufacturer: 'OPPO', device: 'Find X8 Pro', mcc: '000', mnc: '000', phone_id: '5f0c2b8e-3a1d-4c55-9a0e-2f6b7c1d9e10' };
+    const android = { os_version: '16', manufacturer: 'OPPO', device: 'Find X8 Pro', mcc: '000', mnc: '000', phone_id: '5f0c2b8e-3a1d-4c55-9a0e-2f6b7c1d9e10', business: true };
     const deviceProfile = { version: 1, surface: 'ANDROID_PHONE', source: { multilogin_phone_id: 'ml-1', name: 'Previtas 30' }, android, client: { locale: 'pt_BR' } };
     const newCamouflage = { device: { os: 'Android', platform: 'android_phone' }, client_profile: { locale: 'pt_BR', android } };
     const chosenLine = { ...number, status: 'disconnected', device_profile_enabled: true, device_profile_active: false, multilogin_phone_id: 'ml-1', device_profile: deviceProfile, device_profile_frozen_at: '2026-11-27T12:00:00Z' };
@@ -225,13 +225,19 @@ describe('NumbersService QR code', () => {
       const deviceProfiles = { profileFor: jest.fn(async () => deviceProfile) };
       const service = new NumbersService(db as any, waxum as any, { record: jest.fn(async () => undefined) } as any, redis as any, { assertAction: jest.fn(async () => undefined) } as any, { assertCanAddNumbers: jest.fn(async () => undefined) } as any, deviceProfiles as any);
 
-      await service.create('t1', 'u1', { label: 'Previtas 30', multiloginPhoneId: 'ml-1' });
+      await service.create('t1', 'u1', { label: 'Previtas 30', multiloginPhoneId: 'ml-1', business: true });
 
-      expect(deviceProfiles.profileFor).toHaveBeenCalledWith('ml-1');
+      expect(deviceProfiles.profileFor).toHaveBeenCalledWith('ml-1', true);
       expect(waxum.createSession).toHaveBeenCalledWith('Previtas 30', 'edge-2', newCamouflage);
       const params = client.query.mock.calls[0][1];
       expect(JSON.parse(String(params[11]))).toEqual(deviceProfile);
       expect(params[12]).toBe('ml-1');
+    });
+
+    it('asks whether the number is WhatsApp or WhatsApp Business', async () => {
+      const service = new NumbersService({} as any, {} as any, {} as any, {} as any, { assertAction: jest.fn(async () => undefined) } as any, {} as any, {} as any);
+
+      await expect(service.create('t1', 'u1', { label: 'Previtas 32', multiloginPhoneId: 'ml-1' })).rejects.toThrow('WhatsApp Business');
     });
 
     it('refuses both camouflages on one line', async () => {

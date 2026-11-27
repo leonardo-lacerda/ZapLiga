@@ -3,7 +3,7 @@ import { json } from '../../services/api';
 import type { AnyRow } from '../../types';
 import { Badge, Button, Icon } from '../../components/ui';
 import {
-  DEVICE_PROFILE_HINT, DEVICE_PROFILE_LABEL, DEVICE_PROFILE_OPTION_NEW, DEVICE_PROFILE_OPTION_TODAY,
+  DEVICE_PROFILE_APP_LABEL, DEVICE_PROFILE_APP_OPTIONS, DEVICE_PROFILE_APP_PLACEHOLDER, DEVICE_PROFILE_HINT, DEVICE_PROFILE_LABEL, DEVICE_PROFILE_OPTION_NEW, DEVICE_PROFILE_OPTION_TODAY,
   DEVICE_PROFILE_PHONE_LABEL, DEVICE_PROFILE_PHONE_PLACEHOLDER, DEVICE_PROFILE_STATE_COPY,
 } from './deviceProfile.copy';
 
@@ -32,6 +32,17 @@ export function MultiloginPhoneSelect({ value, onChange, phones, disabled = fals
   </select>;
 }
 
+type App = '' | 'business' | 'whatsapp';
+const appOf = (profile: AnyRow | null | undefined): App => (profile?.android ? (profile.android.business ? 'business' : 'whatsapp') : '');
+
+/** WhatsApp or WhatsApp Business: a Business account only links a second phone that says Business too. */
+export function AppSelect({ value, onChange, disabled = false }: { value: App; onChange: (app: App) => void; disabled?: boolean }) {
+  return <select aria-label={DEVICE_PROFILE_APP_LABEL} value={value} disabled={disabled} onChange={(event) => onChange(event.target.value as App)}>
+    <option value="">{DEVICE_PROFILE_APP_PLACEHOLDER}</option>
+    {DEVICE_PROFILE_APP_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+  </select>;
+}
+
 /**
  * The line's camouflage, chosen by the ZapLiga admin: as it is today, or the new camouflage (#5)
  * as a Multilogin cloud phone. The choice only takes effect at the line's next QR or code.
@@ -40,6 +51,7 @@ export function DeviceProfileChoice({ number, canManage }: { number: AnyRow; can
   const [line, setLine] = useState<AnyRow>(number);
   const [mode, setMode] = useState<'today' | 'new'>(number.device_profile_enabled ? 'new' : 'today');
   const [phoneId, setPhoneId] = useState<string>(number.multilogin_phone_id ?? '');
+  const [app, setApp] = useState<App>(appOf(number.device_profile));
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   // A line paired with its phone keeps it: changing phones needs "Como está hoje" and a new pairing first.
@@ -51,11 +63,17 @@ export function DeviceProfileChoice({ number, canManage }: { number: AnyRow; can
   if (!canManage) return null;
 
   const enabled = mode === 'new';
-  const dirty = enabled !== Boolean(line.device_profile_enabled) || (enabled && phoneId !== (line.multilogin_phone_id ?? ''));
+  const phoneChanged = enabled && phoneId !== (line.multilogin_phone_id ?? '');
+  const appChanged = enabled && app !== appOf(line.device_profile);
+  const dirty = enabled !== Boolean(line.device_profile_enabled) || phoneChanged || appChanged;
   const save = async () => {
     setSaving(true); setError('');
     try {
-      const body = enabled && phoneId !== (line.multilogin_phone_id ?? '') ? { enabled, multiloginPhoneId: phoneId } : { enabled };
+      const body = {
+        enabled,
+        ...(phoneChanged ? { multiloginPhoneId: phoneId } : {}),
+        ...(phoneChanged || appChanged ? { business: app === 'business' } : {}),
+      };
       setLine(await json(`/api/numbers/${number.id}/device-profile`, { method: 'PATCH', body: JSON.stringify(body) }));
       setSwapping(false);
     } catch (failure) { setError(failure instanceof Error ? failure.message : String(failure)); }
@@ -74,11 +92,12 @@ export function DeviceProfileChoice({ number, canManage }: { number: AnyRow; can
         <option value="new">{DEVICE_PROFILE_OPTION_NEW}</option>
       </select>
       {picking && <MultiloginPhoneSelect value={phoneId} onChange={setPhoneId} phones={phones} disabled={saving} />}
+      {enabled && !phoneLocked && <AppSelect value={app} onChange={setApp} disabled={saving} />}
       {enabled && !picking && !phoneLocked && line.multilogin_phone_id && <Button variant="ghost" type="button" disabled={saving} onClick={() => setSwapping(true)}>Trocar celular</Button>}
-      {dirty && <Button variant="secondary" type="button" disabled={saving || (enabled && !phoneId)} onClick={() => void save()}>{saving ? 'Salvando...' : 'Salvar camuflagem'}</Button>}
+      {dirty && <Button variant="secondary" type="button" disabled={saving || (enabled && (!phoneId || !app))} onClick={() => void save()}>{saving ? 'Salvando...' : 'Salvar camuflagem'}</Button>}
     </div>
     {state && <div className="resource-meta"><span>Nova camuflagem</span><Badge tone={state.tone}>{state.label}</Badge></div>}
-    {state && android && <div className="resource-meta"><span>Celular</span><strong>{android.manufacturer} {android.device} · Android {android.os_version} · {android.mcc}/{android.mnc}</strong></div>}
+    {state && android && <div className="resource-meta"><span>Celular</span><strong>{android.business ? 'WhatsApp Business' : 'WhatsApp'} · {android.manufacturer} {android.device} · Android {android.os_version} · {android.mcc}/{android.mnc}</strong></div>}
     {(error || phonesError) && <div className="alert" role="alert"><Icon name="alert" /><span>{error || phonesError}</span></div>}
   </>;
 }

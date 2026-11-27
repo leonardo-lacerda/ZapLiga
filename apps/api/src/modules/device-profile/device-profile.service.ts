@@ -7,7 +7,8 @@ import { DEVICE_PROFILE_KILLSWITCH_MESSAGE, buildDeviceProfile, deviceProfileKil
 
 const UNIQUE_VIOLATION = '23505';
 export const PHONE_TAKEN_MESSAGE = 'Este celular da Multilogin já deu a identidade para outra linha. Escolha outro.';
-export const SWAP_WHILE_ACTIVE_MESSAGE = 'A linha está pareada com o celular atual. Volte para "Como está hoje", pareie de novo e só então troque o celular.';
+export const SWAP_WHILE_ACTIVE_MESSAGE = 'A linha está pareada com o celular atual. Volte para "Como está hoje", pareie de novo e só então troque o celular ou o app.';
+export const APP_REQUIRED_MESSAGE = 'Diga se o número é WhatsApp ou WhatsApp Business.';
 
 /**
  * New camouflage per line (docs/device-profile.md): the admin's choice for each line and the
@@ -32,22 +33,22 @@ export class DeviceProfileService {
   }
 
   /** The profile a line gets from a cloud phone that no other line took. */
-  async profileFor(multiloginPhoneId: string): Promise<DeviceProfileV1> {
+  async profileFor(multiloginPhoneId: string, business: boolean): Promise<DeviceProfileV1> {
     if (deviceProfileKillswitchOn()) throw new BadRequestException(DEVICE_PROFILE_KILLSWITCH_MESSAGE);
     const taken = (await this.db.query('SELECT 1 FROM whatsapp_numbers WHERE multilogin_phone_id = $1 LIMIT 1', [multiloginPhoneId])).rows[0];
     if (taken) throw new ConflictException(PHONE_TAKEN_MESSAGE);
     const phone = await this.multilogin.getPhone(multiloginPhoneId);
     if (!phone) throw new BadRequestException('Celular não encontrado na Multilogin (ou sem marca, modelo e versão do Android).');
-    return buildDeviceProfile(phone);
+    return buildDeviceProfile(phone, business);
   }
 
   /**
    * On: the line pairs as the chosen cloud phone from its next QR or code. The first choice copies
-   * the phone; choosing another phone copies that one, which a line paired with the current one
-   * cannot do. Off: the line pairs as it did before from its next QR or code. The copy is kept, so
+   * the phone; choosing another phone copies that one, and changing the app (WhatsApp or Business)
+   * rewrites the copy: neither is possible while the line is paired with the current copy. Off: the line pairs as it did before from its next QR or code. The copy is kept, so
    * turning it on again reuses it.
    */
-  async setChoice(tenantId: string, actorUserId: string, id: string, enabled: boolean, multiloginPhoneId?: string) {
+  async setChoice(tenantId: string, actorUserId: string, id: string, enabled: boolean, multiloginPhoneId?: string, business?: boolean) {
     await this.entitlement.assertAction(tenantId, 'write', actorUserId);
     const line = (await this.db.query("SELECT * FROM whatsapp_numbers WHERE id = $1 AND tenant_id = $2 AND status <> 'removed'", [id, tenantId])).rows[0];
     if (!line) throw new NotFoundException('Número não encontrado');
@@ -55,8 +56,12 @@ export class DeviceProfileService {
     const phoneId = multiloginPhoneId ?? line.multilogin_phone_id;
     if (enabled && !phoneId) throw new BadRequestException('Escolha o celular da Multilogin em que o número foi registrado.');
     const swap = enabled && phoneId !== line.multilogin_phone_id;
-    if (swap && line.device_profile_active) throw new BadRequestException(SWAP_WHILE_ACTIVE_MESSAGE);
-    const profile = swap ? await this.profileFor(phoneId) : null;
+    if (swap && business === undefined) throw new BadRequestException(APP_REQUIRED_MESSAGE);
+    const current = line.device_profile as DeviceProfileV1 | null;
+    const appChange = enabled && !swap && business !== undefined && current !== null && current.android.business !== business;
+    if ((swap || appChange) && line.device_profile_active) throw new BadRequestException(SWAP_WHILE_ACTIVE_MESSAGE);
+    const profile = swap ? await this.profileFor(phoneId, business as boolean)
+      : appChange && current ? { ...current, android: { ...current.android, business: business as boolean } } : null;
     let row;
     try {
       row = (await this.db.query(`

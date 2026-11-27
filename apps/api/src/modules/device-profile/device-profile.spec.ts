@@ -4,8 +4,8 @@ import { BRAZIL_CARRIERS, buildDeviceProfile, deviceProfileState, lineIdentity, 
 
 const PHONE_ID = '5f0c2b8e-3a1d-4c55-9a0e-2f6b7c1d9e10';
 const phone: MultiloginPhone = { id: '647956853220704390', name: 'Previtas 30', androidVersion: '14', brand: 'samsung', model: 'SM-A546E', hasSim: false };
-const profile = buildDeviceProfile(phone, PHONE_ID);
-const android = { os_version: '14', manufacturer: 'samsung', device: 'SM-A546E', mcc: '000', mnc: '000', phone_id: PHONE_ID };
+const profile = buildDeviceProfile(phone, false, PHONE_ID);
+const android = { os_version: '14', manufacturer: 'samsung', device: 'SM-A546E', mcc: '000', mnc: '000', phone_id: PHONE_ID, business: false };
 const newCamouflage = { device: { os: 'Android', platform: 'android_phone' }, client_profile: { locale: 'pt_BR', android } };
 
 describe('device profile (docs/device-profile.md)', () => {
@@ -17,14 +17,21 @@ describe('device profile (docs/device-profile.md)', () => {
 
   it('gives a phone with a SIM a Brazilian carrier, always the same for that phone', () => {
     const withSim = { ...phone, hasSim: true };
-    const first = buildDeviceProfile(withSim, PHONE_ID).android;
+    const first = buildDeviceProfile(withSim, false, PHONE_ID).android;
     expect(first.mcc).toBe('724');
     expect(BRAZIL_CARRIERS.map((carrier) => carrier.mnc)).toContain(first.mnc);
-    expect(buildDeviceProfile(withSim).android.mnc).toBe(first.mnc);
+    expect(buildDeviceProfile(withSim, false).android.mnc).toBe(first.mnc);
   });
 
   it('generates a new phone_id per copy', () => {
-    expect(buildDeviceProfile(phone).android.phone_id).not.toBe(buildDeviceProfile(phone).android.phone_id);
+    expect(buildDeviceProfile(phone, false).android.phone_id).not.toBe(buildDeviceProfile(phone, false).android.phone_id);
+  });
+
+  it('marks a WhatsApp Business account, which only links a second phone that is Business too', () => {
+    expect(buildDeviceProfile(phone, true, PHONE_ID).android.business).toBe(true);
+    const business = buildDeviceProfile(phone, true, PHONE_ID);
+    const line = { device_profile_enabled: true, device_profile_active: false, device_profile: business, device_profile_frozen_at: '2026-11-27T10:00:00Z' };
+    expect(lineIdentity(line, true)?.client_profile?.android?.business).toBe(true);
   });
 
   it('refuses a stored profile it does not build', () => {
@@ -32,6 +39,8 @@ describe('device profile (docs/device-profile.md)', () => {
     expect(() => parseDeviceProfile({ ...profile, android: { ...android, phone_id: 'per-login' } })).toThrow('phone_id');
     expect(() => parseDeviceProfile({ ...profile, android: { ...android, mnc: '' } })).toThrow('operadora');
     expect(() => parseDeviceProfile({ ...profile, surface: 'WEB' })).toThrow('superfície');
+    const { business: _missing, ...withoutApp } = android;
+    expect(() => parseDeviceProfile({ ...profile, android: withoutApp })).toThrow('app');
   });
 
   describe('lineIdentity', () => {

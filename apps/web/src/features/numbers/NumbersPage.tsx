@@ -7,7 +7,7 @@ import { Badge, Button, EmptyState, Icon, Pagination, Panel, SectionHeader } fro
 import { PAGE_SIZE, formatNumber, labelStatus } from '../../shared/format';
 import { formatBytes } from '../access/AdminProxyPanel';
 import { STEALTH_COVERAGE_COPY, STEALTH_HINT, STEALTH_LABEL } from './stealth.copy';
-import { DeviceProfileChoice, MultiloginPhoneSelect, useMultiloginPhones } from './DeviceProfileChoice';
+import { AppSelect, DeviceProfileChoice, MultiloginPhoneSelect, useMultiloginPhones } from './DeviceProfileChoice';
 import { DEVICE_PROFILE_CREATE_HINT, DEVICE_PROFILE_OPTION_NEW } from './deviceProfile.copy';
 import { LOSS_CAUSE_ACTION, LOSS_CAUSE_LABEL, REGISTRATION_REASON_LABEL } from './lineLoss.copy';
 
@@ -302,14 +302,17 @@ function CreateDeviceProfileField({ numberForm, setNumberForm }: { numberForm: A
   const { phones, error } = useMultiloginPhones(on);
   const toggle = (next: boolean) => {
     setOn(next);
-    if (!next) { const { multiloginPhoneId: _dropped, ...rest } = numberForm; setNumberForm(rest); }
+    if (!next) { const { multiloginPhoneId: _dropped, business: _app, ...rest } = numberForm; setNumberForm(rest); }
   };
   return <>
     <label className="line-setting">
       <span>{DEVICE_PROFILE_OPTION_NEW}<small>{DEVICE_PROFILE_CREATE_HINT}</small></span>
       <input type="checkbox" checked={on} onChange={(event) => toggle(event.target.checked)} />
     </label>
-    {on && <div className="form-row"><MultiloginPhoneSelect value={numberForm.multiloginPhoneId ?? ''} onChange={(id) => setNumberForm({ ...numberForm, multiloginPhoneId: id || undefined })} phones={phones} /></div>}
+    {on && <div className="form-row">
+      <MultiloginPhoneSelect value={numberForm.multiloginPhoneId ?? ''} onChange={(id) => setNumberForm({ ...numberForm, multiloginPhoneId: id || undefined })} phones={phones} />
+      <AppSelect value={numberForm.business === undefined ? '' : numberForm.business ? 'business' : 'whatsapp'} onChange={(app) => setNumberForm({ ...numberForm, business: app === '' ? undefined : app === 'business' })} />
+    </div>}
     {error && <div className="alert" role="alert"><Icon name="alert" /><span>{error}</span></div>}
   </>;
 }

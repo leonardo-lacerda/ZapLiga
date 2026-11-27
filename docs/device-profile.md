@@ -10,8 +10,15 @@ Cada linha pode escolher, no cartão da página Números, entre:
 - **Nova camuflagem (#5)**: a linha se registra e faz login como o celular na nuvem da Multilogin em
   que o número foi registrado, ligado como um segundo celular da conta. Ela manda:
   - no registro (ao parear): um celular Android (`android_phone`, sistema `Android`);
-  - em todo login: a versão do Android, a marca e o modelo do celular, a operadora (MCC/MNC), o
-    idioma `pt_BR` e um `phone_id` fixo da linha.
+  - em todo login: **WhatsApp ou WhatsApp Business**, como a conta for; a versão do Android, a
+    marca e o modelo do celular, a operadora (MCC/MNC), o idioma `pt_BR` e um `phone_id` fixo da linha.
+
+**WhatsApp Business:** uma conta Business só vincula um segundo celular que também diga ser
+Business. Com o perfil de WhatsApp comum, o celular mostra "Your account can't link to WhatsApp.
+Download WhatsApp Business on your other device", e o Waxum registra `No pair-success within 60s of
+companion_finish` (Previtas 22, 27/11/2026). Por isso o admin escolhe o app do número junto com o
+celular. Business faz o login dizer `SMB_ANDROID` (imagem v12). Trocar o app de uma linha só vale no
+próximo pareamento e não é possível com a linha pareada com o perfil.
 
 Só o admin do ZapLiga (`super_admin`) vê e muda a escolha, no cartão da linha ou na criação.
 
@@ -73,7 +80,7 @@ O cartão mostra o estado: **Vale no próximo pareamento**, **Ativa** ou
   os Waxums, então o perfil acompanha a linha quando ela troca de PC.
 - Patches: `whatsapp-rust-client-profile-carrier.patch` (MCC/MNC no `ClientProfile`; o padrão
   continua `000`) e `waxum-zapliga-device-profile.patch`. Imagem:
-  `zapliga-waxum:0.12.6-multirelay-v11-device-profile`.
+  `zapliga-waxum:0.12.6-multirelay-v12-business` (a v11 não conhece o Business).
 - O Waxum principal (`zapliga-waxum-1`) roda a v4 e **não** entende o perfil. Hoje nenhuma linha está
   nele. Uma linha com a nova camuflagem não deve ser movida para ele.
 

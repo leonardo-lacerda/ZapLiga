@@ -5,6 +5,12 @@ export const DEVICE_PROFILE_OPTION_TODAY = 'Como está hoje';
 export const DEVICE_PROFILE_OPTION_NEW = 'Nova camuflagem (#5)';
 export const DEVICE_PROFILE_PHONE_LABEL = 'Celular da Multilogin';
 export const DEVICE_PROFILE_PHONE_PLACEHOLDER = 'Escolha o celular do número';
+export const DEVICE_PROFILE_APP_LABEL = 'App do número';
+export const DEVICE_PROFILE_APP_PLACEHOLDER = 'WhatsApp ou WhatsApp Business?';
+export const DEVICE_PROFILE_APP_OPTIONS: ReadonlyArray<{ value: 'business' | 'whatsapp'; label: string }> = [
+  { value: 'business', label: 'WhatsApp Business' },
+  { value: 'whatsapp', label: 'WhatsApp' },
+];
 export const DEVICE_PROFILE_CREATE_HINT = 'Só para números registrados num celular da Multilogin. A linha já nasce com a nova camuflagem.';
 export const DEVICE_PROFILE_STATE_COPY: Record<string, { label: string; tone: string }> = {
   pending: { label: 'Vale no próximo pareamento', tone: 'warning' },
