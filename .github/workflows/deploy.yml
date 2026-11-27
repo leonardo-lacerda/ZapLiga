@@ -108,6 +108,8 @@ jobs:
   deploy:
     name: Deploy produção
     needs: [validate, e2e]
+    # A manual run on a branch validates and runs the journeys; only main deploys.
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     environment:
       name: production
