@@ -17,6 +17,7 @@ import { TenantsModule } from './modules/tenants/tenants.module';
 import { UsersModule } from './modules/users/users.module';
 import { AdminModule } from './modules/admin/admin.module';
 import { EgressModule } from './modules/egress/egress.module';
+import { WaxumInternalModule } from './modules/waxum-internal/waxum-internal.module';
 import { LeadFoldersModule } from './modules/lead-folders/lead-folders.module';
 import { MetricsModule } from './modules/metrics/metrics.module';
 import { ContactComplianceModule } from './modules/contact-compliance/contact-compliance.module';
@@ -41,7 +42,7 @@ import { McpModule } from './modules/mcp/mcp.module';
 import { StealthModule } from './modules/stealth/stealth.module';
 
 @Module({
-  imports: [DatabaseModule, RedisModule, BillingModule, FeatureFlagsModule, AuthModule, AuditModule, InvitationsModule, MembershipsModule, TenantsModule, UsersModule, ContactComplianceModule, DialerScheduleModule, DialerModule, CallbacksModule, OnboardingModule, PrivacyModule, AdminModule, LeadFoldersModule, MetricsModule, LeadIngestionModule, CampaignsModule, RecommendationsModule, OperationHealthModule, AnalyticsEventsModule, AnalyticsLearningModule, ExperimentsModule, BenchmarksModule, NumbersModule, CrmIntegrationsModule, EgressModule, WhatsappProvisioningModule, McpModule, StealthModule],
+  imports: [DatabaseModule, RedisModule, BillingModule, FeatureFlagsModule, AuthModule, AuditModule, InvitationsModule, MembershipsModule, TenantsModule, UsersModule, ContactComplianceModule, DialerScheduleModule, DialerModule, CallbacksModule, OnboardingModule, PrivacyModule, AdminModule, LeadFoldersModule, MetricsModule, LeadIngestionModule, CampaignsModule, RecommendationsModule, OperationHealthModule, AnalyticsEventsModule, AnalyticsLearningModule, ExperimentsModule, BenchmarksModule, NumbersModule, CrmIntegrationsModule, EgressModule, WhatsappProvisioningModule, WaxumInternalModule, McpModule, StealthModule],
   controllers: [CallsController, DialerController, HealthController, LeadsController, SdrsController],
   providers: [{ provide: APP_INTERCEPTOR, useClass: OperationalMetricsInterceptor }],
 })

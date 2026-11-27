@@ -58,4 +58,9 @@ export class NumbersController {
   @Roles('leader', 'super_admin')
   @Patch(['/api/numbers/:id/settings', '/api/tenants/:tenantId/numbers/:id/settings'])
   settings(@Param('id') id: string, @Body() body: UpdateNumberDto, @CurrentTenant() tenantId: string, @CurrentUser() user: any) { return this.numbers.updateSettings(tenantId, user.id, id, body); }
+
+  /** The frozen device profile of a line (docs/device-profile.md); null when it has none. */
+  @Roles('leader', 'super_admin')
+  @Get(['/api/numbers/:id/device-profile', '/api/tenants/:tenantId/numbers/:id/device-profile'])
+  deviceProfile(@Param('id') id: string, @CurrentTenant() tenantId: string) { return this.numbers.deviceProfile(tenantId, id); }
 }
