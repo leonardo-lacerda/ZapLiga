@@ -68,10 +68,11 @@ export class MultiloginClient {
   }
 
   private async page(page: number): Promise<PhonePage> {
+    const token = this.token;
     let response: Response;
     try {
       response = await fetch(`${BASE_URL}/mobile_profiles/phone/list?page=${page}&page_size=${PAGE_SIZE}`, {
-        headers: { Authorization: `Bearer ${this.token}`, Accept: 'application/json' },
+        headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' },
         signal: AbortSignal.timeout(TIMEOUT_MS),
       });
     } catch {
