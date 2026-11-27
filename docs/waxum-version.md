@@ -86,6 +86,10 @@ existem para ler o que ele responde em vez de adivinhar, e para corrigir o encer
 - **Perfil do handshake por ambiente**: `WA_CLIENT_LOCALE` (ex.: `pt_BR`) e `WA_CLIENT_OS_VERSION`.
   Sem eles, vale o perfil web da biblioteca (`en_US`, `0.1.0`). `WA_DEVICE_PLATFORM` /
   `WA_DEVICE_OS` continuam valendo só no pareamento.
+- **Perfil do handshake por linha** (`waxum-zapliga-device-profile.patch`, docs/device-profile.md):
+  com `ZAPLIGA_DEVICE_PROFILE=true`, o Waxum busca em `ZAPLIGA_API_URL` o perfil congelado da
+  linha e o aplica antes do handshake; sem perfil, cai nos valores de ambiente acima. Desligado
+  por padrão.
 
 A API guarda os sinais em `call_signal_events` (migração 078, `CallSignalService`), com os ms desde
 a oferta (`calls.offer_sent_at`).

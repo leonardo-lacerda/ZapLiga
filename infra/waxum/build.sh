@@ -33,7 +33,7 @@ PATCHES="${HERE}/patches"
 WORKDIR="${WORKDIR:-$(mktemp -d -t zapliga-waxum-build-XXXXXX)}"
 SRC="${WORKDIR}/waxum"
 
-for f in whatsapp-rust-zapliga.patch whatsapp-rust-call-codec.patch whatsapp-rust-zapliga-signal.patch whatsapp-rust-relay-select.patch whatsapp-rust-opus-conceal.patch waxum-zapliga.patch waxum-call-codec.patch waxum-zapliga-signal.patch waxum-zapliga-identity.patch waxum-zapliga-loss.patch; do
+for f in whatsapp-rust-zapliga.patch whatsapp-rust-call-codec.patch whatsapp-rust-zapliga-signal.patch whatsapp-rust-relay-select.patch whatsapp-rust-opus-conceal.patch waxum-zapliga.patch waxum-call-codec.patch waxum-zapliga-signal.patch waxum-zapliga-identity.patch waxum-zapliga-loss.patch waxum-zapliga-device-profile.patch; do
   [ -s "${PATCHES}/${f}" ] || { echo "patch ausente: ${PATCHES}/${f}" >&2; exit 1; }
 done
 command -v docker >/dev/null || { echo "docker nao encontrado" >&2; exit 1; }
@@ -91,6 +91,9 @@ sed -i 's/\r$//' "${SRC}/docker-entrypoint.sh" "${SRC}/Dockerfile"
 # Why a line was lost, by name: an account lock's cause (never its appeal token), a temporary ban's
 # code and duration, any refused connection's code, and the server's reachout timelock on demand.
 (cd "${SRC}" && patch -p1 --forward < "${PATCHES}/waxum-zapliga-loss.patch")
+# Applies the frozen per-line device profile the API hands the Waxum before the handshake,
+# behind ZAPLIGA_DEVICE_PROFILE; docs/device-profile.md.
+(cd "${SRC}" && patch -p1 --forward < "${PATCHES}/waxum-zapliga-device-profile.patch")
 head -c 12 "${SRC}/docker-entrypoint.sh" | grep -q '#!/bin/sh' || { echo "docker-entrypoint.sh invalido apos patch" >&2; exit 1; }
 
 echo "==> Sanity: the multi-relay fix must be present"
@@ -110,6 +113,10 @@ grep -q 'lock_session_storage' "${SRC}/src/handlers/sessions.rs" \
   || { echo "patch nao trouxe lock_session_storage; fonte incompleta" >&2; exit 1; }
 grep -q 'zapliga-identity.json' "${SRC}/src/device_props.rs" \
   || { echo "patch nao trouxe a identidade por sessao; fonte incompleta" >&2; exit 1; }
+grep -q 'resolve_profile' "${SRC}/src/device_profile.rs" \
+  || { echo "patch nao trouxe device_profile.rs; fonte incompleta" >&2; exit 1; }
+grep -q 'ZAPLIGA_DEVICE_PROFILE' "${SRC}/src/device_props.rs" \
+  || { echo "patch nao trouxe a flag ZAPLIGA_DEVICE_PROFILE; fonte incompleta" >&2; exit 1; }
 
 echo "==> Building ${IMAGE} (release, LTO off in Dockerfile; expect 10-45 min cold)"
 docker build --progress=plain -t "${IMAGE}" "${SRC}"
