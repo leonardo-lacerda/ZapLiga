@@ -86,7 +86,7 @@ x-edge-tailscale: &edge-tailscale
 x-edge-waxum: &edge-waxum
   # v7: call media goes only to the relay the lead answers on (docs/waxum-version.md), which cuts each
   # call's upload through the attendants' shared office internet to about a third.
-  image: zapliga-waxum:0.12.6-multirelay-v11-device-profile
+  image: zapliga-waxum:0.12.6-multirelay-v12-business
   entrypoint: ["/bin/sh", "/usr/local/bin/waxum-edge-guard.sh"]
   command: ["/app/waxum"]
   restart: unless-stopped
@@ -287,7 +287,7 @@ services:
   waxum-edge-1:
     <<: *edge-waxum
     # Same image as the other edges; edge-1 also declares the Windows/pt-BR identity (new pairings).
-    image: zapliga-waxum:0.12.6-multirelay-v11-device-profile
+    image: zapliga-waxum:0.12.6-multirelay-v12-business
     network_mode: service:tailscale-edge-1
     environment:
       <<: *edge-waxum-environment
@@ -350,7 +350,7 @@ services:
     <<: *edge-waxum
     # v8 first here: the identity per line, saved with the session (docs/stealth-profile.md). The
     # other edges stay on v7 until a real call on edge-3 validates it.
-    image: zapliga-waxum:0.12.6-multirelay-v11-device-profile
+    image: zapliga-waxum:0.12.6-multirelay-v12-business
     network_mode: service:tailscale-edge-3
     environment:
       <<: *edge-waxum-environment
@@ -380,7 +380,7 @@ services:
   waxum-edge-4:
     <<: *edge-waxum
     # Kept on v4 while its lines move, one at a time and only when idle, to the v7 edges; then v7 too.
-    image: zapliga-waxum:0.12.6-multirelay-v11-device-profile
+    image: zapliga-waxum:0.12.6-multirelay-v12-business
     network_mode: service:tailscale-edge-4
     environment:
       <<: *edge-waxum-environment
@@ -587,7 +587,7 @@ services:
     <<: *edge-waxum
     # Sends call media only to the relay the lead answers on (docs/waxum-version.md): the proxy is
     # billed per GB. Edge PCs stay on v5-signal until this one is proven on real calls.
-    image: zapliga-waxum:0.12.6-multirelay-v11-device-profile
+    image: zapliga-waxum:0.12.6-multirelay-v12-business
     network_mode: service:proxy-edge-1
     environment:
       <<: *edge-waxum-environment
