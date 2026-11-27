@@ -61,7 +61,8 @@ jobs:
           sed -i "s|^HERE=.*|HERE=$GITHUB_WORKSPACE/infra/waxum|" "$RUNNER_TEMP/assemble.sh"
           WORKDIR="$RUNNER_TEMP/wx" bash "$RUNNER_TEMP/assemble.sh" "$TAG"
 
-      # Also our own Waxum tests (names start with zapliga_: identity per line, session lock, call acks).
+      # Also our own tests (names start with zapliga_): the playout loss concealment in wacore, and in
+      # Waxum the identity per line, session lock and call acks.
       # curl: Waxum's Swagger UI build script downloads the UI with it, as in the Dockerfile.
       - name: Testes de VoIP do whatsapp-rust e do Waxum
         run: |
@@ -71,6 +72,7 @@ jobs:
               apt-get update -qq && apt-get install -y -qq pkg-config libssl-dev libsqlite3-dev cmake build-essential git curl >/dev/null &&
               rustup default nightly-2026-09-09 &&
               cargo test -p whatsapp-rust --features voip,tracing voip &&
+              cargo test -p wacore --features voip zapliga_ &&
               cd /app && cargo test --lib zapliga_'
 
       - name: Construir a imagem

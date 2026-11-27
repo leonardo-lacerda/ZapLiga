@@ -13,12 +13,12 @@
 #   docker save zapliga-waxum:<tag> | gzip | ssh root@<vps> 'gunzip | docker load'
 #
 # Usage:
-#   infra/waxum/build.sh [tag]            # default tag: 0.12.6-multirelay-v8-identity
+#   infra/waxum/build.sh [tag]            # default tag: 0.12.6-multirelay-v10-loss-signals
 #   WORKDIR=/some/dir infra/waxum/build.sh # keep the assembled source around
 #
 set -euo pipefail
 
-TAG="${1:-0.12.6-multirelay-v8-identity}"
+TAG="${1:-0.12.6-multirelay-v10-loss-signals}"
 IMAGE="zapliga-waxum:${TAG}"
 
 # Pinned upstream sources. Bumping either means regenerating the patches:
@@ -33,7 +33,7 @@ PATCHES="${HERE}/patches"
 WORKDIR="${WORKDIR:-$(mktemp -d -t zapliga-waxum-build-XXXXXX)}"
 SRC="${WORKDIR}/waxum"
 
-for f in whatsapp-rust-zapliga.patch whatsapp-rust-call-codec.patch whatsapp-rust-zapliga-signal.patch whatsapp-rust-relay-select.patch waxum-zapliga.patch waxum-call-codec.patch waxum-zapliga-signal.patch waxum-zapliga-identity.patch; do
+for f in whatsapp-rust-zapliga.patch whatsapp-rust-call-codec.patch whatsapp-rust-zapliga-signal.patch whatsapp-rust-relay-select.patch whatsapp-rust-opus-conceal.patch waxum-zapliga.patch waxum-call-codec.patch waxum-zapliga-signal.patch waxum-zapliga-identity.patch waxum-zapliga-loss.patch; do
   [ -s "${PATCHES}/${f}" ] || { echo "patch ausente: ${PATCHES}/${f}" >&2; exit 1; }
 done
 command -v docker >/dev/null || { echo "docker nao encontrado" >&2; exit 1; }
@@ -70,6 +70,9 @@ echo "==> Applying patches"
 # Once the peer's media is seen on one relay, outbound media goes only there instead of to every
 # relay (back to all of them while settling or when it goes quiet): cuts the call's bandwidth.
 (cd "${SRC}/whatsapp-rust" && patch -p1 --forward < "${PATCHES}/whatsapp-rust-relay-select.patch")
+# A late or lost packet of the lead's voice is filled by libopus' loss concealment instead of a
+# hard silence plus a ~120 ms silent re-prime (what callers heard as the call breaking up).
+(cd "${SRC}/whatsapp-rust" && patch -p1 --forward < "${PATCHES}/whatsapp-rust-opus-conceal.patch")
 # waxum-zapliga.patch was cut from a Windows (CRLF) checkout; a Linux checkout is
 # LF, so give the files it touches CRLF first or every hunk is rejected.
 for f in Cargo.lock Cargo.toml Dockerfile docker-entrypoint.sh src/handlers/mex.rs; do
@@ -85,6 +88,9 @@ sed -i 's/\r$//' "${SRC}/docker-entrypoint.sh" "${SRC}/Dockerfile"
 # the session so it follows the line across Waxums, and the server's acks of call stanzas published
 # as `call_ack`; docs/stealth-profile.md.
 (cd "${SRC}" && patch -p1 --forward < "${PATCHES}/waxum-zapliga-identity.patch")
+# Why a line was lost, by name: an account lock's cause (never its appeal token), a temporary ban's
+# code and duration, any refused connection's code, and the server's reachout timelock on demand.
+(cd "${SRC}" && patch -p1 --forward < "${PATCHES}/waxum-zapliga-loss.patch")
 head -c 12 "${SRC}/docker-entrypoint.sh" | grep -q '#!/bin/sh' || { echo "docker-entrypoint.sh invalido apos patch" >&2; exit 1; }
 
 echo "==> Sanity: the multi-relay fix must be present"
@@ -96,6 +102,10 @@ grep -q 'audio_with_config' "${SRC}/whatsapp-rust/src/voip/facade.rs" \
   || { echo "patch nao trouxe audio_with_config; fonte incompleta" >&2; exit 1; }
 grep -q 'struct RelayActivity' "${SRC}/whatsapp-rust/src/voip/transport/native.rs" \
   || { echo "patch nao trouxe RelayActivity; fonte incompleta" >&2; exit 1; }
+grep -q 'fn drain_playout_concealing' "${SRC}/whatsapp-rust/wacore/src/voip/engine.rs" \
+  || { echo "patch nao trouxe a ocultacao de perda do Opus; fonte incompleta" >&2; exit 1; }
+grep -q 'fn zapliga_lock_details' "${SRC}/src/handlers/sessions.rs" \
+  || { echo "patch nao trouxe os sinais de queda; fonte incompleta" >&2; exit 1; }
 grep -q 'lock_session_storage' "${SRC}/src/handlers/sessions.rs" \
   || { echo "patch nao trouxe lock_session_storage; fonte incompleta" >&2; exit 1; }
 grep -q 'zapliga-identity.json' "${SRC}/src/device_props.rs" \
