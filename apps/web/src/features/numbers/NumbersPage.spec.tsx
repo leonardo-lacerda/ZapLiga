@@ -6,6 +6,10 @@ import { vi } from 'vitest';
 import { server } from '../../test/setup';
 import { NumbersPage } from './NumbersPage';
 
+beforeEach(() => {
+  server.use(http.get('*/api/numbers/loss-causes', () => HttpResponse.json({ days: 30, causes: [] })));
+});
+
 function Harness({ onCreate, canProvision = false, onOpenProvisioning, numbers = [], canManageStealth = false }: { onCreate: (payload: Record<string, unknown>) => void; canProvision?: boolean; onOpenProvisioning?: () => void; numbers?: Record<string, unknown>[]; canManageStealth?: boolean }) {
   const [numberForm, setNumberForm] = useState<Record<string, unknown>>({ label: '', phone: '' });
   const createNumber = (event: FormEvent) => {
@@ -176,4 +180,27 @@ it('liga a camuflagem de uma linha e avisa quando ela só vale no login', async 
   await userEvent.click(screen.getByRole('checkbox', { name: /Camuflagem de navegador/ }));
   expect(await screen.findByText('Parcial: refaça o QR para valer no registro')).toBeInTheDocument();
   expect(body).toEqual({ enabled: true });
+});
+
+it('mostra as quedas do mês por causa, a pausa imposta pelo WhatsApp e o motivo informado', async () => {
+  server.use(http.get('*/api/numbers/loss-causes', () => HttpResponse.json({ days: 30, causes: [{ cause: 'temp_banned', total: 2, lines: 1 }, { cause: 'device_removed', total: 1, lines: 1 }] })));
+  const until = new Date(Date.now() + 3_600_000).toISOString();
+  render(<Harness onCreate={vi.fn()} numbers={[
+    { id: 'n7', label: 'Previtas 9', status: 'connected', canary_status: 'passed', dial_blocked_until: until, dial_block_cause: 'temp_banned', losses_recent: { temp_banned: 2 } },
+    { id: 'n8', label: 'Previtas 10', status: 'disconnected', loss_reason: 'account_locked', loss_cause: 'account_locked', loss_detail: { violationReason: 'other_harm' }, removal_count: 1, canary_status: 'passed' },
+  ]} />);
+  expect(await screen.findByText('Banimento temporário: 2 (1 linha)')).toBeInTheDocument();
+  expect(screen.getByText(/Pausadas até .* · Banimento temporário/)).toBeInTheDocument();
+  expect(screen.getByText('Banimento temporário 2')).toBeInTheDocument();
+  expect(screen.getByText(/Conta bloqueada: resolver no celular/)).toBeInTheDocument();
+  expect(screen.getByText('other_harm')).toBeInTheDocument();
+});
+
+it('registra o que o celular mostrou quando o WhatsApp recusou o número', async () => {
+  let sent: unknown = null;
+  server.use(http.post('*/api/numbers/n9/registration-reason', async ({ request }) => { sent = await request.json(); return HttpResponse.json({ id: 'n9', registration_reason: 'too_many_guesses' }); }));
+  render(<Harness onCreate={vi.fn()} numbers={[{ id: 'n9', label: 'Previtas 11', status: 'disconnected', canary_status: 'passed' }]} />);
+  await userEvent.selectOptions(screen.getByLabelText('Motivo da recusa de Previtas 11'), 'too_many_guesses');
+  await userEvent.click(screen.getByRole('button', { name: /Registrar/ }));
+  await waitFor(() => expect(sent).toEqual({ reason: 'too_many_guesses' }));
 });
