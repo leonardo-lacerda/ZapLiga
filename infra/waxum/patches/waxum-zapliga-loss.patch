@@ -1,0 +1,208 @@
+diff -ruN wxbase/src/handlers/operations.rs wxwork/src/handlers/operations.rs
+--- a/src/handlers/operations.rs	2026-11-27 15:58:33.000000000 +0100
++++ b/src/handlers/operations.rs	2026-11-27 16:01:05.591091604 +0100
+@@ -715,3 +715,34 @@
+         assert!(parse_resync_mode(Some("full")).is_err());
+     }
+ }
++
++/// ZapLiga: the account's reachout timelock (`is_active`, `enforcement_type`,
++/// `time_enforcement_ends`) as the server states it, through the same GraphQL query WA Web runs,
++/// so the dialer waits exactly until the server's deadline instead of a fixed quarantine.
++#[utoipa::path(
++    get,
++    security(("bearer_auth" = [])),
++    path = "/api/v1/sessions/{session_id}/reachout-timelock",
++    tag = "operations",
++    params(
++        ("session_id" = String, Path, description = "Session ID")
++    ),
++    responses(
++        (status = 200, description = "Reachout timelock state"),
++        (status = 503, description = "Not connected")
++    )
++)]
++pub async fn get_reachout_timelock(
++    State(state): State<AppState>,
++    Path(session_id): Path<String>,
++) -> Result<Json<serde_json::Value>, ApiError> {
++    let client = get_client(&state, &session_id)?;
++    let timelock = client
++        .mex()
++        .fetch_reachout_timelock()
++        .await
++        .map_err(|e| ApiError::Internal(e.to_string()))?;
++    serde_json::to_value(timelock)
++        .map(Json)
++        .map_err(|e| ApiError::Internal(e.to_string()))
++}
+diff -ruN wxbase/src/handlers/sessions.rs wxwork/src/handlers/sessions.rs
+--- a/src/handlers/sessions.rs	2026-11-27 15:58:39.000000000 +0100
++++ b/src/handlers/sessions.rs	2026-11-27 16:01:15.556063945 +0100
+@@ -1779,6 +1779,8 @@
+                         "reason": format!("{:?}", logged_out.reason),
+                         "cooldown_secs": cooldown_secs,
+                         "cooldown_until": cooldown_until,
++                        // ZapLiga: why the server locked the account, for the operators.
++                        "details": zapliga_lock_details(logged_out),
+                     },
+                 });
+                 if let Ok(payload_str) = serde_json::to_string(&payload) {
+@@ -1915,6 +1917,37 @@
+     }
+ }
+ 
++/// ZapLiga: the attributes an account lock's `<failure>` stanza states about its cause (code,
++/// location, `violation_*`, `vt`, the server's own copy), so the operators can see why a line was
++/// locked. Never the one-time `appeal_token` / `idv_token`: those are credentials, not a cause.
++const ZAPLIGA_LOCK_ATTRS: [&str; 10] = [
++    "reason",
++    "location",
++    "code",
++    "violation_reason",
++    "violation_type",
++    "violated_policy",
++    "vt",
++    "logout_message_header",
++    "logout_message_subtext",
++    "logout_message_locale",
++];
++
++fn zapliga_lock_details(logged_out: &wacore::types::events::LoggedOut) -> serde_json::Value {
++    let mut details = serde_json::Map::new();
++    if let Some(raw) = logged_out.raw.as_ref() {
++        for key in ZAPLIGA_LOCK_ATTRS {
++            if let Some(value) = raw.attrs.get(key) {
++                details.insert(
++                    key.to_string(),
++                    serde_json::Value::String(value.as_str().into_owned()),
++                );
++            }
++        }
++    }
++    serde_json::Value::Object(details)
++}
++
+ fn get_event_type(event: &wacore::types::events::Event) -> String {
+     use wacore::types::events::Event;
+     match event {
+@@ -1947,6 +1980,10 @@
+         Event::EncDecryptFailed(_) => "enc_decrypt_failed".to_string(),
+         // ZapLiga: the server's ack (or nack, e.g. 463) of our call stanzas, the offer included.
+         Event::ServerAck(ack) if ack.class.as_deref() == Some("call") => "call_ack".to_string(),
++        // ZapLiga: a temporary ban (402) and any other refused connection, by name, so the API can
++        // tell them apart instead of seeing "unknown".
++        Event::TemporaryBan(_) => "temp_banned".to_string(),
++        Event::ConnectFailure(_) => "connect_failure".to_string(),
+         _ => "unknown".to_string(),
+     }
+ }
+@@ -2527,6 +2564,21 @@
+                 "reason": format!("{:?}", failed.reason),
+             })
+         }
++        Event::TemporaryBan(ban) => {
++            serde_json::json!({
++                "code": ban.code.code(),
++                "reason": format!("{:?}", ban.code),
++                "expire_secs": ban.expire.as_secs(),
++                "message": ban.message,
++            })
++        }
++        Event::ConnectFailure(failure) => {
++            serde_json::json!({
++                "code": failure.reason.code(),
++                "reason": format!("{:?}", failure.reason),
++                "message": failure.message,
++            })
++        }
+         Event::ServerAck(ack) if ack.class.as_deref() == Some("call") => {
+             serde_json::json!({
+                 "id": ack.id,
+@@ -2575,6 +2627,59 @@
+         assert_eq!(get_event_type(&message_ack), "unknown");
+     }
+ 
++    #[test]
++    fn zapliga_temp_ban_is_published_with_code_and_expire() {
++        use wacore::types::events::{Event, TempBanReason, TemporaryBan};
++
++        let ban = Event::TemporaryBan(
++            TemporaryBan::builder()
++                .code(TempBanReason::SentToTooManyPeople)
++                .expire(std::time::Duration::from_secs(3600))
++                .build(),
++        );
++        assert_eq!(get_event_type(&ban), "temp_banned");
++        let json = event_to_json(&ban, "s1");
++        assert_eq!(json["data"]["code"], 101);
++        assert_eq!(json["data"]["expire_secs"], 3600);
++    }
++
++    #[test]
++    fn zapliga_connect_failure_is_published_with_its_code() {
++        use wacore::types::events::{ConnectFailure, ConnectFailureReason, Event};
++
++        let failure = Event::ConnectFailure(
++            ConnectFailure::builder()
++                .reason(ConnectFailureReason::ClientOutdated)
++                .build(),
++        );
++        assert_eq!(get_event_type(&failure), "connect_failure");
++        assert_eq!(event_to_json(&failure, "s1")["data"]["code"], 405);
++    }
++
++    #[test]
++    fn zapliga_lock_details_keep_the_cause_and_drop_the_appeal_token() {
++        use wacore::types::events::{ConnectFailureReason, LoggedOut};
++        use wacore_binary::builder::NodeBuilder;
++
++        let failure = NodeBuilder::new("failure")
++            .attr("reason", "403")
++            .attr("location", "rva")
++            .attr("violation_reason", "other_harm")
++            .attr("vt", "1")
++            .attr("appeal_token", "0aFICTITIOUSappealTOKEN00")
++            .build();
++        let logged_out = LoggedOut::builder()
++            .on_connect(true)
++            .reason(ConnectFailureReason::AccountLocked)
++            .raw(failure)
++            .build();
++        let details = zapliga_lock_details(&logged_out);
++        assert_eq!(details["violation_reason"], "other_harm");
++        assert_eq!(details["vt"], "1");
++        assert_eq!(details["reason"], "403");
++        assert!(details.get("appeal_token").is_none());
++    }
++
+     #[tokio::test]
+     async fn zapliga_session_lock_refuses_a_session_open_in_another_waxum() {
+         let dir = tempfile::tempdir().unwrap();
+diff -ruN wxbase/src/routes/mod.rs wxwork/src/routes/mod.rs
+--- a/src/routes/mod.rs	2026-11-27 15:58:33.000000000 +0100
++++ b/src/routes/mod.rs	2026-11-27 16:01:05.591091604 +0100
+@@ -537,6 +537,11 @@
+             "/{session_id}/tctoken/{jid}",
+             get(handlers::operations::tctoken_get),
+         )
++        // ZapLiga: the account's reachout timelock as the server states it.
++        .route(
++            "/{session_id}/reachout-timelock",
++            get(handlers::operations::get_reachout_timelock),
++        )
+         .route(
+             "/{session_id}/reconnect",
+             get(handlers::operations::get_auto_reconnect)
+diff -ruN wxbase/src/state.rs wxwork/src/state.rs
+--- a/src/state.rs	2026-11-27 15:58:39.000000000 +0100
++++ b/src/state.rs	2026-11-27 16:01:05.591091604 +0100
+@@ -789,7 +789,7 @@
+         // reason past the preview; other events keep the preview, so message text stays out.
+         let log_max = match event {
+             "incoming_call" | "logged_out" | "account_locked" | "stream_error" | "connected"
+-            | "disconnected" => 4000,
++            | "disconnected" | "temp_banned" | "connect_failure" | "call_ack" => 4000,
+             _ => PREVIEW_MAX,
+         };
+         tracing::info!(
