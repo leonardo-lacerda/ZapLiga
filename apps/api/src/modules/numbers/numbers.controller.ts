@@ -6,6 +6,7 @@ import { RegistrationReasonDto } from './dto/registration-reason.dto';
 import { UpdateNumberDto } from './dto/update-number.dto';
 import { NumbersService } from './numbers.service';
 import { STEALTH_ADMIN_ONLY_MESSAGE } from '../stealth/stealth-profile';
+import { DEVICE_PROFILE_ADMIN_ONLY_MESSAGE } from '../device-profile/device-profile';
 
 @Controller()
 @UseGuards(AuthGuard, TenantMembershipGuard, RolesGuard)
@@ -16,6 +17,7 @@ export class NumbersController {
   @Post(['/api/numbers', '/api/tenants/:tenantId/numbers'])
   create(@Body() body: CreateNumberDto, @CurrentTenant() tenantId: string, @CurrentUser() user: any) {
     if (body.stealth && user.platformRole !== 'super_admin') throw new ForbiddenException(STEALTH_ADMIN_ONLY_MESSAGE);
+    if (body.multiloginPhoneId && user.platformRole !== 'super_admin') throw new ForbiddenException(DEVICE_PROFILE_ADMIN_ONLY_MESSAGE);
     return this.numbers.create(tenantId, user.id, body);
   }
 

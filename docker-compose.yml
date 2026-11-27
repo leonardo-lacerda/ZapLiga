@@ -12,6 +12,10 @@ x-api-environment: &api-environment
   NATS_URL: nats://nats:4222
   # true = no line sends its camouflage identity, as if every switch were off (docs/stealth-profile.md).
   STEALTH_KILLSWITCH: ${STEALTH_KILLSWITCH:-false}
+  # New camouflage per line (docs/device-profile.md): true = every line behaves as if it never had it,
+  # and MULTILOGIN_TOKEN (automation token, set in /opt/zapliga/.env) reads the cloud phones it copies.
+  DEVICE_PROFILE_KILLSWITCH: ${DEVICE_PROFILE_KILLSWITCH:-false}
+  MULTILOGIN_TOKEN: ${MULTILOGIN_TOKEN:-}
   JWT_ACCESS_SECRET: ${JWT_ACCESS_SECRET:-zapcall-local-access-secret-change-me}
   LEGACY_TENANT_ID: ${LEGACY_TENANT_ID:-tenant-legado}
   LEGACY_TENANT_NAME: ${LEGACY_TENANT_NAME:-Operação legada}

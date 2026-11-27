@@ -1,4 +1,4 @@
-import { IsBoolean, IsInt, IsOptional, IsString, Max, Min, MinLength } from 'class-validator';
+import { IsBoolean, IsInt, IsOptional, IsString, Max, MaxLength, Min, MinLength } from 'class-validator';
 
 export class CreateNumberDto {
   @IsString() @MinLength(2) label!: string;
@@ -9,4 +9,6 @@ export class CreateNumberDto {
   @IsOptional() @IsInt() @Min(60) @Max(3600) callWindowSeconds?: number;
   // Born with its camouflage profile (docs/stealth-profile.md); super admin only.
   @IsOptional() @IsBoolean() stealth?: boolean;
+  // Born with the new camouflage, as this Multilogin cloud phone (docs/device-profile.md); super admin only.
+  @IsOptional() @IsString() @MinLength(1) @MaxLength(64) multiloginPhoneId?: string;
 }

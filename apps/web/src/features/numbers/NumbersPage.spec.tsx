@@ -182,6 +182,61 @@ it('liga a camuflagem de uma linha e avisa quando ela só vale no login', async 
   expect(body).toEqual({ enabled: true });
 });
 
+const multiloginPhones = { items: [
+  { id: 'ml-1', name: 'Previtas 30', androidVersion: '14', brand: 'samsung', model: 'SM-A546E', takenBy: null },
+  { id: 'ml-2', name: 'Previtas 31', androidVersion: '13', brand: 'motorola', model: 'moto g54', takenBy: 'Previtas 9' },
+] };
+
+it('escolhe a nova camuflagem de uma linha com o celular da Multilogin e avisa que vale no próximo pareamento', async () => {
+  let body: unknown;
+  server.use(
+    http.get('*/api/multilogin/phones', () => HttpResponse.json(multiloginPhones)),
+    http.patch('*/api/numbers/n9/device-profile', async ({ request }) => { body = await request.json(); return HttpResponse.json({ id: 'n9', device_profile_enabled: true, device_profile_active: false, multilogin_phone_id: 'ml-1', device_profile_state: 'pending', device_profile: { android: { manufacturer: 'samsung', device: 'SM-A546E', os_version: '14', mcc: '724', mnc: '05' } } }); }),
+  );
+  render(<Harness onCreate={vi.fn()} canManageStealth numbers={[{ id: 'n9', label: 'Previtas 30', status: 'connected', canary_status: 'passed' }]} />);
+
+  expect(screen.getByRole('combobox', { name: 'Camuflagem da linha' })).toHaveValue('today');
+  await userEvent.selectOptions(screen.getByRole('combobox', { name: 'Camuflagem da linha' }), 'new');
+  const phone = await screen.findByRole('option', { name: /Previtas 30 · samsung SM-A546E · Android 14/ });
+  expect(screen.getByRole('option', { name: /usado por Previtas 9/ })).toBeDisabled();
+  await userEvent.selectOptions(screen.getByRole('combobox', { name: 'Celular da Multilogin' }), phone);
+  await userEvent.click(screen.getByRole('button', { name: 'Salvar camuflagem' }));
+
+  expect(await screen.findByText('Vale no próximo pareamento')).toBeInTheDocument();
+  expect(screen.getByText('samsung SM-A546E · Android 14 · 724/05')).toBeInTheDocument();
+  expect(body).toEqual({ enabled: true, multiloginPhoneId: 'ml-1' });
+});
+
+it('volta uma linha ativa para como está hoje sem pedir celular', async () => {
+  let body: unknown;
+  server.use(http.patch('*/api/numbers/n10/device-profile', async ({ request }) => { body = await request.json(); return HttpResponse.json({ id: 'n10', device_profile_enabled: false, device_profile_active: true, device_profile_state: 'leaving', device_profile: { android: { manufacturer: 'samsung', device: 'SM-A546E', os_version: '14', mcc: '724', mnc: '05' } } }); }));
+  render(<Harness onCreate={vi.fn()} canManageStealth numbers={[{ id: 'n10', label: 'Previtas 32', status: 'connected', canary_status: 'passed', device_profile_enabled: true, device_profile_active: true, multilogin_phone_id: 'ml-1', device_profile_state: 'active' }]} />);
+
+  expect(screen.getByText('Ativa')).toBeInTheDocument();
+  await userEvent.selectOptions(screen.getByRole('combobox', { name: 'Camuflagem da linha' }), 'today');
+  await userEvent.click(screen.getByRole('button', { name: 'Salvar camuflagem' }));
+
+  expect(await screen.findByText('Ativa até o próximo pareamento')).toBeInTheDocument();
+  expect(body).toEqual({ enabled: false });
+});
+
+it('cria a linha já com a nova camuflagem quando o admin escolhe o celular', async () => {
+  server.use(http.get('*/api/multilogin/phones', () => HttpResponse.json(multiloginPhones)));
+  const onCreate = vi.fn();
+  render(<Harness onCreate={onCreate} canManageStealth />);
+  await userEvent.type(screen.getByPlaceholderText('Ex.: Comercial SP'), 'Previtas 30');
+  await userEvent.click(screen.getByRole('checkbox', { name: /Nova camuflagem \(#5\)/ }));
+  const phone = await screen.findByRole('option', { name: /Previtas 30 · samsung/ });
+  await userEvent.selectOptions(screen.getByRole('combobox', { name: 'Celular da Multilogin' }), phone);
+  await userEvent.click(screen.getByRole('button', { name: 'Criar sessão' }));
+  expect(onCreate).toHaveBeenCalledWith(expect.objectContaining({ label: 'Previtas 30', multiloginPhoneId: 'ml-1' }));
+});
+
+it('não mostra a nova camuflagem para quem não é admin do ZapLiga', () => {
+  render(<Harness onCreate={vi.fn()} numbers={[{ id: 'n7', label: 'Previtas 16', status: 'connected', canary_status: 'passed' }]} />);
+  expect(screen.queryByRole('combobox', { name: 'Camuflagem da linha' })).not.toBeInTheDocument();
+});
+
 it('mostra as quedas do mês por causa, a pausa imposta pelo WhatsApp e o motivo informado', async () => {
   server.use(http.get('*/api/numbers/loss-causes', () => HttpResponse.json({ days: 30, causes: [{ cause: 'temp_banned', total: 2, lines: 1 }, { cause: 'device_removed', total: 1, lines: 1 }] })));
   const until = new Date(Date.now() + 3_600_000).toISOString();

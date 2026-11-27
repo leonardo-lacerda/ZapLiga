@@ -15,7 +15,9 @@ import { LINE_LOSS_CAUSES, RegistrationReason } from '../dialer/line-loss.rules'
 /** The window the panel counts losses over, per line and for the tenant. */
 export const LOSS_SUMMARY_DAYS = 30;
 import type { SessionIdentity } from '../../infrastructure/waxum/session-identity';
-import { STEALTH_KILLSWITCH_MESSAGE, generateStealthProfile, profileIdentity, sessionIdentity, stealthCoverage, stealthKillswitchOn } from '../stealth/stealth-profile';
+import { STEALTH_KILLSWITCH_MESSAGE, generateStealthProfile, profileIdentity, stealthCoverage, stealthKillswitchOn } from '../stealth/stealth-profile';
+import { deviceProfileState, lineIdentity, usesDeviceProfile, type DeviceProfileLine } from '../device-profile/device-profile';
+import { DeviceProfileService } from '../device-profile/device-profile.service';
 
 const digits = (value: unknown) => String(value ?? '').replace(/\D/g, '');
 
@@ -26,7 +28,8 @@ function assertNotRetired(number: any) {
 }
 
 // `stealth`: the line is born with its camouflage profile (docs/stealth-profile.md); super admin only.
-export type CreateNumberInput = { label?: string; phone?: string; maxConcurrentCalls?: number; cooldownSeconds?: number; maxCallsPerWindow?: number; callWindowSeconds?: number; stealth?: boolean };
+// `multiloginPhoneId`: the line is born with the new camouflage, as that cloud phone (docs/device-profile.md); super admin only.
+export type CreateNumberInput = { label?: string; phone?: string; maxConcurrentCalls?: number; cooldownSeconds?: number; maxCallsPerWindow?: number; callWindowSeconds?: number; stealth?: boolean; multiloginPhoneId?: string };
 export type UpdateNumberInput = { label?: string; maxConcurrentCalls?: number; cooldownSeconds?: number; maxCallsPerWindow?: number; callWindowSeconds?: number; verificationOnly?: boolean };
 
 /**
@@ -61,7 +64,7 @@ export class NumbersService {
   private readonly waxumCreateCooldownKey = 'zapcall:waxum:create-session:cooldown';
   private readonly waxumCreateLockKey = 'zapcall:waxum:create-session:lock';
 
-  constructor(private readonly db: DatabaseService, private readonly waxum: WaxumClient, private readonly audit: AuditService, private readonly redis: RedisService, private readonly entitlement: EntitlementService, private readonly planLimits: PlanLimitsService, @Optional() private readonly crmEvents?: CrmEventsService) {}
+  constructor(private readonly db: DatabaseService, private readonly waxum: WaxumClient, private readonly audit: AuditService, private readonly redis: RedisService, private readonly entitlement: EntitlementService, private readonly planLimits: PlanLimitsService, private readonly deviceProfiles: DeviceProfileService, @Optional() private readonly crmEvents?: CrmEventsService) {}
 
   // Connected CRMs mirror the tenant's lines; reporting is best-effort.
   private emitCrmLine(tenantId: string, numberId: string, eventType: CrmLineEventType) {
@@ -81,13 +84,17 @@ export class NumbersService {
     const id = randomUUID();
     // Frozen before the session exists, so the first QR or code already registers it (FULL).
     const profile = body.stealth ? generateStealthProfile(id) : null;
+    if (profile && body.multiloginPhoneId) throw new BadRequestException('Escolha só uma camuflagem para a linha.');
+    // The new camouflage, copied before the session exists so the first QR or code already carries it.
+    const deviceProfile = body.multiloginPhoneId ? await this.deviceProfiles.profileFor(body.multiloginPhoneId) : null;
+    const deviceLine = { device_profile_enabled: true, device_profile: deviceProfile };
     let createdSessionId: string | undefined;
     let persisted = false;
     try {
       // A PC that only just came online still takes a new line: never the VPS, and no wait.
       const waxumNode = node ?? await this.pickPcSlot() ?? await this.pickPcSlot(false);
       if (!waxumNode) throw new BadRequestException(NO_PC_MESSAGE);
-      const session = await this.createWaxumSession(label, waxumNode, profile ? profileIdentity(profile) : undefined);
+      const session = await this.createWaxumSession(label, waxumNode, deviceProfile ? lineIdentity(deviceLine, true) : profile ? profileIdentity(profile) : undefined);
       createdSessionId = session.id;
       // A new line's cooldown defaults to the tenant's own "Proteção entre
       // chamadas" (Configurações do discador) instead of a hardcoded value,
@@ -97,10 +104,10 @@ export class NumbersService {
       const result = await this.db.transaction(async (client) => {
         // Keep the advisory lock, count and INSERT on one transaction.
         await this.planLimits.assertCanAddNumbers(tenantId, client, 1);
-        return client.query(`INSERT INTO whatsapp_numbers (id,tenant_id,label,phone,waxum_session_id,max_concurrent_calls,cooldown_seconds,max_calls_per_window,call_window_seconds,waxum_node,block_calls_after_pairing,canary_status,stealth_enabled,stealth_profile,stealth_profile_frozen_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,true,'pending',$11::jsonb IS NOT NULL,$11::jsonb,CASE WHEN $11::jsonb IS NOT NULL THEN now() END) RETURNING *`, [id, tenantId, label, digits(body.phone) || null, session.id, Number(body.maxConcurrentCalls ?? 1), Number(body.cooldownSeconds ?? defaultCooldownSeconds), Number(body.maxCallsPerWindow ?? 3), Number(body.callWindowSeconds ?? 180), waxumNode, profile ? JSON.stringify(profile) : null]);
+        return client.query(`INSERT INTO whatsapp_numbers (id,tenant_id,label,phone,waxum_session_id,max_concurrent_calls,cooldown_seconds,max_calls_per_window,call_window_seconds,waxum_node,block_calls_after_pairing,canary_status,stealth_enabled,stealth_profile,stealth_profile_frozen_at,device_profile_enabled,device_profile_active,multilogin_phone_id,device_profile,device_profile_frozen_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,true,'pending',$11::jsonb IS NOT NULL,$11::jsonb,CASE WHEN $11::jsonb IS NOT NULL THEN now() END,$12::jsonb IS NOT NULL,$12::jsonb IS NOT NULL,$13,$12::jsonb,CASE WHEN $12::jsonb IS NOT NULL THEN now() END) RETURNING *`, [id, tenantId, label, digits(body.phone) || null, session.id, Number(body.maxConcurrentCalls ?? 1), Number(body.cooldownSeconds ?? defaultCooldownSeconds), Number(body.maxCallsPerWindow ?? 3), Number(body.callWindowSeconds ?? 180), waxumNode, profile ? JSON.stringify(profile) : null, deviceProfile ? JSON.stringify(deviceProfile) : null, deviceProfile?.source.multilogin_phone_id ?? null]);
       });
       persisted = true;
-      await this.audit.record({ actorUserId, tenantId, action: 'number.created', entityType: 'whatsapp_number', entityId: result.rows[0].id, ...(profile ? { metadata: { stealthProfile: profile } } : {}) });
+      await this.audit.record({ actorUserId, tenantId, action: 'number.created', entityType: 'whatsapp_number', entityId: result.rows[0].id, ...(profile ? { metadata: { stealthProfile: profile } } : deviceProfile ? { metadata: { deviceProfile } } : {}) });
       this.emitCrmLine(tenantId, result.rows[0].id, 'number.created');
       return result.rows[0];
     } catch (error) {
@@ -134,7 +141,7 @@ export class NumbersService {
         (SELECT sum(u.rx_bytes + u.tx_bytes)::bigint FROM egress_proxy_usage u WHERE u.number_id = n.id AND u.day >= date_trunc('month', now() AT TIME ZONE 'America/Sao_Paulo')::date) AS network_month_bytes
       FROM whatsapp_numbers n WHERE n.tenant_id = $1 AND n.status <> 'removed' ORDER BY n.created_at DESC LIMIT $2 OFFSET $3
     `, [tenantId, safeLimit, safeOffset, YOUNG_LINE_DAYS, LOSS_SUMMARY_DAYS]);
-    const response = { items: items.rows.map((row) => ({ ...row, stealth_coverage: stealthCoverage(row) })), total: Number(total.rows[0]?.total ?? 0), limit: safeLimit, offset: safeOffset };
+    const response = { items: items.rows.map((row) => ({ ...row, stealth_coverage: stealthCoverage(row), device_profile_state: deviceProfileState(row) })), total: Number(total.rows[0]?.total ?? 0), limit: safeLimit, offset: safeOffset };
     await this.redis.client.set(cacheKey, JSON.stringify(response), 'PX', 1500).catch(() => undefined);
     return response;
   }
@@ -171,13 +178,13 @@ export class NumbersService {
     await this.entitlement.assertAction(tenantId, 'write', actorUserId ?? undefined);
     let number = await this.find(id, tenantId);
     try {
-      const result = await this.waxum.reconnect(number.waxum_session_id, sessionIdentity(number));
+      const result = await this.waxum.reconnect(number.waxum_session_id, lineIdentity(number, false));
       await this.audit.record({ actorUserId, tenantId, action: 'number.reconnect_requested', entityType: 'whatsapp_number', entityId: id });
       return result;
     } catch (error) {
       if ((error as Error & { statusCode?: number }).statusCode !== 404) throw error;
       number = await this.replaceMissingSession(number);
-      const result = await this.waxum.reconnect(number.waxum_session_id, sessionIdentity(number));
+      const result = await this.waxum.reconnect(number.waxum_session_id, lineIdentity(number, false));
       await this.audit.record({ actorUserId, tenantId, action: 'number.reconnect_requested', entityType: 'whatsapp_number', entityId: id });
       return result;
     }
@@ -190,13 +197,13 @@ export class NumbersService {
     let number = await this.pairOnHealthySlot(assertNotRetired(await this.find(id, tenantId)));
     let result: { code: string; timeout_seconds: number };
     try {
-      try { result = await this.waxum.pairCode(number.waxum_session_id, digits, sessionIdentity(number)); }
+      try { result = await this.waxum.pairCode(number.waxum_session_id, digits, await this.pairingIdentity(number)); }
       catch (error) {
         const statusCode = (error as Error & { statusCode?: number }).statusCode;
         if (statusCode === 409) throw new BadRequestException('Este número já está conectado ao WhatsApp');
         if (statusCode !== 404) throw error;
         number = await this.replaceMissingSession(number);
-        result = await this.waxum.pairCode(number.waxum_session_id, digits, sessionIdentity(number));
+        result = await this.waxum.pairCode(number.waxum_session_id, digits, await this.pairingIdentity(number));
       }
     } catch (error) { throw this.unreachableWaxum(error); }
     await this.markPairing(number);
@@ -260,9 +267,9 @@ export class NumbersService {
         if (!error.statusCode) this.logger.warn(`Waxum ${number.waxum_node} unreachable while releasing line ${id}: ${String(error.message).slice(0, 200)}`);
       });
       try {
-        await this.waxum.adoptSession(sessionId, number.label, node, sessionIdentity(number));
+        await this.waxum.adoptSession(sessionId, number.label, node, lineIdentity(number, false));
       } catch (error) {
-        await this.waxum.adoptSession(sessionId, number.label, number.waxum_node, sessionIdentity(number)).catch(() => undefined);
+        await this.waxum.adoptSession(sessionId, number.label, number.waxum_node, lineIdentity(number, false)).catch(() => undefined);
         await this.db.query("UPDATE whatsapp_numbers SET status = 'disconnected' WHERE id = $1", [id]);
         throw error;
       }
@@ -315,15 +322,26 @@ export class NumbersService {
     if (status.connected || status.phone) return number;
     const node = await this.pickPcSlot();
     if (!node) throw new HttpException(NO_PC_FOR_LINE_MESSAGE, HttpStatus.SERVICE_UNAVAILABLE);
-    const session = await this.createWaxumSession(number.label, node, sessionIdentity(number));
+    const session = await this.createWaxumSession(number.label, node, await this.pairingIdentity(number));
     await this.waxum.deleteSession(number.waxum_session_id).catch((error) => this.logger.warn(`Old session of line ${number.id} not deleted on ${number.waxum_node}: ${String((error as Error)?.message ?? error).slice(0, 200)}`));
     const result = await this.db.query(`UPDATE whatsapp_numbers SET waxum_node = $1, waxum_session_id = $2, status = 'disconnected' WHERE id = $3 AND tenant_id = $4 RETURNING *`, [node, session.id, number.id, number.tenant_id]);
     this.logger.log(`Line ${number.id} pairing moved from ${number.waxum_node} (PC without internet) to ${node}`);
     return result.rows[0];
   }
 
+  /**
+   * The identity a pairing request carries (QR, code, or a new session that will pair). A pairing
+   * is where the new camouflage takes effect or stops (docs/device-profile.md): the line records
+   * what this pairing carries, and its later reconnects send the same.
+   */
+  async pairingIdentity(number: DeviceProfileLine & { id: string }) {
+    const active = usesDeviceProfile(number, true);
+    if (active !== Boolean(number.device_profile_active)) await this.db.query('UPDATE whatsapp_numbers SET device_profile_active = $2 WHERE id = $1', [number.id, active]);
+    return lineIdentity({ ...number, device_profile_active: active }, true);
+  }
+
   private async replaceMissingSession(number: any) {
-    const session = await this.createWaxumSession(number.label, number.waxum_node, sessionIdentity(number));
+    const session = await this.createWaxumSession(number.label, number.waxum_node, await this.pairingIdentity(number));
     const result = await this.db.query(`UPDATE whatsapp_numbers SET waxum_session_id = $1, status = 'disconnected' WHERE id = $2 AND tenant_id = $3 RETURNING *`, [session.id, number.id, number.tenant_id]);
     return result.rows[0];
   }
@@ -509,7 +527,7 @@ export class NumbersService {
     // dropped, answers the QR request with "disconnected" and an empty list forever, so /connect starts the
     // pairing first; new sessions answer 503 instead and are handled below. The /connect that starts a
     // pairing carries the line's identity, so a camouflaged line registers with its profile.
-    if (await this.sessionIsIdle(sessionId)) await this.waxum.reconnect(sessionId, sessionIdentity(number));
+    if (await this.sessionIsIdle(sessionId)) await this.waxum.reconnect(sessionId, await this.pairingIdentity(number));
     try {
       return await this.waitForQr(sessionId);
     } catch (error) {
@@ -517,7 +535,7 @@ export class NumbersService {
       // Newly-created sessions need /connect before Waxum can expose a QR.
       // Opening the QR in the panel should perform that transition for the operator.
       if (typedError.statusCode !== 503) throw error;
-      await this.waxum.reconnect(sessionId, sessionIdentity(number));
+      await this.waxum.reconnect(sessionId, await this.pairingIdentity(number));
       return this.waitForQr(sessionId);
     }
   }

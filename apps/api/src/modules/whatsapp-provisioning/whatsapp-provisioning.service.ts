@@ -9,7 +9,6 @@ import { AuditService } from '../audit/audit.service';
 import { EntitlementService } from '../billing/entitlement.service';
 import { EgressService } from '../egress/egress.service';
 import { NumbersService } from '../numbers/numbers.service';
-import { sessionIdentity } from '../stealth/stealth-profile';
 import { ANDROID_VERSIONS, AndroidVersion } from './dto/provisioning.dto';
 import { egressSocksConfig, socksProxiesFor } from './egress-socks';
 
@@ -758,9 +757,9 @@ export class WhatsappProvisioningService implements OnModuleInit, OnModuleDestro
       return await this.numbers.pairCode(job.tenant_id, actorUserId, numberId, phone);
     } catch (error) {
       if ((error as { statusCode?: number }).statusCode !== 503) throw error;
-      const line = (await this.db.query('SELECT id, waxum_session_id, stealth_enabled, stealth_profile, stealth_profile_frozen_at FROM whatsapp_numbers WHERE id = $1 AND tenant_id = $2', [numberId, job.tenant_id])).rows[0];
+      const line = (await this.db.query('SELECT id, waxum_session_id, stealth_enabled, stealth_profile, stealth_profile_frozen_at, device_profile_enabled, device_profile_active, device_profile, device_profile_frozen_at FROM whatsapp_numbers WHERE id = $1 AND tenant_id = $2', [numberId, job.tenant_id])).rows[0];
       // The client this /connect starts is the one the code pairs: it carries the line's identity.
-      await this.waxum.reconnect(line?.waxum_session_id ?? sessionId, line ? sessionIdentity(line) : undefined);
+      await this.waxum.reconnect(line?.waxum_session_id ?? sessionId, line ? await this.numbers.pairingIdentity(line) : undefined);
       return this.numbers.pairCode(job.tenant_id, actorUserId, numberId, phone);
     }
   }

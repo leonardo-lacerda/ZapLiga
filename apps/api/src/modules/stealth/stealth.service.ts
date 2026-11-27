@@ -8,7 +8,7 @@ import { STEALTH_KILLSWITCH_MESSAGE, generateStealthProfile, parseStealthProfile
 const LOGIN_STATUSES = ['connected', 'online', 'ready', 'authenticated'];
 
 type CohortRow = {
-  cohort: 'stealth' | 'control';
+  cohort: 'device_profile' | 'stealth' | 'control';
   lines: number;
   line_days: number;
   device_removed: number;
@@ -27,16 +27,19 @@ type CohortRow = {
 };
 
 /**
- * Lines paired in the window, in two arms (docs/stealth-profile.md, "Coortes"):
+ * Lines paired in the window, in three arms (docs/stealth-profile.md and docs/device-profile.md, "Coortes"):
+ * - device_profile: paired with the new camouflage (the Android phone of docs/device-profile.md);
  * - stealth: the switch on and paired after the profile was frozen (FULL);
- * - control: never had the switch on.
+ * - control: never had either.
  * Lines that had it on and off, PARTIAL lines and proxy slots are left out: each mixes in another
  * variable. Each line counts from its last pairing (an earlier life ended in a loss).
  */
 const COHORTS_SQL = `
   WITH lines AS (
     SELECT n.id, n.last_paired_at,
-      CASE WHEN n.stealth_enabled AND n.last_paired_at >= n.stealth_profile_frozen_at THEN 'stealth'
+      CASE WHEN n.device_profile_active AND n.last_paired_at >= n.device_profile_frozen_at THEN 'device_profile'
+           WHEN n.device_profile_frozen_at IS NOT NULL THEN NULL
+           WHEN n.stealth_enabled AND n.last_paired_at >= n.stealth_profile_frozen_at THEN 'stealth'
            WHEN n.stealth_profile_frozen_at IS NULL THEN 'control' END AS cohort,
       (SELECT min(e.occurred_at) FROM number_health_events e
         WHERE e.tenant_id = n.tenant_id AND e.number_id = n.id AND e.event_type IN ('device_removed', 'account_locked')

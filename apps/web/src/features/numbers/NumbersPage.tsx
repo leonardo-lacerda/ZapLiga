@@ -7,6 +7,8 @@ import { Badge, Button, EmptyState, Icon, Pagination, Panel, SectionHeader } fro
 import { PAGE_SIZE, formatNumber, labelStatus } from '../../shared/format';
 import { formatBytes } from '../access/AdminProxyPanel';
 import { STEALTH_COVERAGE_COPY, STEALTH_HINT, STEALTH_LABEL } from './stealth.copy';
+import { DeviceProfileChoice, MultiloginPhoneSelect, useMultiloginPhones } from './DeviceProfileChoice';
+import { DEVICE_PROFILE_CREATE_HINT, DEVICE_PROFILE_OPTION_NEW } from './deviceProfile.copy';
 import { LOSS_CAUSE_ACTION, LOSS_CAUSE_LABEL, REGISTRATION_REASON_LABEL } from './lineLoss.copy';
 
 const connectedStatuses = ['connected', 'online', 'ready', 'authenticated', 'logged_in'];
@@ -69,6 +71,7 @@ export function NumbersPage({ numbers, numbersTotal, numbersOffset, onNumbersPag
           <span>{STEALTH_LABEL}<small>{STEALTH_HINT}</small></span>
           <input type="checkbox" name="stealth" checked={Boolean(numberForm.stealth)} onChange={(e) => setNumberForm({ ...numberForm, stealth: e.target.checked })} />
         </label>}
+        {canManageStealth && <CreateDeviceProfileField numberForm={numberForm} setNumberForm={setNumberForm} />}
 
         <div className="number-form-footer">
           <p className="form-hint">A linha nasce com os limites de <strong>Configurações do discador</strong> (chamadas simultâneas e proteção entre chamadas). Depois de criar, conecte pelo card da sessão: <strong>Abrir QR</strong> (escanear com o celular) ou <strong>Conectar por código</strong> (digitar um código no WhatsApp do celular).</p>
@@ -89,6 +92,7 @@ export function NumbersPage({ numbers, numbersTotal, numbersOffset, onNumbersPag
         {canManageNumbers && <CanaryStep number={number} canaryCall={canaryCall} stationReady={stationReady} />}
         <VerificationOnlyToggle number={number} canManage={canManageNumbers} />
         <StealthToggle number={number} canManage={canManageStealth} />
+        <DeviceProfileChoice number={number} canManage={canManageStealth} />
         {canManageNumbers && <div className="card-actions">{!connectedStatuses.includes(String(number.status).toLowerCase()) && <><Button variant="secondary" icon="qr" disabled={qrLoading} onClick={() => void showQr(number.id)}>Abrir QR</Button><Button variant="secondary" icon="phone" disabled={qrLoading} onClick={() => setPairNumber(number)}>Conectar por código</Button></>}<Button variant="ghost" icon="refresh" disabled={qrLoading} onClick={() => void reconnectNumber(number.id)}>Reconectar</Button><Button variant="danger" icon="close" disabled={qrLoading} onClick={() => void removeNumber(number.id, number.label)}>Remover</Button></div>}
       </div>)}
       {!numbers.length && <div className="full-span"><EmptyState title="Nenhum número cadastrado" description={canManageNumbers ? 'Adicione uma sessão para conectar seu WhatsApp.' : 'Os números serão configurados pelo administrador da plataforma.'} /></div>}
@@ -236,6 +240,24 @@ export function VerificationOnlyToggle({ number, canManage }: { number: AnyRow; 
       <span>Só para verificação de WhatsApp<small>A linha só confere se um telefone tem WhatsApp e não faz ligações.</small></span>
       <input type="checkbox" checked={enabled} disabled={saving} onChange={(event) => void change(event.target.checked)} />
     </label>
+    {error && <div className="alert" role="alert"><Icon name="alert" /><span>{error}</span></div>}
+  </>;
+}
+
+/** Nova camuflagem (#5) na criação: a linha nasce como o celular da Multilogin escolhido. */
+function CreateDeviceProfileField({ numberForm, setNumberForm }: { numberForm: AnyRow; setNumberForm: AnyRow['setNumberForm'] }) {
+  const [on, setOn] = useState(Boolean(numberForm.multiloginPhoneId));
+  const { phones, error } = useMultiloginPhones(on);
+  const toggle = (next: boolean) => {
+    setOn(next);
+    if (!next) { const { multiloginPhoneId: _dropped, ...rest } = numberForm; setNumberForm(rest); }
+  };
+  return <>
+    <label className="admin-flag-row">
+      <span>{DEVICE_PROFILE_OPTION_NEW}<small>{DEVICE_PROFILE_CREATE_HINT}</small></span>
+      <input type="checkbox" checked={on} onChange={(event) => toggle(event.target.checked)} />
+    </label>
+    {on && <MultiloginPhoneSelect value={numberForm.multiloginPhoneId ?? ''} onChange={(id) => setNumberForm({ ...numberForm, multiloginPhoneId: id || undefined })} phones={phones} />}
     {error && <div className="alert" role="alert"><Icon name="alert" /><span>{error}</span></div>}
   </>;
 }

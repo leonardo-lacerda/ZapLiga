@@ -136,6 +136,8 @@ const makeService = (options: { tailscaleConnected?: boolean; pcs?: Pc[] } = {})
       return line;
     }),
     pairCode: jest.fn().mockResolvedValue({ code: PAIR_CODE, timeout_seconds: 60 }),
+    // The real one returns no identity for a line that never chose a camouflage (docs/device-profile.md).
+    pairingIdentity: jest.fn().mockResolvedValue(undefined),
   };
   const waxum = {
     reconnect: jest.fn().mockResolvedValue({}),
