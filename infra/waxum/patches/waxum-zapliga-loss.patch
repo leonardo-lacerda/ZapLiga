@@ -38,7 +38,7 @@ diff -ruN wxbase/src/handlers/operations.rs wxwork/src/handlers/operations.rs
 +}
 diff -ruN wxbase/src/handlers/sessions.rs wxwork/src/handlers/sessions.rs
 --- a/src/handlers/sessions.rs	2026-11-27 15:58:39.000000000 +0100
-+++ b/src/handlers/sessions.rs	2026-11-27 16:01:15.556063945 +0100
++++ b/src/handlers/sessions.rs	2026-11-27 16:18:30.266203504 +0100
 @@ -1779,6 +1779,8 @@
                          "reason": format!("{:?}", logged_out.reason),
                          "cooldown_secs": cooldown_secs,
@@ -105,7 +105,7 @@ diff -ruN wxbase/src/handlers/sessions.rs wxwork/src/handlers/sessions.rs
 +            serde_json::json!({
 +                "code": ban.code.code(),
 +                "reason": format!("{:?}", ban.code),
-+                "expire_secs": ban.expire.as_secs(),
++                "expire_secs": ban.expire.num_seconds(),
 +                "message": ban.message,
 +            })
 +        }
@@ -130,7 +130,7 @@ diff -ruN wxbase/src/handlers/sessions.rs wxwork/src/handlers/sessions.rs
 +        let ban = Event::TemporaryBan(
 +            TemporaryBan::builder()
 +                .code(TempBanReason::SentToTooManyPeople)
-+                .expire(std::time::Duration::from_secs(3600))
++                .expire(chrono::Duration::seconds(3600))
 +                .build(),
 +        );
 +        assert_eq!(get_event_type(&ban), "temp_banned");
