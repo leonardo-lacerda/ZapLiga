@@ -378,6 +378,8 @@ export class NumbersService {
   private async markPairing(number: any) {
     await this.db.query(`
       UPDATE whatsapp_numbers SET last_paired_at = now(), canary_status = 'pending', loss_reason = NULL, loss_at = NULL,
+        -- A new device clears what was said about the old one; a ban or timelock is the account's, so dial_blocked_until stays.
+        loss_cause = NULL, loss_detail = NULL, registration_reason = NULL,
         flagged_until = CASE WHEN block_calls_after_pairing THEN GREATEST(flagged_until, now() + make_interval(hours => $1)) ELSE flagged_until END
       WHERE id = $2 AND tenant_id = $3
     `, [PAIRING_CALL_BLOCK_HOURS, number.id, number.tenant_id]);

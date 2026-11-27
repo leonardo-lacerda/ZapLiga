@@ -187,6 +187,8 @@ export class WaxumClient implements OnModuleDestroy {
   }
 
   getQr(sessionId: string) { return this.request<any>(`/api/v1/sessions/${encodeURIComponent(sessionId)}/qr`); }
+  /** The account's reachout timelock as the server states it (Waxum v10, waxum-zapliga-loss.patch). */
+  getReachoutTimelock(sessionId: string) { return this.request<unknown>(`/api/v1/sessions/${encodeURIComponent(sessionId)}/reachout-timelock`, {}, 1); }
   getStatus(sessionId: string) { return this.request<any>(`/api/v1/sessions/${encodeURIComponent(sessionId)}/status`, {}, 1); }
   disconnect(sessionId: string) { return this.request<any>(`/api/v1/sessions/${encodeURIComponent(sessionId)}/disconnect`, { method: 'POST' }, 1); }
   reconnect(sessionId: string, identity?: SessionIdentity) { return this.request<any>(`/api/v1/sessions/${encodeURIComponent(sessionId)}/connect`, { method: 'POST', body: JSON.stringify({ ...identity }) }).catch((error: Error & { statusCode?: number }) => { if (error.statusCode === 409) return { already_connecting: true }; throw error; }); }

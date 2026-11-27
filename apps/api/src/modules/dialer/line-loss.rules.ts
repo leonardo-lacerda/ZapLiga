@@ -139,3 +139,68 @@ export function lineLossEventId(sessionId: string, type: string, payload: unknow
   const stamp = numberOf(objectOf(payload).timestamp) ?? Math.floor(receivedAt.getTime() / 1000);
   return `${sessionId}:${type}:${stamp}:${code ?? ''}`;
 }
+
+/** A short pause for a call that died without audio and without the server saying why (was 6 h). */
+export const MEDIA_FAILURE_PAUSE_MINUTES = 30;
+/** A temporary ban without a stated duration: wait a day rather than guess shorter. */
+export const TEMP_BAN_FALLBACK_HOURS = 24;
+/** A reachout timelock whose end the server did not state: the quarantine the dialer always used. */
+export const REACHOUT_FALLBACK_HOURS = 6;
+
+/**
+ * Until when a cause stops a line from dialing, or null when it does not. `statedEnd` is what the
+ * server said (a ban's `expire`, a timelock's `time_enforcement_ends`); without it, a fallback.
+ */
+export function dialBlockUntil(cause: LineLossCause, statedEnd: Date | null, now: Date = new Date()): Date | null {
+  const stated = statedEnd && statedEnd.getTime() > now.getTime() ? statedEnd : null;
+  switch (cause) {
+    case 'temp_banned':
+      return stated ?? new Date(now.getTime() + TEMP_BAN_FALLBACK_HOURS * 3_600_000);
+    case 'reachout_timelock':
+      return stated ?? new Date(now.getTime() + REACHOUT_FALLBACK_HOURS * 3_600_000);
+    case 'media_failure':
+      return new Date(now.getTime() + MEDIA_FAILURE_PAUSE_MINUTES * 60_000);
+    default:
+      return null;
+  }
+}
+
+/**
+ * The end of an active reachout timelock in Waxum's answer (`GET /sessions/{id}/reachout-timelock`:
+ * `is_active`, `time_enforcement_ends`), or null when none is active or the end is unreadable.
+ * The end comes as epoch seconds, epoch milliseconds or an ISO date.
+ */
+export function reachoutTimelockEnd(state: unknown, now: Date = new Date()): Date | null {
+  const body = objectOf(state);
+  if (body.is_active !== true) return null;
+  const raw = body.time_enforcement_ends;
+  const numeric = numberOf(raw);
+  const end = numeric !== null ? new Date(numeric < 1e12 ? numeric * 1000 : numeric) : typeof raw === 'string' ? new Date(raw) : null;
+  return end && Number.isFinite(end.getTime()) && end.getTime() > now.getTime() ? end : null;
+}
+
+/** SQL over a `whatsapp_numbers` alias: no cause is holding the line back from dialing now. */
+export function lineDialAllowedSql(alias: string) {
+  return `(${alias}.dial_blocked_until IS NULL OR ${alias}.dial_blocked_until <= now())`;
+}
+
+/** Whether the per-cause policy is on for a tenant: LINE_LOSS_POLICY=v2, optionally only for LINE_LOSS_POLICY_TENANTS. */
+export function lineLossPolicyEnabled(tenantId: string, env: NodeJS.ProcessEnv = process.env): boolean {
+  if (env.LINE_LOSS_POLICY !== 'v2') return false;
+  const tenants = (env.LINE_LOSS_POLICY_TENANTS ?? '').split(',').map((id) => id.trim()).filter(Boolean);
+  return tenants.length === 0 || tenants.includes(tenantId);
+}
+
+/** What the operator should do, per cause, in the line's card. */
+export const LINE_LOSS_ACTIONS: Record<LineLossCause, string> = {
+  device_removed: 'Removida pelo WhatsApp: descansar e conectar por QR novo',
+  account_locked: 'Conta bloqueada: resolver no celular antes de qualquer QR',
+  temp_banned: 'Banimento temporário: esperar o prazo, sem reconectar',
+  reachout_timelock: 'Limite de alcance do WhatsApp: esperar o prazo para discar',
+  logged_out_other: 'Desconectada pelo WhatsApp: conectar por QR novo',
+  client_rejected: 'Recusa técnica do WhatsApp: avisar o suporte',
+  transient: 'Oscilação: reconecta sozinha',
+  media_failure: 'Ligação sem áudio: pausa curta',
+  unknown: 'Causa não reconhecida: ver detalhe',
+  registration: 'Recusa no registro do celular',
+};
