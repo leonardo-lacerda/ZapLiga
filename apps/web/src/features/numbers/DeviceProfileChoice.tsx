@@ -61,15 +61,17 @@ export function DeviceProfileChoice({ number, canManage }: { number: AnyRow; can
   const android = line.device_profile?.android;
 
   return <>
-    <label className={`admin-flag-row${dirty ? ' is-dirty' : ''}`}>
+    <div className={`admin-flag-row${dirty ? ' is-dirty' : ''}`}>
       <span>{DEVICE_PROFILE_LABEL}<small>{DEVICE_PROFILE_HINT}</small></span>
+    </div>
+    <div className="form-row">
       <select aria-label={DEVICE_PROFILE_LABEL} value={mode} disabled={saving} onChange={(event) => setMode(event.target.value as 'today' | 'new')}>
         <option value="today">{DEVICE_PROFILE_OPTION_TODAY}</option>
         <option value="new">{DEVICE_PROFILE_OPTION_NEW}</option>
       </select>
-    </label>
-    {enabled && !phoneLocked && <MultiloginPhoneSelect value={phoneId} onChange={setPhoneId} phones={phones} disabled={saving} />}
-    {dirty && <Button variant="secondary" type="button" disabled={saving || (enabled && !phoneId)} onClick={() => void save()}>{saving ? 'Salvando...' : 'Salvar camuflagem'}</Button>}
+      {enabled && !phoneLocked && <MultiloginPhoneSelect value={phoneId} onChange={setPhoneId} phones={phones} disabled={saving} />}
+      {dirty && <Button variant="secondary" type="button" disabled={saving || (enabled && !phoneId)} onClick={() => void save()}>{saving ? 'Salvando...' : 'Salvar camuflagem'}</Button>}
+    </div>
     {state && <div className="resource-meta"><span>Nova camuflagem</span><Badge tone={state.tone}>{state.label}</Badge></div>}
     {state && android && <div className="resource-meta"><span>Celular</span><strong>{android.manufacturer} {android.device} · Android {android.os_version} · {android.mcc}/{android.mnc}</strong></div>}
     {(error || phonesError) && <div className="alert" role="alert"><Icon name="alert" /><span>{error || phonesError}</span></div>}

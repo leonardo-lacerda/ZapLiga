@@ -257,7 +257,7 @@ function CreateDeviceProfileField({ numberForm, setNumberForm }: { numberForm: A
       <span>{DEVICE_PROFILE_OPTION_NEW}<small>{DEVICE_PROFILE_CREATE_HINT}</small></span>
       <input type="checkbox" checked={on} onChange={(event) => toggle(event.target.checked)} />
     </label>
-    {on && <MultiloginPhoneSelect value={numberForm.multiloginPhoneId ?? ''} onChange={(id) => setNumberForm({ ...numberForm, multiloginPhoneId: id || undefined })} phones={phones} />}
+    {on && <div className="form-row"><MultiloginPhoneSelect value={numberForm.multiloginPhoneId ?? ''} onChange={(id) => setNumberForm({ ...numberForm, multiloginPhoneId: id || undefined })} phones={phones} /></div>}
     {error && <div className="alert" role="alert"><Icon name="alert" /><span>{error}</span></div>}
   </>;
 }
