@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import type React from 'react';
 import { QRCodeSVG } from 'qrcode.react';
 import { json } from '../../services/api';
@@ -7,6 +7,7 @@ import { Badge, Button, EmptyState, Icon, Pagination, Panel, SectionHeader } fro
 import { PAGE_SIZE, formatNumber, labelStatus } from '../../shared/format';
 import { formatBytes } from '../access/AdminProxyPanel';
 import { STEALTH_COVERAGE_COPY, STEALTH_HINT, STEALTH_LABEL } from './stealth.copy';
+import { LOSS_CAUSE_ACTION, LOSS_CAUSE_LABEL, REGISTRATION_REASON_LABEL } from './lineLoss.copy';
 
 const connectedStatuses = ['connected', 'online', 'ready', 'authenticated', 'logged_in'];
 
@@ -26,6 +27,7 @@ export function NumbersPage({ numbers, numbersTotal, numbersOffset, onNumbersPag
         <Badge tone="info">{formatNumber(numbersTotal)} sessões</Badge>
       </div>
     </div>
+    <LossSummary />
     {canManageNumbers && <Panel>
       <SectionHeader title="Adicionar número" description="Crie uma sessão e conecte o WhatsApp pelo QR Code ou por código (com o número de telefone)." />
       <form className="number-create-form" onSubmit={createNumber}>
@@ -81,7 +83,9 @@ export function NumbersPage({ numbers, numbersTotal, numbersOffset, onNumbersPag
         <div className="resource-meta"><span>Limite de chamadas</span><strong>{number.max_concurrent_calls}</strong></div>
         <div className="resource-meta"><span>Cadência protegida</span><strong>{number.max_calls_per_window ?? 3} / {number.call_window_seconds ?? 180}s</strong></div>
         <CallBlock flaggedUntil={number.flagged_until} />
+        <DialPause number={number} />
         <LineHealth number={number} />
+        {canManageNumbers && <RegistrationReasonForm number={number} />}
         {canManageNumbers && <CanaryStep number={number} canaryCall={canaryCall} stationReady={stationReady} />}
         <VerificationOnlyToggle number={number} canManage={canManageNumbers} />
         <StealthToggle number={number} canManage={canManageStealth} />
@@ -104,17 +108,62 @@ function CallBlock({ flaggedUntil }: { flaggedUntil?: string | null }) {
 
 const RETIRED_AFTER_LOSSES = 2;
 const YOUNG_LINE_DAILY_CALLS = 60;
-const lossCopy: Record<string, string> = {
-  device_removed: 'Removida pelo WhatsApp: precisa de QR novo e descanso',
-  account_locked: 'Conta travada: resolva no celular antes do QR',
-};
+const LOSS_SUMMARY_DAYS = 30;
+const formatWhen = (value: string) => new Date(value).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+
+// Quedas dos últimos 30 dias por causa, para a operação decidir com dados.
+function LossSummary() {
+  const [causes, setCauses] = useState<AnyRow[]>([]);
+  useEffect(() => {
+    let active = true;
+    json('/api/numbers/loss-causes').then((summary) => { if (active) setCauses(summary?.causes ?? []); }).catch(() => undefined);
+    return () => { active = false; };
+  }, []);
+  if (!causes.length) return null;
+  return <Panel>
+    <SectionHeader title={`Quedas em ${LOSS_SUMMARY_DAYS} dias`} description="Cada sinal que o WhatsApp mandou sobre a saúde das linhas, por causa." />
+    <div className="card-actions">{causes.map((item) => <Badge key={item.cause} tone={['transient', 'unknown'].includes(item.cause) ? 'neutral' : 'warning'}>{LOSS_CAUSE_LABEL[item.cause] ?? item.cause}: {item.total} ({item.lines} {Number(item.lines) === 1 ? 'linha' : 'linhas'})</Badge>)}</div>
+  </Panel>;
+}
+
+// Pausa que o WhatsApp impôs (banimento temporário, limite de alcance) ou ligação sem áudio: a linha não disca até o prazo.
+function DialPause({ number }: { number: AnyRow }) {
+  if (!number.dial_blocked_until || new Date(number.dial_blocked_until).getTime() <= Date.now()) return null;
+  return <div className="resource-meta"><span>Ligações</span><Badge tone="warning">Pausadas até {formatWhen(number.dial_blocked_until)} · {LOSS_CAUSE_LABEL[number.dial_block_cause] ?? 'sinal do WhatsApp'}</Badge></div>;
+}
+
+// O que o celular mostrou quando o WhatsApp recusou o registro: só a operação vê isso, então registra aqui.
+function RegistrationReasonForm({ number }: { number: AnyRow }) {
+  const [reason, setReason] = useState<string>(number.registration_reason ?? '');
+  const [saved, setSaved] = useState<string>(number.registration_reason ?? '');
+  const [error, setError] = useState('');
+  if (connectedStatuses.includes(String(number.status).toLowerCase()) && !number.loss_reason) return null;
+  const save = async () => {
+    setError('');
+    try { await json(`/api/numbers/${number.id}/registration-reason`, { method: 'POST', body: JSON.stringify({ reason }) }); setSaved(reason); }
+    catch (failure) { setError(failure instanceof Error ? failure.message : String(failure)); }
+  };
+  return <div className="admin-flag-row">
+    <span>O que o celular mostrou?<small>Se o WhatsApp recusou o número no celular, registre o motivo para a operação saber o que fazer.</small></span>
+    <div className="card-actions">
+      <select aria-label={`Motivo da recusa de ${number.label}`} value={reason} onChange={(event) => setReason(event.target.value)}>
+        <option value="">Selecione</option>
+        {Object.entries(REGISTRATION_REASON_LABEL).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+      </select>
+      <Button variant="secondary" icon="check" disabled={!reason || reason === saved} onClick={() => void save()}>Registrar</Button>
+    </div>
+    {error && <div className="alert" role="alert"><Icon name="alert" /><span>{error}</span></div>}
+  </div>;
+}
 
 // Por que a linha caiu, quantas ligações ela fez hoje (limite da linha jovem) e quantas vezes reconectou.
 function LineHealth({ number }: { number: AnyRow }) {
   const retired = Number(number.removal_count ?? 0) >= RETIRED_AFTER_LOSSES;
   return <>
     {retired && <div className="resource-meta"><span>Linha</span><Badge tone="error">Aposentada: o WhatsApp tirou este número {number.removal_count} vezes</Badge></div>}
-    {!retired && number.loss_reason && <div className="resource-meta"><span>Queda</span><Badge tone="error">{lossCopy[number.loss_reason] ?? number.loss_reason}</Badge></div>}
+    {!retired && (number.loss_cause || number.loss_reason) && <div className="resource-meta"><span>Queda</span><Badge tone="error">{LOSS_CAUSE_ACTION[number.loss_cause ?? number.loss_reason] ?? number.loss_cause ?? number.loss_reason}</Badge></div>}
+    {number.loss_detail?.violationReason && <div className="resource-meta"><span>Motivo informado</span><strong>{number.loss_detail.violationReason}</strong></div>}
+    {number.losses_recent && Object.keys(number.losses_recent).length > 0 && <div className="resource-meta"><span>Quedas em {LOSS_SUMMARY_DAYS} dias</span><strong>{Object.entries(number.losses_recent).map(([cause, total]) => `${LOSS_CAUSE_LABEL[cause] ?? cause} ${total}`).join(' · ')}</strong></div>}
     {number.young && <div className="resource-meta"><span>Ligações hoje</span><strong>{number.calls_today ?? 0}/{YOUNG_LINE_DAILY_CALLS}</strong></div>}
     {Number(number.reconnects_24h ?? 0) > 0 && <div className="resource-meta"><span>Reconexões em 24 h</span><strong>{number.reconnects_24h}</strong></div>}
     {number.network_month_bytes != null && <div className="resource-meta"><span>Rede da proxy</span><strong>hoje {formatBytes(number.network_today_bytes)} · mês {formatBytes(number.network_month_bytes)}</strong></div>}

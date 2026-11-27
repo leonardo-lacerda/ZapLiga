@@ -2,6 +2,7 @@ import { Body, Controller, Delete, ForbiddenException, Get, Param, Patch, Post, 
 import { AuthGuard, CurrentTenant, CurrentUser, Roles, RolesGuard, TenantMembershipGuard } from '../auth/auth.guards';
 import { CreateNumberDto } from './dto/create-number.dto';
 import { PairNumberDto } from './dto/pair-number.dto';
+import { RegistrationReasonDto } from './dto/registration-reason.dto';
 import { UpdateNumberDto } from './dto/update-number.dto';
 import { NumbersService } from './numbers.service';
 import { STEALTH_ADMIN_ONLY_MESSAGE } from '../stealth/stealth-profile';
@@ -21,6 +22,14 @@ export class NumbersController {
   @Roles('leader', 'super_admin')
   @Get(['/api/numbers', '/api/tenants/:tenantId/numbers'])
   list(@Query('limit') limit = '100', @Query('offset') offset = '0', @CurrentTenant() tenantId: string) { return this.numbers.list(tenantId, Number(limit), Number(offset)); }
+
+  @Roles('leader', 'super_admin')
+  @Get(['/api/numbers/loss-causes', '/api/tenants/:tenantId/numbers/loss-causes'])
+  lossCauses(@CurrentTenant() tenantId: string) { return this.numbers.lossSummary(tenantId); }
+
+  @Roles('leader', 'super_admin')
+  @Post(['/api/numbers/:id/registration-reason', '/api/tenants/:tenantId/numbers/:id/registration-reason'])
+  registrationReason(@Param('id') id: string, @Body() body: RegistrationReasonDto, @CurrentTenant() tenantId: string, @CurrentUser() user: any) { return this.numbers.setRegistrationReason(tenantId, user.id, id, body.reason); }
 
   @Roles('leader', 'super_admin')
   @Delete(['/api/numbers/:id', '/api/tenants/:tenantId/numbers/:id'])

@@ -10,6 +10,10 @@ import { PlanLimitsService } from '../billing/plan-limits.service';
 import { CrmEventsService, CrmLineEventType } from '../crm-events/crm-events.service';
 import { STEADY_ONLINE_SECONDS, slotOnlineSql } from '../egress/pc-network';
 import { LINE_RETIRED_AFTER_LOSSES, YOUNG_LINE_DAYS } from '../dialer/dialer.rules';
+import { LINE_LOSS_CAUSES, RegistrationReason } from '../dialer/line-loss.rules';
+
+/** The window the panel counts losses over, per line and for the tenant. */
+export const LOSS_SUMMARY_DAYS = 30;
 import type { SessionIdentity } from '../../infrastructure/waxum/session-identity';
 import { STEALTH_KILLSWITCH_MESSAGE, generateStealthProfile, profileIdentity, sessionIdentity, stealthCoverage, stealthKillswitchOn } from '../stealth/stealth-profile';
 
@@ -118,11 +122,14 @@ export class NumbersService {
         (SELECT count(*)::int FROM number_status_history h WHERE h.tenant_id = n.tenant_id AND h.number_id = n.id
           AND h.changed_at > now() - interval '24 hours' AND lower(h.to_status) IN ('connected', 'online', 'ready', 'authenticated')) AS reconnects_24h,
         (n.last_paired_at IS NOT NULL AND n.last_paired_at > now() - make_interval(days => $4)) AS young,
+        -- Losses by cause in the last LOSS_SUMMARY_DAYS days (line_loss_events, migration 082).
+        (SELECT jsonb_object_agg(x.cause, x.total) FROM (SELECT e.cause, count(*)::int AS total FROM line_loss_events e
+          WHERE e.tenant_id = n.tenant_id AND e.number_id = n.id AND e.occurred_at > now() - make_interval(days => $5) GROUP BY e.cause) x) AS losses_recent,
         -- Bytes through the line's own proxy (proxy slots only, migration 079): today and this month.
         (SELECT sum(u.rx_bytes + u.tx_bytes)::bigint FROM egress_proxy_usage u WHERE u.number_id = n.id AND u.day = (now() AT TIME ZONE 'America/Sao_Paulo')::date) AS network_today_bytes,
         (SELECT sum(u.rx_bytes + u.tx_bytes)::bigint FROM egress_proxy_usage u WHERE u.number_id = n.id AND u.day >= date_trunc('month', now() AT TIME ZONE 'America/Sao_Paulo')::date) AS network_month_bytes
       FROM whatsapp_numbers n WHERE n.tenant_id = $1 AND n.status <> 'removed' ORDER BY n.created_at DESC LIMIT $2 OFFSET $3
-    `, [tenantId, safeLimit, safeOffset, YOUNG_LINE_DAYS]);
+    `, [tenantId, safeLimit, safeOffset, YOUNG_LINE_DAYS, LOSS_SUMMARY_DAYS]);
     const response = { items: items.rows.map((row) => ({ ...row, stealth_coverage: stealthCoverage(row) })), total: Number(total.rows[0]?.total ?? 0), limit: safeLimit, offset: safeOffset };
     await this.redis.client.set(cacheKey, JSON.stringify(response), 'PX', 1500).catch(() => undefined);
     return response;
@@ -390,6 +397,34 @@ export class NumbersService {
    * by hand): the canary counts as passed and the pairing block or canary rest is lifted. Recorded
    * as a human `canary_passed` health event and audited.
    */
+  /** Losses by cause over the last LOSS_SUMMARY_DAYS days, for the top of the Números page. */
+  async lossSummary(tenantId: string) {
+    const rows = (await this.db.query<{ cause: string; total: number; lines: number }>(`
+      SELECT cause, count(*)::int AS total, count(DISTINCT number_id)::int AS lines FROM line_loss_events
+      WHERE tenant_id = $1 AND occurred_at > now() - make_interval(days => $2) GROUP BY cause
+    `, [tenantId, LOSS_SUMMARY_DAYS])).rows;
+    const order = new Map<string, number>(LINE_LOSS_CAUSES.map((cause, index) => [cause, index]));
+    return { days: LOSS_SUMMARY_DAYS, causes: rows.sort((a, b) => (order.get(a.cause) ?? 99) - (order.get(b.cause) ?? 99)) };
+  }
+
+  /**
+   * What the phone showed when WhatsApp refused its registration. That flow never reaches a
+   * companion device, so it only enters the system when an operator records it from the phone.
+   */
+  async setRegistrationReason(tenantId: string, actorUserId: string, id: string, reason: RegistrationReason) {
+    await this.entitlement.assertAction(tenantId, 'write', actorUserId);
+    const result = await this.db.query(`UPDATE whatsapp_numbers SET registration_reason = $3 WHERE id = $1 AND tenant_id = $2 AND status <> 'removed' RETURNING *`, [id, tenantId, reason]);
+    if (!result.rows[0]) throw new NotFoundException('Número não encontrado');
+    await this.db.query(`
+      INSERT INTO line_loss_events (id, tenant_id, number_id, waxum_session_id, cause, source_event, code, detail)
+      VALUES ($1, $2, $3, $4, 'registration', 'manual', $5, $6::jsonb)
+    `, [`manual:${randomUUID()}`, tenantId, id, result.rows[0].waxum_session_id ?? null, reason, JSON.stringify({ actorUserId })]);
+    await this.db.query(`INSERT INTO number_health_events (tenant_id, number_id, event_type, actor_type, metadata, occurred_at) VALUES ($1, $2, 'registration_reason', 'human', $3::jsonb, now())`, [tenantId, id, JSON.stringify({ reason })]);
+    await this.audit.record({ actorUserId, tenantId, action: 'number.registration_reason', entityType: 'whatsapp_number', entityId: id, metadata: { reason } });
+    this.emitCrmLine(tenantId, id, 'number.updated');
+    return result.rows[0];
+  }
+
   async passCanary(tenantId: string, actorUserId: string, id: string, reason: string | null) {
     await this.entitlement.assertAction(tenantId, 'write', actorUserId);
     const result = await this.db.query(`UPDATE whatsapp_numbers SET canary_status = 'passed', flagged_until = NULL WHERE id = $1 AND tenant_id = $2 AND status <> 'removed' RETURNING *`, [id, tenantId]);
