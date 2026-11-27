@@ -721,6 +721,12 @@ export class WhatsappProvisioningService implements OnModuleInit, OnModuleDestro
         if (taken) throw new ConflictException(`este celular GeeLark já tem outra linha com camuflagem (${taken.label})`);
         const line = await this.numbers.create(current.tenant_id, actorUserId, { label: current.phone_name?.trim() || phone, phone, ...(stealth ? { stealth } : {}) }, pc.slot);
         sessionId = line.waxum_session_id;
+        // The line keeps the cloud phone's identity in the handshake (docs/device-profile.md):
+        // frozen once here, reused on every reconnection. A failure here must not undo a
+        // pairing that already worked, so it is logged and the line falls back to the defaults.
+        await this.freezeProfileForLine(current, line.id).catch((error) => {
+          this.logger.warn(`Could not freeze the device profile of line ${line.id}: ${errorMessage(error)}`);
+        });
         const updated = (await this.db.query('UPDATE provisioning_jobs SET number_id = $3, updated_at = now() WHERE id = $1 AND tenant_id = $2 RETURNING *', [current.id, current.tenant_id, line.id])).rows[0] as ProvisioningJobRow | undefined;
         current = updated ?? { ...current, number_id: line.id };
       }
@@ -744,6 +750,25 @@ export class WhatsappProvisioningService implements OnModuleInit, OnModuleDestro
     } catch (error) {
       return this.failLink(current, actorUserId, `O código de pareamento não chegou ao telefone: ${errorMessage(error)}`);
     }
+  }
+
+  /**
+   * Freezes the device profile of a line on the cloud phone it was registered on
+   * (docs/device-profile.md). The Android version comes from the job's app version when the
+   * worker reported one, otherwise from the phone's own record; the phone id is generated here
+   * so a retry reuses the same value.
+   */
+  private async freezeProfileForLine(job: ProvisioningJobRow, numberId: string) {
+    // The Android version the phone was created with is not stored on the job (app_version is
+    // the WhatsApp build, a different thing). GeeLark reports it on the phone record, so it is
+    // read from there; the worker's list is already cached by the phone listing.
+    const phone = (await this.worker.listPhones()).find((item) => item.id === job.geelark_phone_id);
+    const androidVersion = phone?.android ?? 'Android 14';
+    await this.numbers.freezeDeviceProfile(job.tenant_id, numberId, {
+      geelarkPhoneId: job.geelark_phone_id,
+      androidVersion,
+      phoneId: randomUUID(),
+    });
   }
 
   /**

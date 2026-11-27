@@ -167,7 +167,21 @@ function LineHealth({ number }: { number: AnyRow }) {
     {number.young && <div className="resource-meta"><span>Ligações hoje</span><strong>{number.calls_today ?? 0}/{YOUNG_LINE_DAILY_CALLS}</strong></div>}
     {Number(number.reconnects_24h ?? 0) > 0 && <div className="resource-meta"><span>Reconexões em 24 h</span><strong>{number.reconnects_24h}</strong></div>}
     {number.network_month_bytes != null && <div className="resource-meta"><span>Rede da proxy</span><strong>hoje {formatBytes(number.network_today_bytes)} · mês {formatBytes(number.network_month_bytes)}</strong></div>}
+    <DeviceProfileBadge number={number} />
   </>;
+}
+
+/**
+ * O perfil de dispositivo que a linha apresenta ao WhatsApp (docs/device-profile.md). Congelado
+ * no vínculo com o telefone em nuvem; sem perfil, a linha usa os valores padrão do Waxum, e
+ * trocar o perfil exige re-parear.
+ */
+function DeviceProfileBadge({ number }: { number: AnyRow }) {
+  const profile = number.device_profile as { surface?: string; user_agent?: { mcc?: string; mnc?: string; os_version?: string } } | null;
+  if (!profile) return <div className="resource-meta"><span>Perfil do aparelho</span><Badge tone="neutral">Padrão do servidor</Badge></div>;
+  const ua = profile.user_agent ?? {};
+  const network = ua.mcc && ua.mnc ? `${ua.mcc}/${ua.mnc}` : '—';
+  return <div className="resource-meta"><span>Perfil do aparelho</span><strong>{profile.surface === 'WEB' ? 'Web' : `Android ${ua.os_version ?? ''}`} · {network}</strong></div>;
 }
 
 /**

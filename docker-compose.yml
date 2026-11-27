@@ -105,6 +105,11 @@ x-edge-waxum-environment: &edge-waxum-environment
   EGRESS_ROUTE_FILE: /egress/route
   # This Waxum's own list of sessions; the sessions themselves are shared.
   SQLITE_PATH: /app/registry/waxum.db
+  # Frozen per-line device profile (docs/device-profile.md). Off by default: with it off the
+  # handshake is exactly what WA_CLIENT_*/WA_DEVICE_* produce.
+  ZAPLIGA_DEVICE_PROFILE: ${ZAPLIGA_DEVICE_PROFILE:-false}
+  ZAPLIGA_API_URL: ${ZAPLIGA_API_URL:-http://api-a:3000}
+  ZAPLIGA_API_KEY: ${WAXUM_API_KEY:-zapcall-local-waxum-token}
 
 # Registration proxy (docs/provisioning-contract.md, section 4): the GeeLark cloud
 # phone talks SOCKS5 to socks-gateway, which hands the connection to the slot's

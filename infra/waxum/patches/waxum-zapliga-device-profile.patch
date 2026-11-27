@@ -1,0 +1,205 @@
+diff -ruN '--exclude=target' '--exclude=.git' '--exclude=whatsapp-rust' a/src/device_profile.rs b/src/device_profile.rs
+--- a/src/device_profile.rs	2026-11-27 00:00:00.000000000 +0000
++++ b/src/device_profile.rs	2026-11-27 00:00:00.000000000 +0000
+@@ -0,0 +1,180 @@
++//! ZapLiga: the device profile a line presents in the WhatsApp handshake
++//! (docs/device-profile.md).
++//!
++//! The API freezes one profile per line, on the cloud phone the number was registered on, and
++//! hands it to the Waxum before the handshake. A line without a profile keeps the environment
++//! defaults, which is the behaviour before this existed.
++//!
++//! Precedence, highest first: the profile the API returns, then the environment
++//! (`WA_CLIENT_*`/`WA_DEVICE_*`), then the library default.
++
++use serde::Deserialize;
++
++/// What the client declares it is. Android is what the account was registered on.
++#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
++#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
++pub enum DeviceSurface {
++    AndroidPhone,
++    AndroidTablet,
++    Web,
++}
++
++#[derive(Debug, Clone, Deserialize)]
++pub struct DeviceUserAgent {
++    pub platform: String,
++    pub mcc: String,
++    pub mnc: String,
++    pub os_version: String,
++    pub manufacturer: Option<String>,
++    pub device: Option<String>,
++    pub os_build_number: Option<String>,
++    pub phone_id: String,
++    pub release_channel: String,
++    pub locale_language: String,
++    pub locale_country: String,
++    pub device_board: Option<String>,
++    pub device_exp_id: Option<String>,
++    pub device_type: String,
++    pub device_model_type: Option<String>,
++    pub distribution_channel: Option<String>,
++}
++
++#[derive(Debug, Clone, Deserialize)]
++pub struct DevicePropsOverride {
++    pub os: String,
++    pub platform_type: String,
++    pub version: Option<String>,
++}
++
++#[derive(Debug, Clone, Deserialize)]
++pub struct WebInfo {
++    pub browser: String,
++    pub browser_version: String,
++}
++
++#[derive(Debug, Clone, Deserialize)]
++pub struct DeviceProfile {
++    pub version: u32,
++    pub surface: DeviceSurface,
++    pub user_agent: DeviceUserAgent,
++    pub device_props: Option<DevicePropsOverride>,
++    pub web_info: Option<WebInfo>,
++}
++
++/// The API answers `{ "profile": ... }`; `null` means the line has none.
++#[derive(Debug, Deserialize)]
++struct DeviceProfileResponse {
++    profile: Option<DeviceProfile>,
++}
++
++/// Builds the handshake profile from the frozen one, falling back to the environment when the
++/// line has none. `None` keeps the library default.
++pub fn profile_from_frozen(
++    frozen: &DeviceProfile,
++) -> wacore::client_profile::ClientProfile {
++    let mut profile = match frozen.surface {
++        DeviceSurface::Web => wacore::client_profile::ClientProfile::web(),
++        // An Android companion is not a browser: the web-only fields stay empty and the
++        // platform is the phone, which is what the account was registered on.
++        DeviceSurface::AndroidPhone | DeviceSurface::AndroidTablet => {
++            wacore::client_profile::ClientProfile::android()
++        }
++    };
++    let ua = &frozen.user_agent;
++    profile.os_version = ua.os_version.clone();
++    profile.locale_language = ua.locale_language.clone();
++    profile.locale_country = ua.locale_country.clone();
++    profile.mcc = ua.mcc.clone();
++    profile.mnc = ua.mnc.clone();
++    profile.device = ua.device.clone().unwrap_or_default();
++    profile.manufacturer = ua.manufacturer.clone().unwrap_or_default();
++    profile.phone_id = Some(ua.phone_id.clone());
++    profile
++}
++
++/// Fetches the frozen profile of a session from the API. Any failure is logged and treated as
++/// "no profile", so a Waxum that cannot reach the API still connects with the environment
++/// defaults instead of refusing to start a line.
++pub async fn fetch_profile(
++    api_url: &str,
++    api_key: &str,
++    session_id: &str,
++) -> Option<DeviceProfile> {
++    let url = format!(
++        "{}/api/internal/waxum/sessions/{}/device-profile",
++        api_url.trim_end_matches('/'),
++        session_id
++    );
++    let response = reqwest::Client::new()
++        .get(&url)
++        .bearer_auth(api_key)
++        .timeout(std::time::Duration::from_secs(5))
++        .send()
++        .await;
++    let response = match response {
++        Ok(value) => value,
++        Err(error) => {
++            tracing::warn!(session_id = %session_id, error = %error, "device profile: API unreachable, keeping the environment defaults");
++            return None;
++        }
++    };
++    if !response.status().is_success() {
++        tracing::warn!(session_id = %session_id, status = %response.status(), "device profile: API refused the lookup, keeping the environment defaults");
++        return None;
++    }
++    match response.json::<DeviceProfileResponse>().await {
++        Ok(body) => body.profile,
++        Err(error) => {
++            tracing::warn!(session_id = %session_id, error = %error, "device profile: unreadable answer, keeping the environment defaults");
++            None
++        }
++    }
++}
++
++/// The profile to apply to a session: the frozen one when the feature is on and the API has
++/// one, otherwise whatever the environment produces (today's behaviour).
++pub async fn resolve_profile(session_id: &str) -> Option<wacore::client_profile::ClientProfile> {
++    if !crate::device_props::frozen_profile_enabled() {
++        return crate::device_props::client_profile_from_env();
++    }
++    let api_url = std::env::var("ZAPLIGA_API_URL").ok().filter(|value| !value.trim().is_empty());
++    let api_key = std::env::var("ZAPLIGA_API_KEY").ok().filter(|value| !value.trim().is_empty());
++    if let (Some(api_url), Some(api_key)) = (api_url, api_key) {
++        if let Some(frozen) = fetch_profile(&api_url, &api_key, session_id).await {
++            tracing::info!(session_id = %session_id, "device profile: using the frozen profile of the line");
++            return Some(profile_from_frozen(&frozen));
++        }
++    }
++    crate::device_props::client_profile_from_env()
++}
+diff -ruN '--exclude=target' '--exclude=.git' '--exclude=whatsapp-rust' a/src/device_props.rs b/src/device_props.rs
+--- a/src/device_props.rs	2026-11-27 00:00:00.000000000 +0000
++++ b/src/device_props.rs	2026-11-27 00:00:00.000000000 +0000
+@@ -32,6 +32,13 @@
+     pub version: Option<wa::device_props::AppVersion>,
+ }
+ 
++/// ZapLiga: whether the frozen per-line profile (docs/device-profile.md) is used. Off by
++/// default: with it off the handshake is exactly what the environment produces, which is the
++/// behaviour before the profile existed.
++pub fn frozen_profile_enabled() -> bool {
++    matches!(
++        std::env::var("ZAPLIGA_DEVICE_PROFILE").ok().as_deref(),
++        Some("1") | Some("true") | Some("TRUE") | Some("yes")
++    )
++}
++
+ /// ZapLiga: the noise-handshake profile from `WA_CLIENT_OS_VERSION` and `WA_CLIENT_LOCALE`
+ /// (e.g. `pt_BR`), so the login matches the registered device and the operation's country.
+ /// `None` when neither is set, which keeps the library's web profile.
+diff -ruN '--exclude=target' '--exclude=.git' '--exclude=whatsapp-rust' a/src/handlers/sessions.rs b/src/handlers/sessions.rs
+--- a/src/handlers/sessions.rs	2026-11-27 00:00:00.000000000 +0000
++++ b/src/handlers/sessions.rs	2026-11-27 00:00:00.000000000 +0000
+@@ -1519,7 +1519,7 @@
+         .update_session_status(session_id, SessionStatus::WaitingForQr, false)
+         .await;
+ 
+-    if let Some(profile) = crate::device_props::client_profile_from_env() {
++    if let Some(profile) = crate::device_profile::resolve_profile(session_id).await {
+         bot.client().set_client_profile(profile).await;
+     }
+     bot.run().await;
+@@ -1626,7 +1626,7 @@
+         runtime.set_client(Some(c));
+     }
+ 
+-    if let Some(profile) = crate::device_props::client_profile_from_env() {
++    if let Some(profile) = crate::device_profile::resolve_profile(session_id).await {
+         bot.client().set_client_profile(profile).await;
+     }
+     bot.run().await;
+diff -ruN '--exclude=target' '--exclude=.git' '--exclude=whatsapp-rust' a/src/main.rs b/src/main.rs
+--- a/src/main.rs	2026-11-27 00:00:00.000000000 +0000
++++ b/src/main.rs	2026-11-27 00:00:00.000000000 +0000
+@@ -1,6 +1,7 @@
+ mod handlers;
+ mod state;
+ mod device_props;
++mod device_profile;
+ mod middleware;
+ mod routes;
+ mod config;
