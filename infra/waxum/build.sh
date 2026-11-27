@@ -18,7 +18,7 @@
 #
 set -euo pipefail
 
-TAG="${1:-0.12.6-multirelay-v11-device-profile}"
+TAG="${1:-0.12.6-multirelay-v12-business}"
 IMAGE="zapliga-waxum:${TAG}"
 
 # Pinned upstream sources. Bumping either means regenerating the patches:

@@ -1,5 +1,5 @@
 diff --git a/src/device_props.rs b/src/device_props.rs
-index 5fd30b8..0c8e4b6 100644
+index 5fd30b8..338436c 100644
 --- a/src/device_props.rs
 +++ b/src/device_props.rs
 @@ -95,6 +95,8 @@ struct SavedIdentity {
@@ -30,18 +30,22 @@ index 5fd30b8..0c8e4b6 100644
      };
      ResolvedIdentity {
          device: resolve_with_override(os.as_deref(), platform.as_deref(), version.as_deref()),
-@@ -142,6 +145,26 @@ fn resolve_session_identity_with(
+@@ -142,6 +145,30 @@ fn resolve_session_identity_with(
      }
  }
  
-+/// ZapLiga: the handshake of a line that logs in as an Android phone (docs/device-profile.md):
-+/// no web info, the phone's brand, model and carrier, and a `phone_id` fixed for the line. The
++/// ZapLiga: the handshake of a line that logs in as an Android phone (docs/device-profile.md),
++/// WhatsApp Business (SMB_ANDROID) when the account is Business: no web info, the phone's brand, model and carrier, and a `phone_id` fixed for the line. The
 +/// locale is the line's, else `WA_CLIENT_LOCALE`, else the library's.
 +fn android_profile(
 +    android: &crate::models::sessions::AndroidProfileRequest,
 +    locale: Option<&str>,
 +) -> wacore::client_profile::ClientProfile {
-+    let mut profile = wacore::client_profile::ClientProfile::android(android.os_version.trim());
++    let mut profile = if android.business {
++        wacore::client_profile::ClientProfile::smb_android(android.os_version.trim())
++    } else {
++        wacore::client_profile::ClientProfile::android(android.os_version.trim())
++    };
 +    profile.manufacturer = android.manufacturer.trim().to_string();
 +    profile.device = android.device.trim().to_string();
 +    profile.mcc = android.mcc.trim().to_string();
@@ -57,7 +61,7 @@ index 5fd30b8..0c8e4b6 100644
  /// Applies the request to the saved identity and writes it back when it changed.
  fn update_saved_identity(path: &std::path::Path, request: &IdentityRequest) -> SavedIdentity {
      let reset = request.client_profile.as_ref().is_some_and(|c| c.reset);
-@@ -168,6 +191,9 @@ fn update_saved_identity(path: &std::path::Path, request: &IdentityRequest) -> S
+@@ -168,6 +195,9 @@ fn update_saved_identity(path: &std::path::Path, request: &IdentityRequest) -> S
      }
      if let Some(client) = &request.client_profile {
          set(&mut next.locale, client.locale.as_deref());
@@ -67,7 +71,7 @@ index 5fd30b8..0c8e4b6 100644
      }
      if next != saved {
          write_saved_identity(path, &next);
-@@ -299,6 +325,7 @@ mod tests {
+@@ -299,6 +329,7 @@ mod tests {
              client_profile: Some(ClientProfileRequest {
                  locale: Some("pt_BR".into()),
                  reset: false,
@@ -75,7 +79,7 @@ index 5fd30b8..0c8e4b6 100644
              }),
          }
      }
-@@ -362,7 +389,7 @@ mod tests {
+@@ -362,7 +393,7 @@ mod tests {
  
          let reset = IdentityRequest {
              device: None,
@@ -84,7 +88,7 @@ index 5fd30b8..0c8e4b6 100644
          };
          let identity = resolve_session_identity_with(path, &reset, true);
  
-@@ -394,6 +421,90 @@ mod tests {
+@@ -394,6 +425,131 @@ mod tests {
          assert!(!dir.path().join(IDENTITY_FILE).exists());
      }
  
@@ -105,6 +109,7 @@ index 5fd30b8..0c8e4b6 100644
 +                    mcc: "724".into(),
 +                    mnc: "05".into(),
 +                    phone_id: "5f0c2b8e-3a1d-4c55-9a0e-2f6b7c1d9e10".into(),
++                    business: false,
 +                }),
 +            }),
 +        }
@@ -133,6 +138,46 @@ index 5fd30b8..0c8e4b6 100644
 +        assert_eq!(profile.phone_id.as_deref(), Some("5f0c2b8e-3a1d-4c55-9a0e-2f6b7c1d9e10"));
 +        assert_eq!(profile.locale_language, "pt");
 +        assert_eq!(profile.locale_country, "BR");
++    }
++
++    #[test]
++    fn zapliga_identity_business_account_logs_in_as_smb_android() {
++        let dir = tempfile::tempdir().unwrap();
++        let path = dir.path().to_str().unwrap();
++        let mut request = android_request();
++        if let Some(android) = request.client_profile.as_mut().and_then(|c| c.android.as_mut()) {
++            android.business = true;
++        }
++
++        resolve_session_identity_with(path, &request, true);
++        let later = resolve_session_identity_with(path, &IdentityRequest::default(), true);
++
++        let profile = later.client_profile.expect("business profile");
++        assert_eq!(
++            profile.user_agent_platform,
++            waproto::whatsapp::client_payload::user_agent::Platform::SMB_ANDROID
++        );
++        assert!(!profile.include_web_info);
++        assert_eq!(profile.manufacturer, "samsung");
++    }
++
++    #[test]
++    fn zapliga_identity_saved_android_without_business_reads_as_whatsapp() {
++        let dir = tempfile::tempdir().unwrap();
++        let path = dir.path().to_str().unwrap();
++        std::fs::write(
++            dir.path().join(IDENTITY_FILE),
++            br#"{"device_os":"Android","device_platform":"android_phone","locale":"pt_BR","android":{"os_version":"16","manufacturer":"OPPO","device":"Find X8 Pro","mcc":"000","mnc":"000","phone_id":"5f0c2b8e-3a1d-4c55-9a0e-2f6b7c1d9e10"}}"#,
++        )
++        .unwrap();
++
++        let profile = resolve_session_identity_with(path, &IdentityRequest::default(), true)
++            .client_profile
++            .expect("android profile");
++        assert_eq!(
++            profile.user_agent_platform,
++            waproto::whatsapp::client_payload::user_agent::Platform::ANDROID
++        );
 +    }
 +
 +    #[test]
@@ -188,10 +233,10 @@ index fc61794..6458104 100644
              models::sessions::SessionStatusResponse,
              models::sessions::DeviceInfo,
 diff --git a/src/models/sessions.rs b/src/models/sessions.rs
-index 3aeb02a..b0e9d92 100644
+index 3aeb02a..d930499 100644
 --- a/src/models/sessions.rs
 +++ b/src/models/sessions.rs
-@@ -167,6 +167,31 @@ pub struct ClientProfileRequest {
+@@ -167,6 +167,35 @@ pub struct ClientProfileRequest {
      /// Deletes the saved identity of the session: the next logins go back to the env defaults.
      #[serde(default)]
      pub reset: bool,
@@ -220,6 +265,10 @@ index 3aeb02a..b0e9d92 100644
 +    pub mnc: String,
 +    /// Stable per line (never per login): a per-login id made the server drop sessions.
 +    pub phone_id: String,
++    /// The account is WhatsApp Business: a Business account only links a second phone that is
++    /// Business too ("Download WhatsApp Business on your other device"), so the login says SMB_ANDROID.
++    #[serde(default)]
++    pub business: bool,
  }
  
  /// Request to start QR connect with optional device override
