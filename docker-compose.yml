@@ -283,7 +283,7 @@ services:
   waxum-edge-1:
     <<: *edge-waxum
     # Same image as the other edges; edge-1 also declares the Windows/pt-BR identity (new pairings).
-    image: zapliga-waxum:0.12.6-multirelay-v7-relay-unwrap
+    image: zapliga-waxum:0.12.6-multirelay-v9-conceal
     network_mode: service:tailscale-edge-1
     environment:
       <<: *edge-waxum-environment
