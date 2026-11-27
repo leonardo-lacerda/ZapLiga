@@ -1,0 +1,311 @@
+--- a/src/voip/audio.rs	2026-11-27 15:31:18.478282608 +0100
++++ b/src/voip/audio.rs	2026-11-27 15:34:15.726353233 +0100
+@@ -185,6 +185,19 @@
+         Ok(pcm_scratch)
+     }
+ 
++    /// ZapLiga: packet-loss concealment. libopus extrapolates `samples` of audio from its own state
++    /// (an empty packet is how its API asks for that) and fades towards silence over a long gap.
++    /// `samples` must be a whole number of 2.5ms steps, as libopus requires.
++    pub fn conceal(&mut self, samples: usize) -> Result<&[i16]> {
++        self.pcm_scratch.resize(samples.clamp(1, WA_DECODE_MAX_SAMPLES), 0);
++        let n = self
++            .dec
++            .decode(&[], &mut self.pcm_scratch, false)
++            .map_err(|e| anyhow!("opus conceal: {e}"))?;
++        self.pcm_scratch.truncate(n);
++        Ok(&self.pcm_scratch)
++    }
++
+     /// Restore MLOW's CELT TOC and decode with stock libopus.
+     pub fn decode_mlow_escape(&mut self, opus: &[u8]) -> Result<&[i16]> {
+         self.packet_scratch.clear();
+@@ -265,11 +278,14 @@
+     }
+ 
+     fn conceal(&mut self, samples: usize, out: &mut Vec<i16>) {
+-        // Opus packet-loss concealment needs the decoder's own state, and asking libopus for it
+-        // costs an extra call per lost frame. Silence is the honest fallback here: the engine
+-        // already counts the concealment, so a stream that is mostly concealed is visible as such
+-        // rather than smoothed into something that sounds almost fine.
+-        out.resize(out.len() + samples, 0);
++        // ZapLiga: libopus packet-loss concealment instead of silence. Silence here is a hard hole
++        // in the lead's voice for every late or lost packet, which callers heard as the call
++        // breaking up; the official client conceals. The engine still counts each concealment.
++        let start = out.len();
++        if let Ok(pcm) = self.decoder.conceal(samples) {
++            out.extend_from_slice(pcm);
++        }
++        out.resize(start + samples, 0);
+     }
+ 
+     fn encode(&mut self, pcm: &[i16], out: &mut Vec<u8>) -> Result<(), ForeignCodecError> {
+@@ -311,6 +327,23 @@
+     }
+ 
+     #[test]
++    fn zapliga_conceal_continues_the_voice_instead_of_silence() {
++        use wacore::voip::ForeignAudioCodec;
++        let mut enc = WaOpusEncoder::new().unwrap();
++        let mut codec = LibopusAudioCodec::new().unwrap();
++        let mut out = Vec::new();
++        for _ in 0..5 {
++            let packet = enc.encode(&sine_frame()).unwrap();
++            out.clear();
++            codec.decode(&packet, &mut out).unwrap();
++        }
++        let mut hidden = Vec::new();
++        codec.conceal(320, &mut hidden);
++        assert_eq!(hidden.len(), 320);
++        assert!(hidden.iter().any(|&s| s.unsigned_abs() > 200), "concealment is not silence");
++    }
++
++    #[test]
+     fn silence_encodes_and_decodes() {
+         let mut enc = WaOpusEncoder::new().unwrap();
+         let mut dec = WaOpusDecoder::new().unwrap();
+--- a/wacore/src/voip/engine.rs	2026-11-27 15:31:18.524282363 +0100
++++ b/wacore/src/voip/engine.rs	2026-11-27 15:34:46.581194168 +0100
+@@ -126,6 +126,14 @@
+ /// (~200ms) drain whatever is queued instead of holding it (silent) forever. Comfortably above the
+ /// few ticks a normal jittered second-frame arrival takes, so it never trips in steady operation.
+ const MAX_PRIME_TICKS: u32 = 10;
++/// ZapLiga: consecutive 20ms playout ticks an underrun of an Opus stream is filled with the
++/// decoder's packet-loss concealment instead of silence (~120ms). A late or lost peer packet then
++/// sounds like the official client (the voice carries on, smoothed) instead of a hard hole followed
++/// by a ~120ms silent re-prime, which is what callers heard as "picotando". Past this many ticks the
++/// stream is treated as stopped and playout falls back to the silent re-prime above.
++const MAX_CONCEAL_TICKS: u32 = 6;
++/// libopus only conceals whole 2.5ms steps: 40 samples at 16kHz.
++const CONCEAL_STEP: usize = 40;
+ /// One-byte mlow DTX comfort-noise token sent on a muted (exact-zero) mic frame so the media stream
+ /// never gaps; protect_audio frames it with the DTX RTP header and the peer decodes it to silence.
+ #[cfg(feature = "voip-mlow")]
+@@ -960,6 +968,11 @@
+     /// Latency ceiling in force, tracked rather than recomputed so it can lag a shrinking packet
+     /// until the backlog drains; see [`effective_playout_cap`].
+     playout_cap: usize,
++    /// ZapLiga: the most recent packet was decoded by the platform (Opus) decoder, the only one
++    /// whose loss concealment playout asks for on an underrun.
++    foreign_stream: bool,
++    /// ZapLiga: consecutive playout ticks filled by that concealment; see [`MAX_CONCEAL_TICKS`].
++    concealed_ticks: u32,
+ }
+ 
+ /// The video half of the media plane. No jitter buffer or playout tick: an AU is handed to the
+@@ -1271,6 +1284,8 @@
+                     priming_ticks: 0,
+                     packet_samps: OPUS_FRAME_SAMPS_60MS,
+                     playout_cap: playout_bounds(OPUS_FRAME_SAMPS_60MS).1,
++                    foreign_stream: false,
++                    concealed_ticks: 0,
+                 }),
+                 playout_deadline: NEVER,
+             })
+@@ -2270,13 +2285,27 @@
+                     // its own contract -- and the arriving-packet sites are what maintain it.
+                     // Recomputing on the 20ms tick as well is a second caller of a per-packet
+                     // decision, which is inconsistent whether or not a fixture can catch it.
+-                    drain_playout(
++                    // ZapLiga: an Opus stream's underrun is concealed by its own decoder.
++                    let conceal = if pcm.foreign_stream {
++                        m.foreign_audio.as_mut().map(|codec| &mut **codec)
++                    } else {
++                        None
++                    };
++                    let before = pcm.concealed_ticks;
++                    let frame = drain_playout_concealing(
+                         &mut pcm.jitter,
+                         &mut pcm.priming,
+                         &mut pcm.priming_ticks,
+                         pcm.packet_samps,
+                         pcm.playout_cap,
+-                    )
++                        conceal,
++                        &mut pcm.concealed_ticks,
++                    );
++                    if pcm.concealed_ticks > before {
++                        self.media_stats.audio_frames_concealed =
++                            self.media_stats.audio_frames_concealed.saturating_add(1);
++                    }
++                    frame
+                 } else {
+                     Vec::new()
+                 };
+@@ -3005,6 +3034,7 @@
+                 if let Some(pcm) = m.pcm.as_mut() {
+                     pcm.packet_samps = samples.max(1);
+                     pcm.last_packet_decoded = decoded_ok;
++                    pcm.foreign_stream = true;
+                     pcm.jitter.extend(m.foreign_pcm.iter().copied());
+                     // Same feed-side ceiling the MLOW path enforces below. A rescued stream is
+                     // still a stream: a burst arriving between two playout ticks must not grow the
+@@ -3166,6 +3196,7 @@
+             // honoured it, so the queue holds what the peer meant rather than a failure's residue.
+             pcm.last_packet_decoded =
+                 decode_report.decoded > 0 || decode_report.inactive_or_sid > 0;
++            pcm.foreign_stream = false;
+         }
+         // Bound the buffer on the feed side too: a burst of inbound packets arriving between two 20ms
+         // playout ticks must not grow `jitter` without limit (drain_playout's cap only runs on a
+@@ -3911,6 +3942,10 @@
+ /// re-prime rather than a silence pad every tick. Priming also gives up after `MAX_PRIME_TICKS` if
+ /// the buffer holds some audio but never reaches the target (the peer sent one frame then went DTX),
+ /// flushing it instead of stalling silent forever.
++///
++/// ZapLiga: playout now goes through [`drain_playout_concealing`]; this keeps the original contract
++/// for the tests written against it.
++#[cfg(test)]
+ fn drain_playout(
+     jitter: &mut VecDeque<i16>,
+     priming: &mut bool,
+@@ -3918,6 +3953,21 @@
+     packet_samps: usize,
+     cap: usize,
+ ) -> Vec<i16> {
++    drain_playout_concealing(jitter, priming, priming_ticks, packet_samps, cap, None, &mut 0)
++}
++
++/// [`drain_playout`] with ZapLiga's loss concealment: once primed, a slice the buffer cannot fill
++/// is completed by `conceal` (the stream's own decoder) for up to [`MAX_CONCEAL_TICKS`] ticks in a
++/// row, without re-arming priming, so a late or lost packet does not open a silent hole.
++fn drain_playout_concealing(
++    jitter: &mut VecDeque<i16>,
++    priming: &mut bool,
++    priming_ticks: &mut u32,
++    packet_samps: usize,
++    cap: usize,
++    conceal: Option<&mut (dyn ForeignAudioCodec + 'static)>,
++    concealed_ticks: &mut u32,
++) -> Vec<i16> {
+     let target = playout_bounds(packet_samps).0;
+     if jitter.len() > cap {
+         let drop_n = jitter.len() - cap;
+@@ -3946,10 +3996,24 @@
+     let take = jitter.len().min(PLAYOUT_DRAIN);
+     let mut frame: Vec<i16> = jitter.drain(..take).collect();
+     if frame.len() < PLAYOUT_DRAIN {
++        let missing = PLAYOUT_DRAIN - frame.len();
++        if let Some(codec) = conceal
++            && *concealed_ticks < MAX_CONCEAL_TICKS
++        {
++            let mut filled = Vec::with_capacity(missing.div_ceil(CONCEAL_STEP) * CONCEAL_STEP);
++            codec.conceal(missing.div_ceil(CONCEAL_STEP) * CONCEAL_STEP, &mut filled);
++            filled.resize(missing, 0);
++            frame.extend_from_slice(&filled);
++            *concealed_ticks += 1;
++            return frame;
++        }
+         *priming = true;
+         *priming_ticks = 0;
++        *concealed_ticks = 0;
+         frame.resize(PLAYOUT_DRAIN, 0);
++        return frame;
+     }
++    *concealed_ticks = 0;
+     frame
+ }
+ 
+@@ -10668,3 +10732,102 @@
+         );
+     }
+ }
++
++#[cfg(test)]
++mod zapliga_conceal_tests {
++    use super::*;
++
++    /// Conceals with a recognisable value so a test can tell concealment from silence.
++    struct ConcealToConstant(i16);
++
++    impl ForeignAudioCodec for ConcealToConstant {
++        fn decode(
++            &mut self,
++            _payload: &[u8],
++            _out: &mut Vec<i16>,
++        ) -> Result<(), crate::voip::audio::ForeignCodecError> {
++            Ok(())
++        }
++
++        fn conceal(&mut self, samples: usize, out: &mut Vec<i16>) {
++            out.extend(core::iter::repeat_n(self.0, samples));
++        }
++
++        fn encode(
++            &mut self,
++            _pcm: &[i16],
++            _out: &mut Vec<u8>,
++        ) -> Result<(), crate::voip::audio::ForeignCodecError> {
++            Err(crate::voip::audio::ForeignCodecError::InvalidPayload)
++        }
++    }
++
++    const P: usize = OPUS_FRAME_SAMPS_60MS;
++
++    fn primed_with(samples: usize) -> (VecDeque<i16>, bool, u32) {
++        (core::iter::repeat_n(1i16, samples).collect(), false, 0)
++    }
++
++    #[test]
++    fn zapliga_underrun_is_concealed_instead_of_silenced() {
++        let (mut jitter, mut priming, mut ticks) = primed_with(100);
++        let mut codec = ConcealToConstant(7);
++        let mut concealed = 0;
++        let frame = drain_playout_concealing(
++            &mut jitter, &mut priming, &mut ticks, P, playout_bounds(P).1,
++            Some(&mut codec), &mut concealed,
++        );
++        assert_eq!(frame.len(), PLAYOUT_DRAIN);
++        assert!(frame[..100].iter().all(|&s| s == 1), "queued audio plays first");
++        assert!(frame[100..].iter().all(|&s| s == 7), "the rest is concealment, not silence");
++        assert!(!priming, "a concealed underrun does not re-prime");
++        assert_eq!(concealed, 1);
++    }
++
++    #[test]
++    fn zapliga_late_packet_resumes_without_a_re_prime() {
++        let (mut jitter, mut priming, mut ticks) = primed_with(0);
++        let mut codec = ConcealToConstant(7);
++        let mut concealed = 0;
++        let cap = playout_bounds(P).1;
++        let hidden = drain_playout_concealing(
++            &mut jitter, &mut priming, &mut ticks, P, cap, Some(&mut codec), &mut concealed,
++        );
++        assert!(hidden.iter().all(|&s| s == 7));
++        // The late packet arrives: it plays on the very next tick.
++        jitter.extend(core::iter::repeat_n(3i16, P));
++        let frame = drain_playout_concealing(
++            &mut jitter, &mut priming, &mut ticks, P, cap, Some(&mut codec), &mut concealed,
++        );
++        assert!(frame.iter().all(|&s| s == 3));
++        assert_eq!(concealed, 0, "a full slice resets the run");
++    }
++
++    #[test]
++    fn zapliga_a_stopped_stream_falls_back_to_the_silent_re_prime() {
++        let (mut jitter, mut priming, mut ticks) = primed_with(0);
++        let mut codec = ConcealToConstant(7);
++        let mut concealed = 0;
++        let cap = playout_bounds(P).1;
++        for _ in 0..MAX_CONCEAL_TICKS {
++            let f = drain_playout_concealing(
++                &mut jitter, &mut priming, &mut ticks, P, cap, Some(&mut codec), &mut concealed,
++            );
++            assert!(f.iter().all(|&s| s == 7));
++        }
++        let f = drain_playout_concealing(
++            &mut jitter, &mut priming, &mut ticks, P, cap, Some(&mut codec), &mut concealed,
++        );
++        assert!(f.iter().all(|&s| s == 0), "past the limit the stream is treated as stopped");
++        assert!(priming);
++        assert_eq!(concealed, 0);
++    }
++
++    #[test]
++    fn zapliga_without_a_concealer_playout_is_unchanged() {
++        let (mut jitter, mut priming, mut ticks) = primed_with(100);
++        let frame = drain_playout(&mut jitter, &mut priming, &mut ticks, P, playout_bounds(P).1);
++        assert!(frame[100..].iter().all(|&s| s == 0));
++        assert!(priming);
++    }
++}

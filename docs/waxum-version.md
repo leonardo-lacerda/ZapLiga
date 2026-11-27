@@ -13,6 +13,10 @@
   o celular manda com internet fraca, o que o atendente ouvia como buracos na voz do
   cliente (log: `mlow: dropping out-of-operating-point frame`). Com Opus, quem decodifica
   é a libopus. Voltar ao MLow: `WA_CALL_AUDIO_CODEC: mlow` no compose, sem rebuild.
+- v9-conceal (`2026-11-27`): quando um pacote da voz do lead atrasa ou se perde, o motor
+  preenche a falta com a ocultação de perda da libopus (até ~120 ms seguidos) em vez de tocar
+  silêncio e esperar mais ~120 ms para voltar (`patches/whatsapp-rust-opus-conceal.patch`).
+  Medido antes em 8 gravações de 27/11: de 12 a 60 buracos por minuto de fala do lead em 5 delas.
 - Rollback disponível no host: `zapliga-waxum:0.12.6-multirelay-v3` (a v3 continua carregada)
 
 ## Por que não a imagem oficial
