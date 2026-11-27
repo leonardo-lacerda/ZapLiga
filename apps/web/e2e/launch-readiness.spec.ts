@@ -648,4 +648,24 @@ test.describe.serial('Gate B - jornadas criticas', () => {
     await billingPool.query('UPDATE whatsapp_numbers SET last_paired_at = NULL WHERE id = $1', [numberId]);
     await api.dispose();
   });
+
+  test('19. causa da queda: banimento temporario segura a linha ate o prazo e fica registrado', async () => {
+    const api = await context();
+    const sessionId = (await billingPool.query('SELECT waxum_session_id FROM whatsapp_numbers WHERE id = $1', [numberId])).rows[0].waxum_session_id;
+    await publishWaxumEvent(sessionId, 'temp_banned', { code: 101, expire_secs: 600 });
+    const held = await waitFor(async () => {
+      const row = (await billingPool.query('SELECT dial_blocked_until, dial_block_cause FROM whatsapp_numbers WHERE id = $1', [numberId])).rows[0];
+      return row.dial_block_cause === 'temp_banned' ? row : false;
+    }, 'linha segura pelo banimento');
+    expect(new Date(held.dial_blocked_until).getTime()).toBeGreaterThan(Date.now() + 500_000);
+    const events = (await billingPool.query("SELECT cause, code FROM line_loss_events WHERE number_id = $1 AND cause = 'temp_banned'", [numberId])).rows;
+    expect(events).toEqual([{ cause: 'temp_banned', code: '101' }]);
+    await openStation(api);
+    const refused = await api.post(`/api/tenants/${tenantA}/calls/manual`, { headers: headers(sdrToken, tenantA), data: { phone: '5511988885555', numberId } });
+    expect(refused.ok()).toBeFalsy();
+    expect(JSON.stringify(await refused.json())).toContain('pausada');
+    control.close();
+    await billingPool.query('UPDATE whatsapp_numbers SET dial_blocked_until = NULL, dial_block_cause = NULL WHERE id = $1', [numberId]);
+    await api.dispose();
+  });
 });

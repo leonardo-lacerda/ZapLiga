@@ -1,4 +1,4 @@
-import { classifyLineLoss, isRegistrationReason, lineLossEventId } from './line-loss.rules';
+import { classifyLineLoss, dialBlockUntil, isRegistrationReason, lineLossEventId, lineLossPolicyEnabled, reachoutTimelockEnd } from './line-loss.rules';
 
 const NOW = new Date('2026-11-27T12:00:00Z');
 
@@ -65,5 +65,48 @@ describe('isRegistrationReason', () => {
     expect(isRegistrationReason('too_many_guesses')).toBe(true);
     expect(isRegistrationReason('other')).toBe(false);
     expect(isRegistrationReason(3)).toBe(false);
+  });
+});
+
+describe('dialBlockUntil', () => {
+  const now = new Date('2026-11-27T12:00:00Z');
+  it('waits for what the server stated, or a fallback', () => {
+    const stated = new Date('2026-11-27T15:00:00Z');
+    expect(dialBlockUntil('temp_banned', stated, now)).toEqual(stated);
+    expect(dialBlockUntil('temp_banned', null, now)?.toISOString()).toBe('2026-11-28T12:00:00.000Z');
+    expect(dialBlockUntil('reachout_timelock', stated, now)).toEqual(stated);
+    expect(dialBlockUntil('reachout_timelock', null, now)?.toISOString()).toBe('2026-11-27T18:00:00.000Z');
+    expect(dialBlockUntil('media_failure', null, now)?.toISOString()).toBe('2026-11-27T12:30:00.000Z');
+  });
+
+  it('ignores a stated end already past and holds nothing for the other causes', () => {
+    expect(dialBlockUntil('temp_banned', new Date('2026-11-27T11:00:00Z'), now)?.toISOString()).toBe('2026-11-28T12:00:00.000Z');
+    expect(dialBlockUntil('transient', null, now)).toBeNull();
+    expect(dialBlockUntil('device_removed', null, now)).toBeNull();
+  });
+});
+
+describe('reachoutTimelockEnd', () => {
+  const now = new Date('2026-11-27T12:00:00Z');
+  it('reads the end in seconds, milliseconds or ISO when the timelock is active', () => {
+    expect(reachoutTimelockEnd({ is_active: true, time_enforcement_ends: '1795788000' }, now)?.toISOString()).toBe('2026-11-27T14:00:00.000Z');
+    expect(reachoutTimelockEnd({ is_active: true, time_enforcement_ends: 1795788000000 }, now)?.toISOString()).toBe('2026-11-27T14:00:00.000Z');
+    expect(reachoutTimelockEnd({ is_active: true, time_enforcement_ends: '2026-11-27T14:00:00Z' }, now)?.toISOString()).toBe('2026-11-27T14:00:00.000Z');
+  });
+
+  it('is null when inactive, past, unreadable or missing', () => {
+    expect(reachoutTimelockEnd({ is_active: false, time_enforcement_ends: '1795788000' }, now)).toBeNull();
+    expect(reachoutTimelockEnd({ is_active: true, time_enforcement_ends: '1795773600' }, now)).toBeNull();
+    expect(reachoutTimelockEnd({ is_active: true, time_enforcement_ends: 'soon' }, now)).toBeNull();
+    expect(reachoutTimelockEnd(null, now)).toBeNull();
+  });
+});
+
+describe('lineLossPolicyEnabled', () => {
+  it('is off unless LINE_LOSS_POLICY=v2, optionally for some tenants only', () => {
+    expect(lineLossPolicyEnabled('t1', {})).toBe(false);
+    expect(lineLossPolicyEnabled('t1', { LINE_LOSS_POLICY: 'v2' })).toBe(true);
+    expect(lineLossPolicyEnabled('t1', { LINE_LOSS_POLICY: 'v2', LINE_LOSS_POLICY_TENANTS: 't2, t3' })).toBe(false);
+    expect(lineLossPolicyEnabled('t3', { LINE_LOSS_POLICY: 'v2', LINE_LOSS_POLICY_TENANTS: 't2, t3' })).toBe(true);
   });
 });

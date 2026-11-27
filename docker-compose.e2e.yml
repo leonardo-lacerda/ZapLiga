@@ -23,6 +23,7 @@ services:
       E2E_TEST_MODE: "true"
       PUBLIC_REGISTRATION_ENABLED: "true"
       WAXUM_REQUEST_INTERVAL_MS: "0"
+      LINE_LOSS_POLICY: v2
       SUPERADMIN_EMAIL: admin@zapliga.local
       SUPERADMIN_PASSWORD: ZapCall-Smoke-2026!
       WEB_ORIGIN: ${E2E_WEB_ORIGIN:-http://127.0.0.1:5173}
@@ -37,6 +38,7 @@ services:
       E2E_TEST_MODE: "true"
       PUBLIC_REGISTRATION_ENABLED: "true"
       WAXUM_REQUEST_INTERVAL_MS: "0"
+      LINE_LOSS_POLICY: v2
       SUPERADMIN_EMAIL: admin@zapliga.local
       SUPERADMIN_PASSWORD: ZapCall-Smoke-2026!
       WEB_ORIGIN: ${E2E_WEB_ORIGIN:-http://127.0.0.1:5173}

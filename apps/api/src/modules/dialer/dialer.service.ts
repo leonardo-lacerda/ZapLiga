@@ -43,6 +43,8 @@ import {
   canaryCodec,
   YOUNG_LINE_DAILY_CALLS,
 } from './dialer.rules';
+import { LINE_LOSS_ACTIONS, LineLossCause, lineDialAllowedSql } from './line-loss.rules';
+import { LineLossService } from './line-loss.service';
 import { DIAL_INTENT_TTL_SECONDS, DialIntent, DialRefusedError, dialIntentKey, DEPLOY_DRAIN_KEY, DEPLOY_DRAIN_RETRY_SECONDS } from './dial-intents';
 import { OFF_PC_NETWORK_CODE, OFF_PC_NETWORK_MESSAGE, onPcNetworkSql } from '../egress/pc-network';
 import { CrmCallEventType, CrmEventsService, CrmLineEventType } from '../crm-events/crm-events.service';
@@ -220,6 +222,7 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
     @Optional() private readonly planLimits?: PlanLimitsService,
     @Optional() private readonly crmEvents?: CrmEventsService,
     @Optional() private readonly recordings?: CallRecordingsService,
+    @Optional() private readonly lineLoss?: LineLossService,
   ) {}
 
   // CRM events are best-effort: a webhook outbox hiccup must never touch the call itself.
@@ -625,7 +628,7 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
       // Manual calls keep the line PROTECTIONS (quarantine after instant
       // failures, Waxum 429 backoff -- both future-date last_call_ended_at) but
       // not the automatic dialer's pacing: a person may dial again right away.
-      this.db.query(`SELECT *, ${onPcNetworkSql('whatsapp_numbers')} AS on_pc_network FROM whatsapp_numbers WHERE tenant_id = $1 AND verification_only = false AND status IN ('connected', 'online', 'ready', 'authenticated') AND (flagged_until IS NULL OR flagged_until <= now()) AND ${lineCanaryPassedSql('whatsapp_numbers')} AND ${lineUnderDailyCapSql('whatsapp_numbers')} ORDER BY last_call_ended_at NULLS FIRST, last_call_ended_at ASC`, [tenantId]),
+      this.db.query(`SELECT *, ${onPcNetworkSql('whatsapp_numbers')} AS on_pc_network FROM whatsapp_numbers WHERE tenant_id = $1 AND verification_only = false AND status IN ('connected', 'online', 'ready', 'authenticated') AND (flagged_until IS NULL OR flagged_until <= now()) AND ${lineDialAllowedSql('whatsapp_numbers')} AND ${lineCanaryPassedSql('whatsapp_numbers')} AND ${lineUnderDailyCapSql('whatsapp_numbers')} ORDER BY last_call_ended_at NULLS FIRST, last_call_ended_at ASC`, [tenantId]),
       this.db.query(`SELECT l.*, f.is_active AS folder_active,
           EXISTS (SELECT 1 FROM contact_suppressions cs WHERE cs.tenant_id = l.tenant_id AND cs.phone = l.phone AND cs.lifted_at IS NULL) AS contact_suppressed,
           EXISTS (SELECT 1 FROM calls active_call WHERE active_call.tenant_id = l.tenant_id AND active_call.lead_id = l.id AND active_call.status IN ('reserved','dialing','media_active')) AS active_call,
@@ -786,7 +789,7 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
       `, [tenantId, sdrUserId ?? null]),
       // A CRM call names its line: never silently swap it for another one. A canary dials only from
       // a line still waiting for it; any other call only from lines that passed theirs.
-      this.db.query(`SELECT *, ${onPcNetworkSql('whatsapp_numbers')} AS on_pc_network FROM whatsapp_numbers WHERE tenant_id = $1 AND verification_only = false AND status IN ('connected', 'online', 'ready', 'authenticated') AND (flagged_until IS NULL OR flagged_until <= now()) AND ${canary ? "canary_status <> 'passed'" : lineCanaryPassedSql('whatsapp_numbers')} AND ${lineUnderDailyCapSql('whatsapp_numbers')} AND ($2::text IS NULL OR id = $2) ORDER BY last_call_ended_at NULLS FIRST, last_call_ended_at ASC`, [tenantId, input.numberId ?? null]),
+      this.db.query(`SELECT *, ${onPcNetworkSql('whatsapp_numbers')} AS on_pc_network FROM whatsapp_numbers WHERE tenant_id = $1 AND verification_only = false AND status IN ('connected', 'online', 'ready', 'authenticated') AND (flagged_until IS NULL OR flagged_until <= now()) AND ${lineDialAllowedSql('whatsapp_numbers')} AND ${canary ? "canary_status <> 'passed'" : lineCanaryPassedSql('whatsapp_numbers')} AND ${lineUnderDailyCapSql('whatsapp_numbers')} AND ($2::text IS NULL OR id = $2) ORDER BY last_call_ended_at NULLS FIRST, last_call_ended_at ASC`, [tenantId, input.numberId ?? null]),
     ]);
     const execution = this.campaignExecution ? await this.campaignExecution.resolveForLead(tenantId, lead) : undefined;
     if (execution && !execution.allowed) throw new Error('A campanha deste lead não está em execução ou não possui recursos disponíveis');
@@ -865,6 +868,10 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
     if (!number.on_pc_network) throw new DialRefusedError(OFF_PC_NETWORK_CODE, OFF_PC_NETWORK_MESSAGE);
     const secondsUntil = (value: unknown) => Math.max(1, Math.ceil((new Date(String(value)).getTime() - Date.now()) / 1000));
     if (number.flagged_until && new Date(number.flagged_until).getTime() > Date.now()) throw new DialRefusedError('line_quarantined', 'A linha está em quarentena (aquecimento de número novo ou sinais de bloqueio do WhatsApp)', secondsUntil(number.flagged_until));
+    if (number.dial_blocked_until && new Date(number.dial_blocked_until).getTime() > Date.now()) {
+      const cause = String(number.dial_block_cause ?? '') as LineLossCause;
+      throw new DialRefusedError('line_dial_blocked', `A linha está pausada: ${LINE_LOSS_ACTIONS[cause] ?? 'sinal de bloqueio do WhatsApp'}`, secondsUntil(number.dial_blocked_until));
+    }
     if (number.canary_status !== 'passed') throw new DialRefusedError('line_canary_pending', 'A linha precisa passar pelo canário (primeira ligação para um celular da equipe) antes de ligar para leads');
     if (number.under_daily_cap === false) throw new DialRefusedError('line_daily_cap', `A linha chegou ao limite de ${YOUNG_LINE_DAILY_CALLS} ligações de hoje (número pareado há poucos dias)`);
     if (lineIsProtected(number.last_call_ended_at)) throw new DialRefusedError('line_protected', 'A linha está temporariamente protegida pelo limite de chamadas do WhatsApp', secondsUntil(number.last_call_ended_at));
@@ -1113,7 +1120,7 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
       this.getSettings(tenantId),
       this.db.query(`SELECT id FROM sdrs WHERE tenant_id = $1 AND user_id = $2 LIMIT 1`, [tenantId, userId]),
       // Per-tenant lines: expose only whether a line is available, never how many.
-      this.db.query(`SELECT EXISTS (SELECT 1 FROM whatsapp_numbers WHERE tenant_id = $1 AND verification_only = false AND status IN ('connected', 'online', 'ready', 'authenticated') AND (flagged_until IS NULL OR flagged_until <= now()) AND ${lineCanaryPassedSql('whatsapp_numbers')} AND ${lineUnderDailyCapSql('whatsapp_numbers')} AND ${onPcNetworkSql('whatsapp_numbers')}) AS ready`, [tenantId]),
+      this.db.query(`SELECT EXISTS (SELECT 1 FROM whatsapp_numbers WHERE tenant_id = $1 AND verification_only = false AND status IN ('connected', 'online', 'ready', 'authenticated') AND (flagged_until IS NULL OR flagged_until <= now()) AND ${lineDialAllowedSql('whatsapp_numbers')} AND ${lineCanaryPassedSql('whatsapp_numbers')} AND ${lineUnderDailyCapSql('whatsapp_numbers')} AND ${onPcNetworkSql('whatsapp_numbers')}) AS ready`, [tenantId]),
       this.schedule ? this.schedule.evaluate(tenantId, new Date(), true) : Promise.resolve({ allowed: true, reason: 'schedule_service_unavailable' }),
     ]);
     const sdr = ownSdr.rows[0] ? await this.getSdrState(ownSdr.rows[0].id, tenantId) : null;
@@ -1305,7 +1312,7 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
             )
           ORDER BY s.last_assigned_at NULLS FIRST, s.last_assigned_at ASC
         `, [tenantId]),
-        this.db.query(`SELECT * FROM whatsapp_numbers WHERE tenant_id = $1 AND verification_only = false AND status IN ('connected', 'online', 'ready', 'authenticated') AND (flagged_until IS NULL OR flagged_until <= now()) AND (last_call_ended_at IS NULL OR last_call_ended_at <= now() - (cooldown_seconds * interval '1 second')) AND ${lineCanaryPassedSql('whatsapp_numbers')} AND ${lineUnderDailyCapSql('whatsapp_numbers')} AND ${onPcNetworkSql('whatsapp_numbers')} ORDER BY last_call_ended_at NULLS FIRST, last_call_ended_at ASC`, [tenantId]),
+        this.db.query(`SELECT * FROM whatsapp_numbers WHERE tenant_id = $1 AND verification_only = false AND status IN ('connected', 'online', 'ready', 'authenticated') AND (flagged_until IS NULL OR flagged_until <= now()) AND ${lineDialAllowedSql('whatsapp_numbers')} AND (last_call_ended_at IS NULL OR last_call_ended_at <= now() - (cooldown_seconds * interval '1 second')) AND ${lineCanaryPassedSql('whatsapp_numbers')} AND ${lineUnderDailyCapSql('whatsapp_numbers')} AND ${onPcNetworkSql('whatsapp_numbers')} ORDER BY last_call_ended_at NULLS FIRST, last_call_ended_at ASC`, [tenantId]),
           this.db.query(`
           WITH active_folders AS (
             SELECT f.id, (ROW_NUMBER() OVER (ORDER BY f.sort_order ASC, f.created_at ASC) - 1)::int AS folder_index,
@@ -2069,8 +2076,21 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
     const failureKey = `zapcall:line-failures:${numberId}`;
     const count = await this.redis.client.incr(failureKey);
     if (count === 1) await this.redis.client.expire(failureKey, 24 * 60 * 60);
-    if (!shouldQuarantineLine(count, this.FLAG_FAILURE_THRESHOLD)) return;
-    await this.redis.client.del(failureKey);
+    const thresholdReached = shouldQuarantineLine(count, this.FLAG_FAILURE_THRESHOLD);
+    if (thresholdReached) await this.redis.client.del(failureKey);
+    // Per-cause policy (LINE_LOSS_POLICY=v2, docs/line-loss-causes.md): a 463 holds the line until
+    // the server's deadline at once; a failure without one pauses it briefly instead of 6 h.
+    if (this.lineLoss?.policyEnabled(tenantId)) {
+      const until = await this.lineLoss.onInstantFailure(numberId, tenantId, callId, thresholdReached);
+      if (!until) return;
+      const pausedHours = Math.max(1, Math.round((until.getTime() - Date.now()) / 3_600_000));
+      this.log(`Uma linha recebeu um sinal do WhatsApp e foi pausada até ${until.toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' })}. O discador usará as outras linhas.`, 'error', callId, tenantId);
+      this.gateway.broadcast({ type: 'number_flagged', numberId, flaggedHours: pausedHours }, tenantId);
+      this.notifyOperationsChanged(tenantId, 'number_flagged', { kind: 'number_flagged', numberId, flaggedHours: pausedHours });
+      this.emitCrmLine(tenantId, numberId, 'number.status_changed');
+      return;
+    }
+    if (!thresholdReached) return;
     const hours = this.flagQuarantineHours;
     await this.db.query(`UPDATE whatsapp_numbers SET flagged_until = now() + ($1 * interval '1 hour') WHERE id = $2 AND tenant_id = $3`, [hours, numberId, tenantId]);
     this.log(`Uma linha parece bloqueada pelo WhatsApp e foi pausada por ${hours}h para proteger a conta. O discador usará as outras linhas.`, 'error', callId, tenantId);

@@ -8,7 +8,7 @@ describe('LineLossService', () => {
       query: jest.fn(async (sql: string) => {
         if (sql.includes('UPDATE whatsapp_numbers SET loss_reason')) return { rows: updated };
         if (sql.startsWith('SELECT id, tenant_id, label, removal_count')) return { rows: existing };
-        if (sql.startsWith('SELECT id, tenant_id, label FROM whatsapp_numbers')) return { rows: line };
+        if (sql.startsWith('SELECT id, tenant_id, label, waxum_session_id FROM whatsapp_numbers')) return { rows: line };
         if (sql.includes('INSERT INTO line_loss_events')) return { rows: inserted };
         return { rows: [] };
       }),
@@ -63,5 +63,85 @@ describe('LineLossService', () => {
     await service.handle('s1', 'logged_out', { data: {} });
     await service.handle('s1', 'call_ack', { data: { id: 'x' } });
     expect(db.query).not.toHaveBeenCalled();
+  });
+});
+
+describe('LineLossService policy (LINE_LOSS_POLICY=v2)', () => {
+  const env = process.env;
+  beforeEach(() => { process.env = { ...env, LINE_LOSS_POLICY: 'v2' }; });
+  afterAll(() => { process.env = env; });
+
+  const make = (rows: Record<string, any[]>, timelock: unknown = null) => {
+    const db = {
+      query: jest.fn(async (sql: string) => {
+        for (const [needle, result] of Object.entries(rows)) if (sql.includes(needle)) return { rows: result };
+        if (sql.includes('INSERT INTO line_loss_events')) return { rows: [{ id: 'e1' }] };
+        return { rows: [] };
+      }),
+    };
+    const waxum = { getReachoutTimelock: jest.fn(async () => timelock) };
+    const gateway = { broadcastToOperations: jest.fn() };
+    return { service: new LineLossService(db as any, waxum as any, { record: jest.fn() } as any, gateway as any), db, waxum, gateway };
+  };
+  const line = { id: 'n1', tenant_id: 't1', label: 'Previtas 7', waxum_session_id: 's1' };
+  const blockCall = (db: { query: jest.Mock }) => db.query.mock.calls.find(([sql]) => String(sql).includes('SET dial_blocked_until')) as [string, unknown[]] | undefined;
+
+  it('holds a temporarily banned line until the ban ends', async () => {
+    const { service, db, gateway } = make({ 'SELECT id, tenant_id, label, waxum_session_id FROM whatsapp_numbers': [line] });
+
+    await service.handle('s1', 'temp_banned', { data: { code: 101, expire_secs: 7200 } });
+
+    const call = blockCall(db);
+    expect(call?.[1].slice(0, 2)).toEqual(['n1', 't1']);
+    expect(call?.[1][3]).toBe('temp_banned');
+    expect((call?.[1][2] as Date).getTime()).toBeGreaterThan(Date.now() + 7_100_000);
+    expect(gateway.broadcastToOperations).toHaveBeenCalledWith(expect.objectContaining({ activity: expect.objectContaining({ kind: 'number_dial_blocked', cause: 'temp_banned' }) }), 't1');
+  });
+
+  it('reads the end of a reachout timelock from the server on a 463', async () => {
+    const end = Math.floor(Date.now() / 1000) + 3 * 3600;
+    const { service, db, waxum } = make({ 'SELECT id, tenant_id, label, waxum_session_id FROM whatsapp_numbers': [line] }, { is_active: true, time_enforcement_ends: String(end) });
+
+    await service.handle('s1', 'call_ack', { data: { error: '463' } });
+
+    expect(waxum.getReachoutTimelock).toHaveBeenCalledWith('s1');
+    expect((blockCall(db)?.[1][2] as Date).getTime()).toBe(end * 1000);
+  });
+
+  it('does nothing to the dialer for a transient cause', async () => {
+    const { service, db } = make({ 'SELECT id, tenant_id, label, waxum_session_id FROM whatsapp_numbers': [line] });
+    await service.handle('s1', 'stream_error', { data: { code: '503' } });
+    expect(blockCall(db)).toBeUndefined();
+  });
+
+  it('only the instance that stored the event applies the policy', async () => {
+    const { service, db, waxum } = make({ 'SELECT id, tenant_id, label, waxum_session_id FROM whatsapp_numbers': [line], 'INSERT INTO line_loss_events': [] });
+    await service.handle('s1', 'call_ack', { data: { error: '463' } });
+    expect(waxum.getReachoutTimelock).not.toHaveBeenCalled();
+    expect(blockCall(db)).toBeUndefined();
+  });
+
+  it('pauses a line briefly after a streak of calls without audio and without a 463', async () => {
+    const { service, db } = make({ 'SELECT id, tenant_id, label, waxum_session_id, dial_block_cause': [line] });
+
+    expect(await service.onInstantFailure('n1', 't1', 'c1', false)).toBeNull();
+    const until = await service.onInstantFailure('n1', 't1', 'c2', true);
+
+    expect(blockCall(db)?.[1][3]).toBe('media_failure');
+    expect(until!.getTime()).toBeLessThanOrEqual(Date.now() + 30 * 60_000);
+  });
+
+  it('holds the line at once when the call got a 463', async () => {
+    const { service, db } = make({ 'SELECT id, tenant_id, label, waxum_session_id, dial_block_cause': [line], 'FROM call_signal_events': [{ '?column?': 1 }] });
+    const until = await service.onInstantFailure('n1', 't1', 'c1', false);
+    expect(blockCall(db)?.[1][3]).toBe('reachout_timelock');
+    expect(until).not.toBeNull();
+  });
+
+  it('stays off without LINE_LOSS_POLICY=v2', async () => {
+    process.env = { ...env };
+    const { service, db } = make({ 'SELECT id, tenant_id, label, waxum_session_id FROM whatsapp_numbers': [line] });
+    await service.handle('s1', 'temp_banned', { data: { code: 101, expire_secs: 600 } });
+    expect(blockCall(db)).toBeUndefined();
   });
 });
