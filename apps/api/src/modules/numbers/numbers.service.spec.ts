@@ -349,7 +349,8 @@ describe('NumbersService on a PC slot that is offline', () => {
     expect(result.code).toBe('ABCD-EFGH');
     expect(row.waxum_node).toBe('edge-1');
     expect((waxum.createSession.mock.calls[0] as unknown[])[1]).toBe('edge-1');
-    expect(waxum.pairCode).toHaveBeenCalledWith('s2', '552731890428');
+    // A line without camouflage sends no identity.
+    expect(waxum.pairCode).toHaveBeenCalledWith('s2', '552731890428', undefined);
   });
 
   it('answers a clear 503 instead of a 500 when no PC is online', async () => {
