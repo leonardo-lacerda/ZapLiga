@@ -1463,3 +1463,47 @@ input, select { min-height: 35px; min-width: 0; padding: 8px 10px; border: 1px s
   .provisioning-recent-list li { grid-template-columns: minmax(0, 1fr) auto; }
   .provisioning-recent-list li > .button { grid-column: 1 / -1; }
 }
+
+/* Números: one card per WhatsApp line. The top edge carries the line's state (connected, waiting, lost);
+   what needs action reads as a short sentence; settings that rarely change stay folded. */
+.line-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 330px), 1fr)); gap: 14px; align-items: start; margin-bottom: 16px; }
+.line-card { --line-state: var(--border); min-width: 0; display: flex; flex-direction: column; gap: 12px; padding: 15px 16px 14px; border: 1px solid var(--border); border-top: 3px solid var(--line-state); border-radius: var(--radius-lg); background: var(--surface); box-shadow: var(--shadow-card); }
+.line-card.is-connected { --line-state: var(--success); }
+.line-card.is-waiting { --line-state: var(--warning); }
+.line-card.is-lost { --line-state: var(--error); }
+.line-card-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }
+.line-card-head > div { min-width: 0; }
+.line-card-head h3 { margin: 0; font-size: 15px; line-height: 1.3; overflow-wrap: anywhere; }
+.line-card-head p { margin: 3px 0 0; color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+.line-card-head .badge { flex: none; }
+.line-alert { margin: 0; padding: 8px 10px; border-radius: var(--radius-md); font-size: 12px; line-height: 1.45; overflow-wrap: anywhere; }
+.line-alert.is-error { color: #b42318; background: var(--error-soft); }
+.line-alert.is-warning { color: #b54708; background: var(--warning-soft); }
+.line-stats { margin: 0; display: grid; grid-template-columns: 1fr 1fr; gap: 1px; overflow: hidden; border: 1px solid var(--border-subtle); border-radius: var(--radius-md); background: var(--border-subtle); }
+.line-stats > div { min-width: 0; padding: 8px 10px; background: var(--surface); }
+.line-stats > .is-wide, .line-stats > div:nth-child(odd):last-child, .line-stats > div:nth-child(odd):has(+ .is-wide) { grid-column: 1 / -1; }
+.line-stats dt { color: var(--muted); font-size: 11px; }
+.line-stats dd { margin: 2px 0 0; color: var(--text); font-size: 13px; font-weight: 600; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.line-task { display: grid; gap: 8px; padding: 10px 12px; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--surface-subtle); font-size: 13px; font-weight: 600; }
+.line-task > span small, .line-task > .card-actions small { display: block; margin-top: 3px; color: var(--muted); font-size: 12px; font-weight: 400; line-height: 1.45; }
+.line-task .card-actions { margin: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.line-task .form-row select { min-width: 0; }
+.line-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.line-actions-more { display: flex; gap: 8px; margin-left: auto; }
+.line-settings { padding-top: 10px; border-top: 1px solid var(--border-subtle); }
+.line-settings summary { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; color: var(--text); font-size: 13px; font-weight: 600; cursor: pointer; list-style: none; }
+.line-settings summary::-webkit-details-marker { display: none; }
+.line-settings summary::before { content: ''; width: 6px; height: 6px; margin: 0 4px 0 2px; border-right: 1.5px solid var(--muted); border-bottom: 1.5px solid var(--muted); transform: rotate(-45deg); transition: transform .15s ease; }
+.line-settings[open] summary::before { transform: rotate(45deg); }
+.line-settings summary small { color: var(--muted); font-weight: 400; }
+.line-settings summary:focus-visible { outline: 2px solid var(--primary); outline-offset: 3px; border-radius: 4px; }
+.line-settings-body { display: grid; gap: 8px; margin-top: 10px; }
+.line-setting { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; padding: 10px 12px; border: 1px solid var(--border-subtle); border-radius: var(--radius-md); background: var(--surface-subtle); color: var(--text); font-size: 13px; font-weight: 600; }
+.line-setting > span { min-width: 0; }
+.line-setting small { display: block; margin-top: 3px; color: var(--muted); font-size: 12px; font-weight: 400; line-height: 1.45; }
+.line-setting input[type="checkbox"] { flex: none; width: 16px; height: 16px; min-height: 0; margin-top: 2px; accent-color: var(--primary); }
+.line-setting.is-dirty { border-color: var(--primary); }
+.line-settings-body .form-row select { min-width: 0; }
+.line-settings-body .resource-meta { gap: 8px; padding: 4px 2px; border-top: 0; font-size: 12px; }
+.line-settings-body .resource-meta strong { text-align: right; overflow-wrap: anywhere; }
+@media (prefers-reduced-motion: reduce) { .line-settings summary::before { transition: none; } }

@@ -44,7 +44,10 @@ export function DeviceProfileChoice({ number, canManage }: { number: AnyRow; can
   const [error, setError] = useState('');
   // A line paired with its phone keeps it: changing phones needs "Como está hoje" and a new pairing first.
   const phoneLocked = Boolean(line.device_profile_active);
-  const { phones, error: phonesError } = useMultiloginPhones(canManage && mode === 'new' && !phoneLocked);
+  const [swapping, setSwapping] = useState(false);
+  // The list is only needed to pick a phone: a line that already has one shows it until "Trocar celular".
+  const picking = mode === 'new' && !phoneLocked && (!line.multilogin_phone_id || swapping);
+  const { phones, error: phonesError } = useMultiloginPhones(canManage && picking);
   if (!canManage) return null;
 
   const enabled = mode === 'new';
@@ -54,6 +57,7 @@ export function DeviceProfileChoice({ number, canManage }: { number: AnyRow; can
     try {
       const body = enabled && phoneId !== (line.multilogin_phone_id ?? '') ? { enabled, multiloginPhoneId: phoneId } : { enabled };
       setLine(await json(`/api/numbers/${number.id}/device-profile`, { method: 'PATCH', body: JSON.stringify(body) }));
+      setSwapping(false);
     } catch (failure) { setError(failure instanceof Error ? failure.message : String(failure)); }
     finally { setSaving(false); }
   };
@@ -61,7 +65,7 @@ export function DeviceProfileChoice({ number, canManage }: { number: AnyRow; can
   const android = line.device_profile?.android;
 
   return <>
-    <div className={`admin-flag-row${dirty ? ' is-dirty' : ''}`}>
+    <div className={`line-setting${dirty ? ' is-dirty' : ''}`}>
       <span>{DEVICE_PROFILE_LABEL}<small>{DEVICE_PROFILE_HINT}</small></span>
     </div>
     <div className="form-row">
@@ -69,7 +73,8 @@ export function DeviceProfileChoice({ number, canManage }: { number: AnyRow; can
         <option value="today">{DEVICE_PROFILE_OPTION_TODAY}</option>
         <option value="new">{DEVICE_PROFILE_OPTION_NEW}</option>
       </select>
-      {enabled && !phoneLocked && <MultiloginPhoneSelect value={phoneId} onChange={setPhoneId} phones={phones} disabled={saving} />}
+      {picking && <MultiloginPhoneSelect value={phoneId} onChange={setPhoneId} phones={phones} disabled={saving} />}
+      {enabled && !picking && !phoneLocked && line.multilogin_phone_id && <Button variant="ghost" type="button" disabled={saving} onClick={() => setSwapping(true)}>Trocar celular</Button>}
       {dirty && <Button variant="secondary" type="button" disabled={saving || (enabled && !phoneId)} onClick={() => void save()}>{saving ? 'Salvando...' : 'Salvar camuflagem'}</Button>}
     </div>
     {state && <div className="resource-meta"><span>Nova camuflagem</span><Badge tone={state.tone}>{state.label}</Badge></div>}

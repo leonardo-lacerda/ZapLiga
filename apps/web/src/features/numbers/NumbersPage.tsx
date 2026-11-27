@@ -67,11 +67,16 @@ export function NumbersPage({ numbers, numbersTotal, numbersOffset, onNumbersPag
           </div>
         </div>
 
-        {canManageStealth && <label className="admin-flag-row">
-          <span>{STEALTH_LABEL}<small>{STEALTH_HINT}</small></span>
-          <input type="checkbox" name="stealth" checked={Boolean(numberForm.stealth)} onChange={(e) => setNumberForm({ ...numberForm, stealth: e.target.checked })} />
-        </label>}
-        {canManageStealth && <CreateDeviceProfileField numberForm={numberForm} setNumberForm={setNumberForm} />}
+        {canManageStealth && <details className="line-settings">
+          <summary><span>Camuflagem da linha</span><small>Só o admin do ZapLiga</small></summary>
+          <div className="line-settings-body">
+            <label className="line-setting">
+              <span>{STEALTH_LABEL}<small>{STEALTH_HINT}</small></span>
+              <input type="checkbox" name="stealth" checked={Boolean(numberForm.stealth)} onChange={(e) => setNumberForm({ ...numberForm, stealth: e.target.checked })} />
+            </label>
+            <CreateDeviceProfileField numberForm={numberForm} setNumberForm={setNumberForm} />
+          </div>
+        </details>}
 
         <div className="number-form-footer">
           <p className="form-hint">A linha nasce com os limites de <strong>Configurações do discador</strong> (chamadas simultâneas e proteção entre chamadas). Depois de criar, conecte pelo card da sessão: <strong>Abrir QR</strong> (escanear com o celular) ou <strong>Conectar por código</strong> (digitar um código no WhatsApp do celular).</p>
@@ -79,22 +84,30 @@ export function NumbersPage({ numbers, numbersTotal, numbersOffset, onNumbersPag
         </div>
       </form>
     </Panel>}
-    <div className="resource-grid">
-      {numbers.map((number: AnyRow) => <div className="resource-card" key={number.id}>
-        <div className="resource-card-header"><div className="resource-icon blue"><Icon name="phone" size={18} /></div><Badge tone={connectedStatuses.includes(String(number.status).toLowerCase()) ? 'success' : 'neutral'}>{labelStatus(number.status)}</Badge></div>
-        <h3>{number.label}</h3><p>{number.phone || 'Telefone não informado'}</p>
-        <div className="resource-meta"><span>Limite de chamadas</span><strong>{number.max_concurrent_calls}</strong></div>
-        <div className="resource-meta"><span>Cadência protegida</span><strong>{number.max_calls_per_window ?? 3} / {number.call_window_seconds ?? 180}s</strong></div>
-        <CallBlock flaggedUntil={number.flagged_until} />
-        <DialPause number={number} />
-        <LineHealth number={number} />
-        {canManageNumbers && <RegistrationReasonForm number={number} />}
-        {canManageNumbers && <CanaryStep number={number} canaryCall={canaryCall} stationReady={stationReady} />}
-        <VerificationOnlyToggle number={number} canManage={canManageNumbers} />
-        <StealthToggle number={number} canManage={canManageStealth} />
-        <DeviceProfileChoice number={number} canManage={canManageStealth} />
-        {canManageNumbers && <div className="card-actions">{!connectedStatuses.includes(String(number.status).toLowerCase()) && <><Button variant="secondary" icon="qr" disabled={qrLoading} onClick={() => void showQr(number.id)}>Abrir QR</Button><Button variant="secondary" icon="phone" disabled={qrLoading} onClick={() => setPairNumber(number)}>Conectar por código</Button></>}<Button variant="ghost" icon="refresh" disabled={qrLoading} onClick={() => void reconnectNumber(number.id)}>Reconectar</Button><Button variant="danger" icon="close" disabled={qrLoading} onClick={() => void removeNumber(number.id, number.label)}>Remover</Button></div>}
-      </div>)}
+    <div className="line-grid">
+      {numbers.map((number: AnyRow) => {
+        const connected = connectedStatuses.includes(String(number.status).toLowerCase());
+        const lost = Boolean(number.loss_cause || number.loss_reason) || Number(number.removal_count ?? 0) >= RETIRED_AFTER_LOSSES;
+        return <article className={`line-card ${lost ? 'is-lost' : connected ? 'is-connected' : 'is-waiting'}`} key={number.id}>
+          <header className="line-card-head">
+            <div><h3>{number.label}</h3><p>{formatPhone(number.phone) || 'Telefone não informado'}</p></div>
+            <Badge tone={connected ? 'success' : lost ? 'error' : 'neutral'}>{labelStatus(number.status)}</Badge>
+          </header>
+          <LineAlerts number={number} />
+          <LineStats number={number} />
+          {!canManageNumbers && <VerificationOnlyToggle number={number} canManage={false} />}
+          {canManageNumbers && <RegistrationReasonForm number={number} />}
+          {canManageNumbers && <CanaryStep number={number} canaryCall={canaryCall} stationReady={stationReady} />}
+          {canManageNumbers && <div className="line-actions">
+            {!connected && <><Button variant="secondary" icon="qr" disabled={qrLoading} onClick={() => void showQr(number.id)}>Abrir QR</Button><Button variant="secondary" icon="phone" disabled={qrLoading} onClick={() => setPairNumber(number)}>Conectar por código</Button></>}
+            <span className="line-actions-more">
+              <Button variant="ghost" icon="refresh" disabled={qrLoading} onClick={() => void reconnectNumber(number.id)}>Reconectar</Button>
+              <Button variant="danger" icon="close" disabled={qrLoading} onClick={() => void removeNumber(number.id, number.label)}>Remover</Button>
+            </span>
+          </div>}
+          {(canManageNumbers || canManageStealth) && <LineSettings number={number} canManageNumbers={canManageNumbers} canManageStealth={canManageStealth} />}
+        </article>;
+      })}
       {!numbers.length && <div className="full-span"><EmptyState title="Nenhum número cadastrado" description={canManageNumbers ? 'Adicione uma sessão para conectar seu WhatsApp.' : 'Os números serão configurados pelo administrador da plataforma.'} /></div>}
     </div>
     <Pagination offset={numbersOffset} limit={PAGE_SIZE} total={numbersTotal} onChange={onNumbersPageChange} />
@@ -107,7 +120,7 @@ export function NumbersPage({ numbers, numbersTotal, numbersOffset, onNumbersPag
 function CallBlock({ flaggedUntil }: { flaggedUntil?: string | null }) {
   if (!flaggedUntil || new Date(flaggedUntil).getTime() <= Date.now()) return null;
   const until = new Date(flaggedUntil).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
-  return <div className="resource-meta"><span>Ligações</span><Badge tone="warning">Bloqueadas até {until}</Badge></div>;
+  return <p className="line-alert is-warning">Ligações bloqueadas até {until}</p>;
 }
 
 const RETIRED_AFTER_LOSSES = 2;
@@ -133,7 +146,7 @@ function LossSummary() {
 // Pausa que o WhatsApp impôs (banimento temporário, limite de alcance) ou ligação sem áudio: a linha não disca até o prazo.
 function DialPause({ number }: { number: AnyRow }) {
   if (!number.dial_blocked_until || new Date(number.dial_blocked_until).getTime() <= Date.now()) return null;
-  return <div className="resource-meta"><span>Ligações</span><Badge tone="warning">Pausadas até {formatWhen(number.dial_blocked_until)} · {LOSS_CAUSE_LABEL[number.dial_block_cause] ?? 'sinal do WhatsApp'}</Badge></div>;
+  return <p className="line-alert is-warning">Pausadas até {formatWhen(number.dial_blocked_until)} · {LOSS_CAUSE_LABEL[number.dial_block_cause] ?? 'sinal do WhatsApp'}</p>;
 }
 
 // O que o celular mostrou quando o WhatsApp recusou o registro: só a operação vê isso, então registra aqui.
@@ -147,9 +160,9 @@ function RegistrationReasonForm({ number }: { number: AnyRow }) {
     try { await json(`/api/numbers/${number.id}/registration-reason`, { method: 'POST', body: JSON.stringify({ reason }) }); setSaved(reason); }
     catch (failure) { setError(failure instanceof Error ? failure.message : String(failure)); }
   };
-  return <div className="admin-flag-row">
+  return <div className="line-task">
     <span>O que o celular mostrou?<small>Se o WhatsApp recusou o número no celular, registre o motivo para a operação saber o que fazer.</small></span>
-    <div className="card-actions">
+    <div className="form-row">
       <select aria-label={`Motivo da recusa de ${number.label}`} value={reason} onChange={(event) => setReason(event.target.value)}>
         <option value="">Selecione</option>
         {Object.entries(REGISTRATION_REASON_LABEL).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
@@ -160,18 +173,57 @@ function RegistrationReasonForm({ number }: { number: AnyRow }) {
   </div>;
 }
 
-// Por que a linha caiu, quantas ligações ela fez hoje (limite da linha jovem) e quantas vezes reconectou.
-function LineHealth({ number }: { number: AnyRow }) {
+const formatPhone = (value: unknown) => {
+  const digits = String(value ?? '').replace(/\D/g, '');
+  const match = /^55(\d{2})(\d{4,5})(\d{4})$/.exec(digits);
+  return match ? `+55 ${match[1]} ${match[2]}-${match[3]}` : digits;
+};
+
+// O que pede atenção na linha, em frases curtas: aposentada, por que caiu, bloqueio e pausa das ligações.
+function LineAlerts({ number }: { number: AnyRow }) {
   const retired = Number(number.removal_count ?? 0) >= RETIRED_AFTER_LOSSES;
+  const cause = number.loss_cause ?? number.loss_reason;
   return <>
-    {retired && <div className="resource-meta"><span>Linha</span><Badge tone="error">Aposentada: o WhatsApp tirou este número {number.removal_count} vezes</Badge></div>}
-    {!retired && (number.loss_cause || number.loss_reason) && <div className="resource-meta"><span>Queda</span><Badge tone="error">{LOSS_CAUSE_ACTION[number.loss_cause ?? number.loss_reason] ?? number.loss_cause ?? number.loss_reason}</Badge></div>}
-    {number.loss_detail?.violationReason && <div className="resource-meta"><span>Motivo informado</span><strong>{number.loss_detail.violationReason}</strong></div>}
-    {number.losses_recent && Object.keys(number.losses_recent).length > 0 && <div className="resource-meta"><span>Quedas em {LOSS_SUMMARY_DAYS} dias</span><strong>{Object.entries(number.losses_recent).map(([cause, total]) => `${LOSS_CAUSE_LABEL[cause] ?? cause} ${total}`).join(' · ')}</strong></div>}
-    {number.young && <div className="resource-meta"><span>Ligações hoje</span><strong>{number.calls_today ?? 0}/{YOUNG_LINE_DAILY_CALLS}</strong></div>}
-    {Number(number.reconnects_24h ?? 0) > 0 && <div className="resource-meta"><span>Reconexões em 24 h</span><strong>{number.reconnects_24h}</strong></div>}
-    {number.network_month_bytes != null && <div className="resource-meta"><span>Rede da proxy</span><strong>hoje {formatBytes(number.network_today_bytes)} · mês {formatBytes(number.network_month_bytes)}</strong></div>}
+    {retired && <p className="line-alert is-error">Aposentada: o WhatsApp tirou este número {number.removal_count} vezes</p>}
+    {!retired && cause && <p className="line-alert is-error">{LOSS_CAUSE_ACTION[cause] ?? cause}</p>}
+    {number.loss_detail?.violationReason && <p className="line-alert is-error">Motivo informado: <strong>{number.loss_detail.violationReason}</strong></p>}
+    <CallBlock flaggedUntil={number.flagged_until} />
+    <DialPause number={number} />
   </>;
+}
+
+// Os números da linha: limites, ligações de hoje (linha jovem), reconexões, quedas e rede da proxy.
+function LineStats({ number }: { number: AnyRow }) {
+  const losses = number.losses_recent && Object.keys(number.losses_recent).length > 0
+    ? Object.entries(number.losses_recent).map(([cause, total]) => `${LOSS_CAUSE_LABEL[cause] ?? cause} ${total}`).join(' · ')
+    : null;
+  return <dl className="line-stats">
+    <div><dt>Limite de chamadas</dt><dd>{number.max_concurrent_calls}</dd></div>
+    <div><dt>Cadência protegida</dt><dd>{number.max_calls_per_window ?? 3} / {number.call_window_seconds ?? 180}s</dd></div>
+    {number.young && <div><dt>Ligações hoje</dt><dd>{number.calls_today ?? 0}/{YOUNG_LINE_DAILY_CALLS}</dd></div>}
+    {Number(number.reconnects_24h ?? 0) > 0 && <div><dt>Reconexões em 24 h</dt><dd>{number.reconnects_24h}</dd></div>}
+    {losses && <div className="is-wide"><dt>Quedas em {LOSS_SUMMARY_DAYS} dias</dt><dd>{losses}</dd></div>}
+    {number.network_month_bytes != null && <div className="is-wide"><dt>Rede da proxy</dt><dd>hoje {formatBytes(number.network_today_bytes)} · mês {formatBytes(number.network_month_bytes)}</dd></div>}
+  </dl>;
+}
+
+const DEVICE_PROFILE_SUMMARY: Record<string, string> = { pending: 'Nova camuflagem: no próximo pareamento', active: 'Nova camuflagem', leaving: 'Nova camuflagem: sai no próximo pareamento' };
+
+// Ajustes que mudam pouco: recolhidos, com um resumo do que está ligado.
+function LineSettings({ number, canManageNumbers, canManageStealth }: { number: AnyRow; canManageNumbers: boolean; canManageStealth: boolean }) {
+  const on = [
+    number.verification_only && 'Só verificação',
+    canManageStealth && number.stealth_enabled && 'Camuflagem de navegador',
+    canManageStealth && DEVICE_PROFILE_SUMMARY[number.device_profile_state ?? ''],
+  ].filter(Boolean) as string[];
+  return <details className="line-settings">
+    <summary><span>Ajustes da linha</span>{on.map((item) => <Badge key={item} tone="info">{item}</Badge>)}</summary>
+    <div className="line-settings-body">
+      {canManageNumbers && <VerificationOnlyToggle number={number} canManage />}
+      <StealthToggle number={number} canManage={canManageStealth} />
+      <DeviceProfileChoice number={number} canManage={canManageStealth} />
+    </div>
+  </details>;
 }
 
 /**
@@ -206,7 +258,7 @@ function CanaryStep({ number, canaryCall, stationReady }: { number: AnyRow; cana
     catch (failure) { setError(failure instanceof Error ? failure.message : String(failure)); }
     finally { setBusy(false); }
   };
-  return <div className="admin-flag-row">
+  return <div className="line-task">
     <span>{number.canary_status === 'failed' ? 'Canário reprovado: tente de novo depois do descanso' : 'Aguardando canário'}<small>A primeira ligação depois do QR vai para o celular de alguém da equipe, nunca para um lead. Só depois a linha liga para leads.</small></span>
     {connected && !blocked && <div className="card-actions">
       {!phone && <Button variant="secondary" icon="note" disabled={busy} onClick={() => void sendMessage()}>1. Enviar mensagem</Button>}
@@ -236,7 +288,7 @@ export function VerificationOnlyToggle({ number, canManage }: { number: AnyRow; 
     finally { setSaving(false); }
   };
   return <>
-    <label className="admin-flag-row">
+    <label className="line-setting">
       <span>Só para verificação de WhatsApp<small>A linha só confere se um telefone tem WhatsApp e não faz ligações.</small></span>
       <input type="checkbox" checked={enabled} disabled={saving} onChange={(event) => void change(event.target.checked)} />
     </label>
@@ -253,7 +305,7 @@ function CreateDeviceProfileField({ numberForm, setNumberForm }: { numberForm: A
     if (!next) { const { multiloginPhoneId: _dropped, ...rest } = numberForm; setNumberForm(rest); }
   };
   return <>
-    <label className="admin-flag-row">
+    <label className="line-setting">
       <span>{DEVICE_PROFILE_OPTION_NEW}<small>{DEVICE_PROFILE_CREATE_HINT}</small></span>
       <input type="checkbox" checked={on} onChange={(event) => toggle(event.target.checked)} />
     </label>
@@ -277,7 +329,7 @@ export function StealthToggle({ number, canManage }: { number: AnyRow; canManage
     finally { setSaving(false); }
   };
   return <>
-    <label className="admin-flag-row">
+    <label className="line-setting">
       <span>{STEALTH_LABEL}<small>{STEALTH_HINT}</small></span>
       <input type="checkbox" checked={line.enabled} disabled={saving} onChange={(event) => void change(event.target.checked)} />
     </label>
