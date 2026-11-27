@@ -4,8 +4,11 @@
  * way the old main-thread ScriptProcessor did.
  *
  * Loaded by AudioBridge with `audioWorklet.addModule`. Messages:
- * - zapliga-playout: in, ArrayBuffer of 16 kHz PCM16; out, { type: 'stats', ...PlayoutStats } about once a second.
- * - zapliga-capture: in, { type: 'mute', muted }; out, ArrayBuffer frames of 960 16 kHz PCM16 samples.
+ * - zapliga-playout: in, ArrayBuffer of 16 kHz PCM16, or { type: 'source', port } whose messages are
+ *   such buffers (the audio worker's port, which bypasses the page); out, { type: 'stats', ...PlayoutStats }
+ *   about once a second.
+ * - zapliga-capture: in, { type: 'mute', muted }, or { type: 'sink', port } to send the frames there (the
+ *   audio worker) instead of to the page; out, ArrayBuffer frames of 960 16 kHz PCM16 samples.
  */
 import { MicDownsampler, Playout } from './callAudioDsp';
 
@@ -26,8 +29,12 @@ class PlayoutProcessor extends AudioWorkletProcessor {
 
   constructor() {
     super();
-    this.port.onmessage = (event: MessageEvent) => {
+    const push = (event: MessageEvent) => {
       if (event.data instanceof ArrayBuffer) this.playout.push(new Int16Array(event.data));
+    };
+    this.port.onmessage = (event: MessageEvent) => {
+      if (event.data?.type === 'source') (event.data.port as MessagePort).onmessage = push;
+      else push(event);
     };
   }
 
@@ -48,8 +55,9 @@ class PlayoutProcessor extends AudioWorkletProcessor {
 
 class CaptureProcessor extends AudioWorkletProcessor {
   private muted = false;
+  private sink?: MessagePort;
   private readonly downsampler = new MicDownsampler(sampleRate, (frame) => {
-    this.port.postMessage(frame.buffer, [frame.buffer]);
+    (this.sink ?? this.port).postMessage(frame.buffer, [frame.buffer]);
   });
   private readonly silence = new Float32Array(128);
 
@@ -57,6 +65,7 @@ class CaptureProcessor extends AudioWorkletProcessor {
     super();
     this.port.onmessage = (event: MessageEvent) => {
       if (event.data?.type === 'mute') this.muted = Boolean(event.data.muted);
+      if (event.data?.type === 'sink') this.sink = event.data.port as MessagePort;
     };
   }
 

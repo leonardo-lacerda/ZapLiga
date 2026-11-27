@@ -65,6 +65,9 @@ type CallResource = {
   sdrId: string;
   media?: WebSocket;
   browser?: WebSocket;
+  // Audio-only channel the station opens from a Web Worker. While open, call audio uses it instead
+  // of `browser`, so a busy page cannot hold frames back; `browser` stays the fallback.
+  audio?: WebSocket;
   mediaActive: boolean;
   mediaOpen?: boolean;
   answerSignalReceived?: boolean;
@@ -114,6 +117,8 @@ type CallResource = {
     /** Frames the browser skipped to keep the playout backlog bounded (see AudioBridge). */
     framesDropped?: number;
     underruns?: number;
+    targetMs?: number;
+    audioChannel?: string;
     peak?: number;
     queuedSeconds?: number;
     /** The output endpoint the browser is actually playing on ('' = system default). */
@@ -1717,6 +1722,17 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
     if (resource.media?.readyState === WebSocket.OPEN) this.gateway.sendToSdr(sdrId, { type: 'media_open', callId });
   }
 
+  attachAudio(callId: string, sdrId: string, socket: WebSocket, tenantId = legacyTenantId()) {
+    const resource = this.active.get(callId);
+    if (!resource || resource.finishing || resource.tenantId !== tenantId || resource.sdrId !== sdrId) return socket.close(1008, 'call not assigned');
+    if (resource.audio && resource.audio !== socket) resource.audio.close(1000, 'substituido');
+    resource.audio = socket;
+    // Microphone frames take the same path as the ones on the control socket.
+    socket.on('message', (data, isBinary) => { if (isBinary) resource.browserMessageHandler?.(data, true); });
+    socket.on('close', () => { if (resource.audio === socket) resource.audio = undefined; });
+    this.log('Canal de áudio dedicado conectado', 'info', callId, tenantId);
+  }
+
   async attachMedia(callId: string, sdrId: string, browser: WebSocket, tenantId = legacyTenantId()) {
     const resource = this.active.get(callId);
     if (!resource || resource.tenantId !== tenantId || resource.sdrId !== sdrId) return browser.close(1008, 'call not assigned');
@@ -1872,9 +1888,8 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
           this.log('Cliente aceitou a chamada; áudio liberado para o SDR', 'info', callId);
         }
         resource.recorder?.append('lead', pcmBytes);
-        if (browser.readyState === WebSocket.OPEN) {
-          if (this.relayAudio(browser, data)) resource.inboundRelayed = (resource.inboundRelayed ?? 0) + 1;
-        }
+        const listener = resource.audio?.readyState === WebSocket.OPEN ? resource.audio : browser;
+        if (this.relayAudio(listener, data)) resource.inboundRelayed = (resource.inboundRelayed ?? 0) + 1;
       });
       media.on('error', (error) => {
         if (/unexpected server response:\s*429/i.test(error.message)) {
@@ -1964,6 +1979,8 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
                 underruns: Number(message.underruns) || 0,
                 peak: Number(message.peak) || 0,
                 queuedSeconds: Number(message.queuedSeconds) || 0,
+                targetMs: Number(message.targetMs) || 0,
+                audioChannel: String(message.audioChannel ?? '').slice(0, 20),
                 outputDevice: String(message.outputDevice ?? '').slice(0, 120),
                 sinkMode: String(message.sinkMode ?? '').slice(0, 20),
                 inputDevice: String(message.inputDevice ?? '').slice(0, 120),
@@ -2151,7 +2168,7 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
         if (resource.browser && resource.browserErrorHandler) resource.browser.off('error', resource.browserErrorHandler);
         this.log(`Áudio da chamada: entrada repassada=${resource.inboundRelayed ?? 0}, entrada descartada(pré-atendimento)=${resource.inboundDroppedPreAnswer ?? 0}, microfone repassado=${resource.micFramesRelayed ?? 0}, atendimento sinalizado=${Boolean(resource.answerSignalReceived)}, mediaAtiva=${resource.mediaActive}`, 'info', callId, tenantId);
         const playback = resource.browserPlayback;
-        this.log(`Diagnóstico de reprodução: cliente→servidor pico=${resource.inboundPcmPeak ?? 0}, amostras não-zero=${resource.inboundPcmNonZeroSamples ?? 0}/${resource.inboundPcmSamples ?? 0}; SDR→cliente pico=${resource.micPcmPeak ?? 0}, amostras não-zero=${resource.micPcmNonZeroSamples ?? 0}/${resource.micPcmSamples ?? 0}; navegador=${playback ? `${playback.contextState}@${playback.outputSampleRate}Hz recebidos=${playback.framesReceived} agendados=${playback.framesScheduled} concluídos=${playback.framesEnded} descartados=${playback.framesDropped ?? 0} faltas=${playback.underruns ?? 0} pico=${playback.peak} fila=${playback.queuedSeconds?.toFixed(2)}s saída=${playback.outputDevice || 'padrão do sistema'} (${playback.sinkMode || 'default'}) microfone=${playback.inputDevice || 'padrão do sistema'}` : 'sem telemetria'}`, 'info', callId, tenantId);
+        this.log(`Diagnóstico de reprodução: cliente→servidor pico=${resource.inboundPcmPeak ?? 0}, amostras não-zero=${resource.inboundPcmNonZeroSamples ?? 0}/${resource.inboundPcmSamples ?? 0}; SDR→cliente pico=${resource.micPcmPeak ?? 0}, amostras não-zero=${resource.micPcmNonZeroSamples ?? 0}/${resource.micPcmSamples ?? 0}; navegador=${playback ? `${playback.contextState}@${playback.outputSampleRate}Hz recebidos=${playback.framesReceived} agendados=${playback.framesScheduled} concluídos=${playback.framesEnded} descartados=${playback.framesDropped ?? 0} faltas=${playback.underruns ?? 0} pico=${playback.peak} fila=${playback.queuedSeconds?.toFixed(2)}s folga=${playback.targetMs ?? 0}ms canal=${playback.audioChannel || 'controle'} saída=${playback.outputDevice || 'padrão do sistema'} (${playback.sinkMode || 'default'}) microfone=${playback.inputDevice || 'padrão do sistema'}` : 'sem telemetria'}`, 'info', callId, tenantId);
         // Explicitly hang up the WhatsApp call. Closing the media WS alone can
         // leave the lead's phone stuck on "Reconnecting…"; terminating by
         // call_id makes Waxum send the `<terminate>` stanza reliably.
@@ -2161,6 +2178,7 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
             .catch((error) => this.logger.warn(`Waxum terminate falhou para ${callId}: ${safeOperationalError(error)}`));
         }
         if (resource.media && resource.media.readyState === WebSocket.OPEN) resource.media.close();
+        resource.audio?.close(1000, 'chamada encerrada');
       }
       const call = await this.db.query(`SELECT c.*, s.id AS sdr_id, s.name AS sdr_name, n.id AS number_id, n.label AS number_label, n.cooldown_seconds, l.name AS lead_name, l.phone AS lead_phone, l.attempts, ds.max_attempts_per_lead, ds.retry_delay_minutes, ev.config AS experiment_variant_config FROM calls c JOIN sdrs s ON s.tenant_id = c.tenant_id AND s.id = c.sdr_id JOIN whatsapp_numbers n ON n.id = c.number_id JOIN leads l ON l.tenant_id = c.tenant_id AND l.id = c.lead_id JOIN dialer_settings ds ON ds.tenant_id = c.tenant_id LEFT JOIN experiment_variants ev ON ev.tenant_id = c.tenant_id AND ev.experiment_id = c.experiment_id AND ev.id = c.experiment_variant_id WHERE c.tenant_id = $1 AND c.id = $2`, [tenantId, callId]);
       if (!call.rows[0]) return;

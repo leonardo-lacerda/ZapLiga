@@ -490,12 +490,23 @@ test.describe.serial('Gate B - jornadas criticas', () => {
     const startedPromise = waitForWs('call_started');
     const call = await expectOk(await api.post(`/api/tenants/${tenantA}/callbacks/${callbackId}/call`, { headers: headers(leaderToken, tenantA) }));
     await startedPromise;
+    // The station's dedicated audio channel (opened from a Web Worker in the browser) takes over the call audio.
+    const audioTicket = await expectOk(await api.post('/api/auth/ws-ticket', { headers: headers(sdrToken, tenantA) }));
+    const audioSocket = new WebSocket(`${wsBase}/ws/tenants/${tenantA}/sdr/${sdrId}/audio/${call.callId}?ticket=${encodeURIComponent(audioTicket.ticket)}`);
+    const frame = await new Promise<Buffer>((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error('Timeout aguardando áudio no canal dedicado')), 12_000);
+      audioSocket.on('message', (raw, binary) => { if (binary) { clearTimeout(timer); resolve(Buffer.from(raw as any)); } });
+      audioSocket.once('error', reject);
+    });
+    expect(frame.length).toBeGreaterThanOrEqual(640);
+    audioSocket.send(Buffer.alloc(1920));
     await delay(500);
     control.send(JSON.stringify({ type: 'outcome', callId: call.callId, outcome: 'completed' }));
     const pause = await waitForPause(api);
     await expectOk(await api.post(`/api/tenants/${tenantA}/sdrs/${sdrId}/pauses/${pause.current_pause_id}/finish`, { headers: headers(sdrToken, tenantA), data: { callResult: 'interessado', pipelineStage: 'qualificado', notes: 'Callback concluído no teste E2E', continueAvailable: false } }));
     callbacks = await expectOk(await api.get(`/api/tenants/${tenantA}/callbacks`, { headers: headers(leaderToken, tenantA) }));
     expect(callbacks.find((item: any) => item.id === callbackId).status).toBe('completed');
+    audioSocket.close();
     await api.dispose();
   });
 

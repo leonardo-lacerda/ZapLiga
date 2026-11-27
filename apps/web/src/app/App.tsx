@@ -251,7 +251,11 @@ function AuthenticatedApp() {
   const startAudio = (socket: WebSocket, callId: string) => {
     if (audioCall.current === callId) return;
     audioCall.current = callId;
-    void audio.current.start(socket, callId).catch((e) => {
+    const audioChannelUrl = async () => {
+      const ticketResult = await json('/api/auth/ws-ticket', { method: 'POST' });
+      return `${wsUrl()}/ws/tenants/${encodeURIComponent(activeTenantId)}/sdr/${encodeURIComponent(sdrId)}/audio/${encodeURIComponent(callId)}?ticket=${encodeURIComponent(ticketResult.ticket)}`;
+    };
+    void audio.current.start(socket, callId, audioChannelUrl).catch((e) => {
       const message = e instanceof Error ? e.message : String(e);
       setError(`Áudio do SDR: ${message}`);
       if (socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ type: 'outcome', callId, outcome: `audio_error:${message.slice(0, 120)}` }));

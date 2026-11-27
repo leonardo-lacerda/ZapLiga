@@ -53,6 +53,7 @@ export class SdrGateway implements OnModuleDestroy {
           this.server?.handleUpgrade(request, socket, head, (ws) => {
             if (route.kind === 'control') return this.handleControl(ws, identity);
             if (route.kind === 'operations') return void this.handleOperations(ws, identity);
+            if (route.kind === 'audio') return void this.handleAudio(ws, decodeURIComponent(route.sdrId), decodeURIComponent(route.callId), identity);
             return this.handleMedia(ws, decodeURIComponent(route.sdrId), decodeURIComponent(route.callId), identity);
           });
         })().catch(() => socket.destroy());
@@ -255,5 +256,13 @@ export class SdrGateway implements OnModuleDestroy {
     if (!owner.rows[0]) return socket.close(1008, 'sdr not owned by ticket');
     socket.on('error', () => socket.close());
     void this.dialer.attachMedia(callId, sdrId, socket, identity.tenantId);
+  }
+
+  // The station's own user only: the SDR row is claimed by the user who opened the station.
+  private async handleAudio(socket: WebSocket, sdrId: string, callId: string, identity: { tenantId: string; userId: string }) {
+    socket.on('error', () => socket.close());
+    const owner = await this.db.query('SELECT 1 FROM sdrs WHERE tenant_id = $1 AND id = $2 AND user_id = $3 LIMIT 1', [identity.tenantId, sdrId, identity.userId]);
+    if (!owner.rows[0]) return socket.close(1008, 'sdr not owned by ticket');
+    this.dialer.attachAudio(callId, sdrId, socket, identity.tenantId);
   }
 }

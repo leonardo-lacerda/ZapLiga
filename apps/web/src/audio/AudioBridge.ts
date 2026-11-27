@@ -69,6 +69,8 @@ export class AudioBridge {
   private starting?: Promise<void>;
   private resuming?: Promise<void>;
   private socket?: WebSocket;
+  /** Carries the call audio on its own socket, off the main thread (callAudioSocket.worker.ts). */
+  private audioWorker?: Worker;
   private stopRequested = false;
   // Super admin only: dial with a silent input instead of a microphone (testing lines from a PC without one).
   private silentInput = readStoredDevice(STORAGE_SILENT_INPUT_KEY) === '1';
@@ -279,12 +281,50 @@ export class AudioBridge {
     return this.starting;
   }
 
-  async start(socket: WebSocket, callId: string) {
+  /**
+   * `audioChannelUrl` resolves the URL of the call's dedicated audio socket. Until it is open (or if
+   * it never opens) the audio keeps flowing over `socket`, the control socket.
+   */
+  async start(socket: WebSocket, callId: string, audioChannelUrl?: () => Promise<string>) {
     this.socket = socket;
     this.activeCallId = callId;
     await this.prepare();
     if (this.context?.state === 'suspended') await this.context.resume();
     this.reportPlaybackStatus(true);
+    if (audioChannelUrl && !this.audioWorker) {
+      void audioChannelUrl().then((url) => this.attachAudioWorker(url, callId)).catch(() => undefined);
+    }
+  }
+
+  private attachAudioWorker(url: string, callId: string) {
+    if (this.stopRequested || this.activeCallId !== callId || !this.playout || this.audioWorker) return;
+    const worker = new Worker(new URL('./callAudioSocket.worker.ts', import.meta.url), { type: 'module' });
+    worker.onmessage = (event: MessageEvent) => {
+      const message = event.data;
+      if (message?.type === 'inbound') {
+        const before = this.playbackFramesReceived;
+        this.playbackFramesReceived += Number(message.frames) || 0;
+        this.playbackPeak = Math.max(this.playbackPeak, Number(message.peak) || 0);
+        this.noteInbound(Number(message.peak) || 0);
+        if (Math.floor(before / 100) !== Math.floor(this.playbackFramesReceived / 100)) this.reportPlaybackStatus();
+      } else if (message?.type === 'mic' && message.frame instanceof ArrayBuffer && this.socket?.readyState === WebSocket.OPEN) {
+        this.socket.send(message.frame);
+      }
+    };
+    const toPlayout = new MessageChannel();
+    this.playout.port.postMessage({ type: 'source', port: toPlayout.port2 }, [toPlayout.port2]);
+    const fromCapture = new MessageChannel();
+    worker.postMessage({ type: 'open', url, playout: toPlayout.port1, capture: fromCapture.port2 }, [toPlayout.port1, fromCapture.port2]);
+    this.capture?.port.postMessage({ type: 'sink', port: fromCapture.port1 }, [fromCapture.port1]);
+    this.audioWorker = worker;
+  }
+
+  /** A microphone swap builds a new capture node: point it at the worker too. */
+  private connectCaptureToWorker() {
+    if (!this.audioWorker || !this.capture) return;
+    const channel = new MessageChannel();
+    this.audioWorker.postMessage({ type: 'capture', port: channel.port2 }, [channel.port2]);
+    this.capture.port.postMessage({ type: 'sink', port: channel.port1 }, [channel.port1]);
   }
 
   private async openMicrophone(): Promise<MediaStream> {
@@ -409,6 +449,7 @@ export class AudioBridge {
     this.source = source;
     this.capture = capture;
     this.silent = silent;
+    this.connectCaptureToWorker();
     stream.getAudioTracks().forEach((track) => { track.enabled = !this.muted; });
     const activeInputId = stream.getAudioTracks()[0]?.getSettings().deviceId ?? '';
     this.patchDeviceState({
@@ -593,6 +634,8 @@ export class AudioBridge {
         underruns: stats?.underruns ?? 0,
         peak: this.playbackPeak,
         queuedSeconds: stats ? stats.depth / 16000 : 0,
+        targetMs: stats?.targetMs ?? 0,
+        audioChannel: this.audioWorker ? 'worker' : 'control',
         outputDevice: this.deviceState.activeOutputLabel,
         sinkMode: this.deviceState.sinkMode,
         inputDevice: this.deviceState.activeInputLabel,
@@ -609,6 +652,8 @@ export class AudioBridge {
     this.inboundWindowPeak = 0;
     this.inboundListener?.({ receiving: false, peak: 0, updatedAt: Date.now() });
     this.detachCapture();
+    this.audioWorker?.terminate();
+    this.audioWorker = undefined;
     if (this.playout) this.playout.port.onmessage = null;
     this.playout?.disconnect();
     this.playbackGain?.disconnect();

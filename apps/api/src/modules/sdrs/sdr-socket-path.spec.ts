@@ -17,6 +17,10 @@ describe('parseSdrSocketPath', () => {
     expect(parseSdrSocketPath('/ws/tenants/tenant-1/sdr/sdr-1/call/call-1')).toEqual({ kind: 'media', tenantId: 'tenant-1', sdrId: 'sdr-1', callId: 'call-1' });
   });
 
+  it('routes the audio channel of a call', () => {
+    expect(parseSdrSocketPath('/ws/tenants/tenant-1/sdr/sdr-1/audio/call-1')).toEqual({ kind: 'audio', tenantId: 'tenant-1', sdrId: 'sdr-1', callId: 'call-1' });
+  });
+
   it('routes the legacy unscoped media path', () => {
     expect(parseSdrSocketPath('/ws/sdr/sdr-1/call/call-1')).toEqual({ kind: 'media', tenantId: undefined, sdrId: 'sdr-1', callId: 'call-1' });
   });

@@ -113,52 +113,82 @@ export type PlayoutStats = {
   underruns: number;
   /** 16 kHz samples waiting right now. */
   depth: number;
+  /** Cushion the playout is aiming for right now, in ms. */
+  targetMs: number;
 };
 
 export type PlayoutOptions = {
-  /** Cushion to build before playing, at the start and after every underrun. */
+  /** Smallest cushion: built before playing at the start, and where a steady call settles back to. */
   targetSeconds: number;
+  /** Largest cushion the playout grows to on a jittery connection. */
+  maxTargetSeconds: number;
+  /** How much the cushion grows after each underrun. */
+  targetStepSeconds: number;
+  /** Shrink the cushion by `targetStepSeconds / 3` after this long without an underrun. */
+  relaxAfterSeconds: number;
   /** Above target plus this, play up to 4% faster until the excess is gone. */
   slackSeconds: number;
-  /** Hard ceiling: beyond it, jump back to the target (a burst that would otherwise lag the call). */
-  maxSeconds: number;
+  /** Ceiling above the current target: beyond it, jump back to the target (a burst that would lag the call). */
+  burstSeconds: number;
   /** Fade length at every stop and start, so a gap is a dip instead of a click. */
   fadeSeconds: number;
+};
+
+export const DEFAULT_PLAYOUT_OPTIONS: PlayoutOptions = {
+  targetSeconds: 0.1,
+  maxTargetSeconds: 0.4,
+  targetStepSeconds: 0.06,
+  relaxAfterSeconds: 15,
+  slackSeconds: 0.06,
+  burstSeconds: 0.6,
+  fadeSeconds: 0.004,
 };
 
 /**
  * Customer audio: 16 kHz PCM16 in, device-rate float out, on the audio thread.
  *
- * Replaces scheduling one AudioBufferSourceNode per 20 ms frame. That design restarted with only
- * 40 ms of cushion after each underrun, so the next late packet caused another gap, and when the
- * late packets landed together it dropped 80 ms or more of speech at a hard splice. Here the
- * cushion is rebuilt to the target after a gap, both edges of a gap are faded, and an excess
- * backlog is drained by playing slightly faster instead of cutting words.
+ * The cushion adapts to the connection. A fixed 100 ms cushion turned every stall of the office
+ * network or of the page longer than that into a cut (38 cuts in one 80 s call in production), and
+ * the 500 ms ceiling threw whole words away after a longer stall. Each underrun now grows the
+ * cushion by one step up to `maxTargetSeconds`, a quiet stretch shrinks it again, the ceiling sits
+ * well above the target, both edges of a gap are faded, and an excess backlog is drained by playing
+ * slightly faster instead of cutting words.
  */
 export class Playout {
   private readonly buffer: Float32Array;
   private readonly capacity: number;
   private readonly step: number;
-  private readonly target: number;
+  private readonly minTarget: number;
+  private readonly maxTarget: number;
+  private readonly targetStep: number;
+  private readonly relaxAfter: number;
   private readonly slack: number;
-  private readonly max: number;
+  private readonly burst: number;
   private readonly fadeStep: number;
   private readonly fadeWire: number;
   private readonly smoother: FirLowpass;
+  private target: number;
+  /** Wire samples played since the last underrun or the last shrink of the cushion. */
+  private steadyPlayed = 0;
   private written = 0;
   private readPosition = 0;
   private priming = true;
   private gain = 0;
-  private readonly stats: PlayoutStats = { received: 0, played: 0, skipped: 0, underruns: 0, depth: 0 };
+  private readonly stats: PlayoutStats = { received: 0, played: 0, skipped: 0, underruns: 0, depth: 0, targetMs: 0 };
 
-  constructor(outputRate: number, options: PlayoutOptions = { targetSeconds: 0.1, slackSeconds: 0.06, maxSeconds: 0.5, fadeSeconds: 0.004 }) {
+  constructor(outputRate: number, overrides: Partial<PlayoutOptions> = {}) {
+    const options = { ...DEFAULT_PLAYOUT_OPTIONS, ...overrides };
     this.step = WIRE_RATE / outputRate;
-    this.target = Math.round(options.targetSeconds * WIRE_RATE);
+    this.minTarget = Math.round(options.targetSeconds * WIRE_RATE);
+    this.maxTarget = Math.max(this.minTarget, Math.round(options.maxTargetSeconds * WIRE_RATE));
+    this.targetStep = Math.round(options.targetStepSeconds * WIRE_RATE);
+    this.relaxAfter = Math.round(options.relaxAfterSeconds * WIRE_RATE);
+    this.target = this.minTarget;
     this.slack = Math.round(options.slackSeconds * WIRE_RATE);
-    this.max = Math.round(options.maxSeconds * WIRE_RATE);
+    this.burst = Math.round(options.burstSeconds * WIRE_RATE);
     this.fadeWire = Math.max(2, Math.round(options.fadeSeconds * WIRE_RATE));
     this.fadeStep = 1 / Math.max(1, options.fadeSeconds * outputRate);
-    this.capacity = this.max * 2 + WIRE_RATE;
+    this.capacity = (this.maxTarget + this.burst) * 2 + WIRE_RATE;
     this.buffer = new Float32Array(this.capacity);
     // Linear interpolation from 16 kHz leaves images above 8 kHz; filter them out of the output.
     this.smoother = new FirLowpass(outputRate, 7500, tapsFor(outputRate));
@@ -174,7 +204,7 @@ export class Playout {
     }
     this.written += pcm.length;
     this.stats.received += pcm.length;
-    if (this.available > this.max) {
+    if (this.available > this.target + this.burst) {
       const jump = this.available - this.target;
       this.readPosition += jump;
       this.stats.skipped += Math.floor(jump);
@@ -191,6 +221,8 @@ export class Playout {
           this.priming = true;
           this.stats.underruns += 1;
           this.gain = 0;
+          this.target = Math.min(this.maxTarget, this.target + this.targetStep);
+          this.steadyPlayed = 0;
         } else {
           const wanted = this.available > this.fadeWire + 1 ? 1 : 0;
           this.gain = wanted > this.gain ? Math.min(1, this.gain + this.fadeStep) : Math.max(0, this.gain - this.fadeStep);
@@ -204,6 +236,11 @@ export class Playout {
           const advance = this.step * rate;
           this.readPosition += advance;
           this.stats.played += advance;
+          this.steadyPlayed += advance;
+          if (this.steadyPlayed >= this.relaxAfter && this.target > this.minTarget) {
+            this.target = Math.max(this.minTarget, this.target - Math.round(this.targetStep / 3));
+            this.steadyPlayed = 0;
+          }
         }
       }
       out[i] = this.smoother.next(sample);
@@ -211,6 +248,6 @@ export class Playout {
   }
 
   snapshot(): PlayoutStats {
-    return { ...this.stats, played: Math.floor(this.stats.played), depth: Math.max(0, Math.floor(this.available)) };
+    return { ...this.stats, played: Math.floor(this.stats.played), depth: Math.max(0, Math.floor(this.available)), targetMs: Math.round((this.target / WIRE_RATE) * 1000) };
   }
 }
