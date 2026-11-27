@@ -23,6 +23,10 @@
   temporário sai como `temp_banned` (`code` 101-106, `expire_secs`), qualquer conexão recusada
   como `connect_failure` (`code`) e `GET /api/v1/sessions/{id}/reachout-timelock` devolve o limite
   de alcance como o servidor informa (`is_active`, `time_enforcement_ends`).
+- v11-device-profile (a construir): v10 mais o perfil Android por linha
+  (`patches/whatsapp-rust-client-profile-carrier.patch` e `patches/waxum-zapliga-device-profile.patch`,
+  [`docs/device-profile.md`](device-profile.md)). Uma linha que não escolheu a nova camuflagem manda
+  os mesmos pedidos de antes, então a v11 se comporta como a v10 para ela.
 - Rollback disponível no host: `zapliga-waxum:0.12.6-multirelay-v3` (a v3 continua carregada)
 
 ## Por que não a imagem oficial

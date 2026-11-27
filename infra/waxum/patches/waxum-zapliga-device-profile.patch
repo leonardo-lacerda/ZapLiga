@@ -1,0 +1,225 @@
+diff --git a/src/device_props.rs b/src/device_props.rs
+index 5fd30b8..0c8e4b6 100644
+--- a/src/device_props.rs
++++ b/src/device_props.rs
+@@ -95,6 +95,8 @@ struct SavedIdentity {
+     device_version: Option<String>,
+     #[serde(default, skip_serializing_if = "Option::is_none")]
+     locale: Option<String>,
++    #[serde(default, skip_serializing_if = "Option::is_none")]
++    android: Option<crate::models::sessions::AndroidProfileRequest>,
+ }
+ 
+ /// ZapLiga: the identity of a session, per line instead of per container (docs/stealth-profile.md).
+@@ -127,14 +129,15 @@ fn resolve_session_identity_with(
+     let os = pick(device.and_then(|d| d.os.as_deref()), &saved.device_os);
+     let platform = pick(device.and_then(|d| d.platform.as_deref()), &saved.device_platform);
+     let version = pick(device.and_then(|d| d.version.as_deref()), &saved.device_version);
+-    let client_profile = match saved.locale.as_deref() {
+-        Some(locale) => {
++    let client_profile = match (&saved.android, saved.locale.as_deref()) {
++        (Some(android), locale) => Some(android_profile(android, locale)),
++        (None, Some(locale)) => {
+             let mut profile = client_profile_from_env()
+                 .unwrap_or_else(wacore::client_profile::ClientProfile::web);
+             apply_locale(&mut profile, locale);
+             Some(profile)
+         }
+-        None => client_profile_from_env(),
++        (None, None) => client_profile_from_env(),
+     };
+     ResolvedIdentity {
+         device: resolve_with_override(os.as_deref(), platform.as_deref(), version.as_deref()),
+@@ -142,6 +145,26 @@ fn resolve_session_identity_with(
+     }
+ }
+ 
++/// ZapLiga: the handshake of a line that logs in as an Android phone (docs/device-profile.md):
++/// no web info, the phone's brand, model and carrier, and a `phone_id` fixed for the line. The
++/// locale is the line's, else `WA_CLIENT_LOCALE`, else the library's.
++fn android_profile(
++    android: &crate::models::sessions::AndroidProfileRequest,
++    locale: Option<&str>,
++) -> wacore::client_profile::ClientProfile {
++    let mut profile = wacore::client_profile::ClientProfile::android(android.os_version.trim());
++    profile.manufacturer = android.manufacturer.trim().to_string();
++    profile.device = android.device.trim().to_string();
++    profile.mcc = android.mcc.trim().to_string();
++    profile.mnc = android.mnc.trim().to_string();
++    profile.phone_id = Some(android.phone_id.trim().to_string());
++    let env_locale = std::env::var("WA_CLIENT_LOCALE").ok();
++    if let Some(locale) = locale.or(env_locale.as_deref()).and_then(non_empty) {
++        apply_locale(&mut profile, locale);
++    }
++    profile
++}
++
+ /// Applies the request to the saved identity and writes it back when it changed.
+ fn update_saved_identity(path: &std::path::Path, request: &IdentityRequest) -> SavedIdentity {
+     let reset = request.client_profile.as_ref().is_some_and(|c| c.reset);
+@@ -168,6 +191,9 @@ fn update_saved_identity(path: &std::path::Path, request: &IdentityRequest) -> S
+     }
+     if let Some(client) = &request.client_profile {
+         set(&mut next.locale, client.locale.as_deref());
++        if let Some(android) = &client.android {
++            next.android = Some(android.clone());
++        }
+     }
+     if next != saved {
+         write_saved_identity(path, &next);
+@@ -299,6 +325,7 @@ mod tests {
+             client_profile: Some(ClientProfileRequest {
+                 locale: Some("pt_BR".into()),
+                 reset: false,
++                android: None,
+             }),
+         }
+     }
+@@ -362,7 +389,7 @@ mod tests {
+ 
+         let reset = IdentityRequest {
+             device: None,
+-            client_profile: Some(ClientProfileRequest { locale: None, reset: true }),
++            client_profile: Some(ClientProfileRequest { locale: None, reset: true, android: None }),
+         };
+         let identity = resolve_session_identity_with(path, &reset, true);
+ 
+@@ -394,6 +421,90 @@ mod tests {
+         assert!(!dir.path().join(IDENTITY_FILE).exists());
+     }
+ 
++    fn android_request() -> IdentityRequest {
++        IdentityRequest {
++            device: Some(DevicePropsRequest {
++                os: Some("Android".into()),
++                platform: Some("android_phone".into()),
++                version: None,
++            }),
++            client_profile: Some(ClientProfileRequest {
++                locale: Some("pt_BR".into()),
++                reset: false,
++                android: Some(crate::models::sessions::AndroidProfileRequest {
++                    os_version: "14".into(),
++                    manufacturer: "samsung".into(),
++                    device: "SM-A546E".into(),
++                    mcc: "724".into(),
++                    mnc: "05".into(),
++                    phone_id: "5f0c2b8e-3a1d-4c55-9a0e-2f6b7c1d9e10".into(),
++                }),
++            }),
++        }
++    }
++
++    #[test]
++    fn zapliga_identity_android_profile_is_applied_and_reused() {
++        let dir = tempfile::tempdir().unwrap();
++        let path = dir.path().to_str().unwrap();
++
++        resolve_session_identity_with(path, &android_request(), true);
++        let later = resolve_session_identity_with(path, &IdentityRequest::default(), true);
++
++        assert_eq!(platform_name(&later), format!("{:?}", parse_platform("android_phone")));
++        let profile = later.client_profile.expect("android profile");
++        assert_eq!(
++            profile.user_agent_platform,
++            waproto::whatsapp::client_payload::user_agent::Platform::ANDROID
++        );
++        assert!(!profile.include_web_info);
++        assert_eq!(profile.os_version, "14");
++        assert_eq!(profile.manufacturer, "samsung");
++        assert_eq!(profile.device, "SM-A546E");
++        assert_eq!(profile.mcc, "724");
++        assert_eq!(profile.mnc, "05");
++        assert_eq!(profile.phone_id.as_deref(), Some("5f0c2b8e-3a1d-4c55-9a0e-2f6b7c1d9e10"));
++        assert_eq!(profile.locale_language, "pt");
++        assert_eq!(profile.locale_country, "BR");
++    }
++
++    #[test]
++    fn zapliga_identity_reset_drops_the_android_profile() {
++        let dir = tempfile::tempdir().unwrap();
++        let path = dir.path().to_str().unwrap();
++        resolve_session_identity_with(path, &android_request(), true);
++
++        let back = IdentityRequest {
++            device: None,
++            client_profile: Some(ClientProfileRequest { locale: None, reset: true, android: None }),
++        };
++        let identity = resolve_session_identity_with(path, &back, true);
++
++        assert_eq!(identity.client_profile.is_some(), client_profile_from_env().is_some());
++        assert!(!dir.path().join(IDENTITY_FILE).exists());
++    }
++
++    #[test]
++    fn zapliga_identity_file_of_the_browser_profile_still_reads() {
++        let dir = tempfile::tempdir().unwrap();
++        let path = dir.path().to_str().unwrap();
++        std::fs::write(
++            dir.path().join(IDENTITY_FILE),
++            br#"{"device_os":"Windows","device_platform":"edge","locale":"pt_BR"}"#,
++        )
++        .unwrap();
++
++        let identity = resolve_session_identity_with(path, &IdentityRequest::default(), true);
++
++        assert_eq!(platform_name(&identity), format!("{:?}", parse_platform("edge")));
++        let profile = identity.client_profile.expect("saved locale");
++        assert_eq!(
++            profile.user_agent_platform,
++            waproto::whatsapp::client_payload::user_agent::Platform::WEB
++        );
++        assert_eq!(profile.locale_country, "BR");
++    }
++
+     #[test]
+     fn zapliga_identity_unreadable_file_falls_back_to_the_env() {
+         let dir = tempfile::tempdir().unwrap();
+diff --git a/src/main.rs b/src/main.rs
+index fc61794..6458104 100644
+--- a/src/main.rs
++++ b/src/main.rs
+@@ -302,6 +302,7 @@ use state::AppState;
+             models::sessions::ConnectRequest,
+             models::sessions::DevicePropsRequest,
+             models::sessions::ClientProfileRequest,
++            models::sessions::AndroidProfileRequest,
+             models::sessions::QrCodeResponse,
+             models::sessions::SessionStatusResponse,
+             models::sessions::DeviceInfo,
+diff --git a/src/models/sessions.rs b/src/models/sessions.rs
+index 3aeb02a..b0e9d92 100644
+--- a/src/models/sessions.rs
++++ b/src/models/sessions.rs
+@@ -167,6 +167,31 @@ pub struct ClientProfileRequest {
+     /// Deletes the saved identity of the session: the next logins go back to the env defaults.
+     #[serde(default)]
+     pub reset: bool,
++    /// ZapLiga: the line logs in as this Android phone instead of a browser (docs/device-profile.md).
++    pub android: Option<AndroidProfileRequest>,
++}
++
++/// ZapLiga: the Android phone a line presents in the handshake, copied from the cloud phone the
++/// number was registered on and frozen per line by the API (docs/device-profile.md).
++#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, ToSchema)]
++pub struct AndroidProfileRequest {
++    /// Android release, e.g. "14".
++    #[schema(example = "14")]
++    pub os_version: String,
++    /// Phone brand, e.g. "samsung".
++    #[schema(example = "samsung")]
++    pub manufacturer: String,
++    /// Phone model, e.g. "SM-A546E".
++    #[schema(example = "SM-A546E")]
++    pub device: String,
++    /// Mobile country code of the carrier, e.g. "724".
++    #[schema(example = "724")]
++    pub mcc: String,
++    /// Mobile network code of the carrier, e.g. "05".
++    #[schema(example = "05")]
++    pub mnc: String,
++    /// Stable per line (never per login): a per-login id made the server drop sessions.
++    pub phone_id: String,
+ }
+ 
+ /// Request to start QR connect with optional device override

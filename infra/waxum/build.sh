@@ -18,7 +18,7 @@
 #
 set -euo pipefail
 
-TAG="${1:-0.12.6-multirelay-v10-loss-signals}"
+TAG="${1:-0.12.6-multirelay-v11-device-profile}"
 IMAGE="zapliga-waxum:${TAG}"
 
 # Pinned upstream sources. Bumping either means regenerating the patches:
@@ -33,7 +33,7 @@ PATCHES="${HERE}/patches"
 WORKDIR="${WORKDIR:-$(mktemp -d -t zapliga-waxum-build-XXXXXX)}"
 SRC="${WORKDIR}/waxum"
 
-for f in whatsapp-rust-zapliga.patch whatsapp-rust-call-codec.patch whatsapp-rust-zapliga-signal.patch whatsapp-rust-relay-select.patch whatsapp-rust-opus-conceal.patch waxum-zapliga.patch waxum-call-codec.patch waxum-zapliga-signal.patch waxum-zapliga-identity.patch waxum-zapliga-loss.patch; do
+for f in whatsapp-rust-zapliga.patch whatsapp-rust-call-codec.patch whatsapp-rust-zapliga-signal.patch whatsapp-rust-relay-select.patch whatsapp-rust-opus-conceal.patch whatsapp-rust-client-profile-carrier.patch waxum-zapliga.patch waxum-call-codec.patch waxum-zapliga-signal.patch waxum-zapliga-identity.patch waxum-zapliga-loss.patch waxum-zapliga-device-profile.patch; do
   [ -s "${PATCHES}/${f}" ] || { echo "patch ausente: ${PATCHES}/${f}" >&2; exit 1; }
 done
 command -v docker >/dev/null || { echo "docker nao encontrado" >&2; exit 1; }
@@ -73,6 +73,8 @@ echo "==> Applying patches"
 # A late or lost packet of the lead's voice is filled by libopus' loss concealment instead of a
 # hard silence plus a ~120 ms silent re-prime (what callers heard as the call breaking up).
 (cd "${SRC}/whatsapp-rust" && patch -p1 --forward < "${PATCHES}/whatsapp-rust-opus-conceal.patch")
+# The carrier (mcc/mnc) of a native handshake profile; WA Web's "000" stays the default.
+(cd "${SRC}/whatsapp-rust" && patch -p1 --forward < "${PATCHES}/whatsapp-rust-client-profile-carrier.patch")
 # waxum-zapliga.patch was cut from a Windows (CRLF) checkout; a Linux checkout is
 # LF, so give the files it touches CRLF first or every hunk is rejected.
 for f in Cargo.lock Cargo.toml Dockerfile docker-entrypoint.sh src/handlers/mex.rs; do
@@ -91,6 +93,9 @@ sed -i 's/\r$//' "${SRC}/docker-entrypoint.sh" "${SRC}/Dockerfile"
 # Why a line was lost, by name: an account lock's cause (never its appeal token), a temporary ban's
 # code and duration, any refused connection's code, and the server's reachout timelock on demand.
 (cd "${SRC}" && patch -p1 --forward < "${PATCHES}/waxum-zapliga-loss.patch")
+# A line may log in as the Android phone it was registered on, sent by the API with the rest of
+# its identity and saved in zapliga-identity.json; docs/device-profile.md.
+(cd "${SRC}" && patch -p1 --forward < "${PATCHES}/waxum-zapliga-device-profile.patch")
 head -c 12 "${SRC}/docker-entrypoint.sh" | grep -q '#!/bin/sh' || { echo "docker-entrypoint.sh invalido apos patch" >&2; exit 1; }
 
 echo "==> Sanity: the multi-relay fix must be present"
@@ -110,6 +115,10 @@ grep -q 'lock_session_storage' "${SRC}/src/handlers/sessions.rs" \
   || { echo "patch nao trouxe lock_session_storage; fonte incompleta" >&2; exit 1; }
 grep -q 'zapliga-identity.json' "${SRC}/src/device_props.rs" \
   || { echo "patch nao trouxe a identidade por sessao; fonte incompleta" >&2; exit 1; }
+grep -q 'pub mnc: String' "${SRC}/whatsapp-rust/wacore/src/client_profile.rs" \
+  || { echo "patch nao trouxe a operadora do perfil; fonte incompleta" >&2; exit 1; }
+grep -q 'fn android_profile' "${SRC}/src/device_props.rs" \
+  || { echo "patch nao trouxe o perfil Android por linha; fonte incompleta" >&2; exit 1; }
 
 echo "==> Building ${IMAGE} (release, LTO off in Dockerfile; expect 10-45 min cold)"
 docker build --progress=plain -t "${IMAGE}" "${SRC}"

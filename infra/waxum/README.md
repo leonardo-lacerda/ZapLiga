@@ -16,6 +16,8 @@ está em [`docs/postmortem-audio-unidirecional.md`](../../docs/postmortem-audio-
 | `patches/whatsapp-rust-call-codec.patch` | `WA_CALL_AUDIO_CODEC` (`mlow`/`opus`): o formato que a ligação oferece ao celular. |
 | `patches/waxum-call-codec.patch` | Valida `WA_CALL_AUDIO_CODEC` no entrypoint, fixa o nightly de 2026-09-09 e limita o build a 6 jobs. |
 | `patches/waxum-zapliga-identity.patch` | Identidade por linha (props do registro e idioma do login) gravada junto da sessão em `zapliga-identity.json`, e o ack do servidor às nossas stanzas de ligação publicado como `call_ack` ([`docs/stealth-profile.md`](../../docs/stealth-profile.md)). |
+| `patches/whatsapp-rust-client-profile-carrier.patch` | MCC/MNC do perfil do handshake viram campos do `ClientProfile` (o padrão continua `000`, como o WA Web), para o perfil Android da linha mandar a operadora do celular ([`docs/device-profile.md`](../../docs/device-profile.md)). |
+| `patches/waxum-zapliga-device-profile.patch` | Perfil Android por linha (`client_profile.android`): a linha entra como o celular da Multilogin em que foi registrada, salvo no mesmo `zapliga-identity.json` ([`docs/device-profile.md`](../../docs/device-profile.md)). |
 | `patches/waxum-zapliga.patch` | Nossas mudanças sobre `imtaqin/waxum v0.12.5` (`Cargo.toml` com `[patch]` apontando para `./whatsapp-rust`, `Cargo.lock`, `Dockerfile`, `docker-entrypoint.sh` em LF, compat em `src/handlers/mex.rs`). |
 | `entrypoint-guard.sh`, `healthcheck.sh` | Montados no container pelo compose (espera NATS; healthcheck exige a conexão Rust no NATS). |
 

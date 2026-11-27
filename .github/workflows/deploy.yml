@@ -53,6 +53,15 @@ jobs:
           test -s infra/waxum/patches/whatsapp-rust-zapliga.patch \
             || { echo 'infra/waxum/patches/whatsapp-rust-zapliga.patch ausente: o patch do Waxum precisa estar versionado' >&2; exit 1; }
 
+      # Assembles the Waxum source exactly as infra/waxum/build.sh does, stopping before the Rust
+      # build: a patch that no longer applies on top of the others fails here, not on the image build.
+      - name: Patches do Waxum aplicam
+        run: |
+          set -euo pipefail
+          sed '/^echo "==> Building/,$d' infra/waxum/build.sh > "$RUNNER_TEMP/assemble.sh"
+          sed -i "s|^HERE=.*|HERE=$GITHUB_WORKSPACE/infra/waxum|" "$RUNNER_TEMP/assemble.sh"
+          WORKDIR="$RUNNER_TEMP/wx" bash "$RUNNER_TEMP/assemble.sh" check
+
       - name: Build
         run: npm run build
 

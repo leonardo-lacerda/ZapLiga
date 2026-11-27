@@ -1,0 +1,113 @@
+diff --git a/wacore/src/client_profile.rs b/wacore/src/client_profile.rs
+index d24f5a3..558b89a 100644
+--- a/wacore/src/client_profile.rs
++++ b/wacore/src/client_profile.rs
+@@ -24,6 +24,10 @@ pub struct ClientProfile {
+     /// `UserAgent.locale_country_iso31661_alpha2` (ISO-3166-1 alpha-2,
+     /// e.g. "BR"). The previous hardcoded `"en"` is not a valid country code.
+     pub locale_country: String,
++    /// ZapLiga: `UserAgent.mcc` / `UserAgent.mnc`, the carrier of a native profile. WA Web sends
++    /// "000", which stays the default for every profile.
++    pub mcc: String,
++    pub mnc: String,
+ }
+ 
+ impl Default for ClientProfile {
+@@ -44,6 +48,8 @@ impl ClientProfile {
+             phone_id: None,
+             locale_language: "en".to_string(),
+             locale_country: "US".to_string(),
++            mcc: "000".to_string(),
++            mnc: "000".to_string(),
+         }
+     }
+ 
+@@ -58,6 +64,8 @@ impl ClientProfile {
+             phone_id: None,
+             locale_language: "en".to_string(),
+             locale_country: "US".to_string(),
++            mcc: "000".to_string(),
++            mnc: "000".to_string(),
+         }
+     }
+ 
+@@ -72,6 +80,8 @@ impl ClientProfile {
+             phone_id: None,
+             locale_language: "en".to_string(),
+             locale_country: "US".to_string(),
++            mcc: "000".to_string(),
++            mnc: "000".to_string(),
+         }
+     }
+ 
+@@ -86,6 +96,8 @@ impl ClientProfile {
+             phone_id: None,
+             locale_language: "en".to_string(),
+             locale_country: "US".to_string(),
++            mcc: "000".to_string(),
++            mnc: "000".to_string(),
+         }
+     }
+ 
+@@ -100,6 +112,8 @@ impl ClientProfile {
+             phone_id: None,
+             locale_language: "en".to_string(),
+             locale_country: "US".to_string(),
++            mcc: "000".to_string(),
++            mnc: "000".to_string(),
+         }
+     }
+ 
+@@ -114,6 +128,8 @@ impl ClientProfile {
+             phone_id: None,
+             locale_language: "en".to_string(),
+             locale_country: "US".to_string(),
++            mcc: "000".to_string(),
++            mnc: "000".to_string(),
+         }
+     }
+ }
+@@ -133,6 +149,8 @@ mod tests {
+         assert_eq!(p.os_version, "0.1.0");
+         assert_eq!(p.manufacturer, "");
+         assert!(p.include_web_info);
++        assert_eq!(p.mcc, "000");
++        assert_eq!(p.mnc, "000");
+     }
+ 
+     #[test]
+diff --git a/wacore/src/store/device.rs b/wacore/src/store/device.rs
+index 9e751b8..f109416 100644
+--- a/wacore/src/store/device.rs
++++ b/wacore/src/store/device.rs
+@@ -91,8 +91,8 @@ fn build_base_client_payload(
+             platform: Some(profile.user_agent_platform),
+             release_channel: Some(wa::client_payload::user_agent::ReleaseChannel::RELEASE),
+             app_version: buffa::MessageField::some(app_version),
+-            mcc: Some("000".to_string()),
+-            mnc: Some("000".to_string()),
++            mcc: Some(profile.mcc.clone()),
++            mnc: Some(profile.mnc.clone()),
+             os_version: Some(profile.os_version.clone()),
+             manufacturer: Some(profile.manufacturer.clone()),
+             device: Some(profile.device.clone()),
+@@ -1059,6 +1059,19 @@ mod tests {
+         );
+     }
+ 
++    #[test]
++    fn zapliga_carrier_passes_through_from_profile_when_set() {
++        let mut device = Device::new();
++        let mut profile = ClientProfile::android("14");
++        profile.mcc = "724".to_string();
++        profile.mnc = "05".to_string();
++        device.set_client_profile(profile);
++        let payload = device.get_client_payload();
++        let ua = payload.user_agent.as_option().expect("user_agent");
++        assert_eq!(ua.mcc.as_deref(), Some("724"));
++        assert_eq!(ua.mnc.as_deref(), Some("05"));
++    }
++
+     #[test]
+     fn phone_id_passes_through_from_profile_when_set() {
+         let mut profile = ClientProfile::web();
