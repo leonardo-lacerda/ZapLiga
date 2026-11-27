@@ -799,6 +799,11 @@ export class DialerService implements OnModuleInit, OnModuleDestroy {
     const sdr = sdrs.rows.find((row: any) => this.gateway.isConnected(row.id)
       && (!execution?.campaignId || execution.sdrIds.includes(row.id) || (sdrUserId && row.operator_kind !== 'sdr')));
     if (!sdr) throw new Error(sdrUserId ? STATION_UNAVAILABLE_MESSAGE : 'Nenhum SDR conectado e disponivel');
+    if (!numbers.rows.length && input.numberId && !canary) {
+      // The chosen line is held by a cause WhatsApp stated (docs/line-loss-causes.md): say which.
+      const held = (await this.db.query('SELECT dial_block_cause FROM whatsapp_numbers WHERE tenant_id = $1 AND id = $2 AND dial_blocked_until > now()', [tenantId, input.numberId])).rows[0];
+      if (held) throw new Error(`A linha escolhida está pausada: ${LINE_LOSS_ACTIONS[String(held.dial_block_cause) as LineLossCause] ?? 'sinal de bloqueio do WhatsApp'}`);
+    }
     if (!numbers.rows.length) throw new Error(canary ? 'A linha não está conectada, está bloqueada, já passou pelo canário ou chegou ao limite de ligações de hoje' : input.numberId ? 'A linha escolhida não está conectada, está em quarentena, aguarda o canário ou chegou ao limite de ligações de hoje' : 'Nenhum numero WhatsApp conectado');
     const networkedNumbers = numbers.rows.filter((row: any) => row.on_pc_network);
     if (!networkedNumbers.length) throw new DialRefusedError(OFF_PC_NETWORK_CODE, OFF_PC_NETWORK_MESSAGE);
