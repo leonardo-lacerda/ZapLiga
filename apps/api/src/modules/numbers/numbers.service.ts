@@ -312,7 +312,9 @@ export class NumbersService {
    * Pairing needs a slot that reaches WhatsApp. A line created on a PC that has since stopped
    * passing internet (its route is no longer `pc`) would wait for a QR that never comes, so a
    * session that never logged in starts over on the slot the distribution picks now. A session
-   * that did log in keeps its session; the egress pool moves it. A line on the VPS never pairs
+   * that did log in keeps its session; the egress pool moves it. A line WhatsApp removed or locked
+   * (loss_reason) still reports its phone, but its device is gone and the pool leaves it where it
+   * fell, so it starts over too: it needs a new QR anyway. A line on the VPS never pairs
    * there: WhatsApp would see the new device's first login from a datacenter IP. With no PC
    * online, the answer says what to do instead of a bare 500.
    */
@@ -320,7 +322,7 @@ export class NumbersService {
     const online = await this.db.query(`SELECT ${slotOnlineSql('$1::text')} AS online`, [number.waxum_node]);
     if (online.rows[0]?.online) return number;
     const status = normalizeWaxumStatus(await this.waxum.getStatus(number.waxum_session_id).catch(() => ({})));
-    if (status.connected || status.phone) return number;
+    if (!number.loss_reason && (status.connected || status.phone)) return number;
     const node = await this.pickPcSlot();
     if (!node) throw new HttpException(NO_PC_FOR_LINE_MESSAGE, HttpStatus.SERVICE_UNAVAILABLE);
     const session = await this.createWaxumSession(number.label, node, await this.pairingIdentity(number));

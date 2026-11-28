@@ -335,6 +335,31 @@ describe('NumbersService QR code', () => {
     expect(waxum.getQr).toHaveBeenCalledWith('s2');
     expect(payload.qr_codes).toEqual(['2@new']);
   });
+
+  it('starts over on a working PC a line WhatsApp removed, even though its session still knows the phone', async () => {
+    const lost = { ...number, waxum_node: 'edge-4', loss_reason: 'device_removed', phone: '5527999990011' };
+    const db = {
+      query: jest.fn(async (sql: string) => {
+        if (sql.includes('AS online')) return { rows: [{ online: false }] };
+        if (sql.includes('SELECT p.slot')) return { rows: [{ slot: 'edge-1' }] };
+        if (sql.startsWith('UPDATE whatsapp_numbers SET waxum_node')) return { rows: [{ ...lost, waxum_node: 'edge-1', waxum_session_id: 's2' }] };
+        return { rows: [lost] };
+      }),
+    };
+    const redis = { client: { ttl: jest.fn(async () => -2) }, acquireLock: jest.fn(async () => true), releaseLock: jest.fn(async () => undefined) };
+    const waxum = {
+      getStatus: jest.fn(async () => ({ status: 'disconnected', phone_number: '5527999990011', is_logged_in: false })),
+      createSession: jest.fn(async () => ({ id: 's2' })),
+      deleteSession: jest.fn(async () => ({})),
+      getQr: jest.fn(async () => ({ status: 'waiting_for_qr', qr_codes: ['2@new'], timeout_seconds: 60 })),
+    };
+    const service = new NumbersService(db as any, waxum as any, {} as any, redis as any, {} as any, {} as any, {} as any);
+
+    await service.qr('t1', 'n1');
+
+    expect(waxum.createSession).toHaveBeenCalledWith('numero 1', 'edge-1', undefined);
+    expect(waxum.getQr).toHaveBeenCalledWith('s2');
+  });
 });
 
 describe('NumbersService passCanary', () => {
