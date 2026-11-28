@@ -9,7 +9,7 @@ import { formatBytes } from '../access/AdminProxyPanel';
 import { STEALTH_COVERAGE_COPY, STEALTH_HINT, STEALTH_LABEL } from './stealth.copy';
 import { AppSelect, DeviceProfileChoice, MultiloginPhoneSelect, useMultiloginPhones } from './DeviceProfileChoice';
 import { DEVICE_PROFILE_CREATE_HINT, DEVICE_PROFILE_OPTION_NEW } from './deviceProfile.copy';
-import { LOSS_CAUSE_ACTION, LOSS_CAUSE_LABEL, REGISTRATION_REASON_LABEL } from './lineLoss.copy';
+import { LOSS_CAUSE_ACTION, LOSS_CAUSE_LABEL, LOSS_SUMMARY_DAYS, REGISTRATION_REASON_LABEL, RETIRED_AFTER_LOSSES, YOUNG_LINE_DAILY_CALLS } from './lineLoss.copy';
 
 const connectedStatuses = ['connected', 'online', 'ready', 'authenticated', 'logged_in'];
 
@@ -123,9 +123,6 @@ function CallBlock({ flaggedUntil }: { flaggedUntil?: string | null }) {
   return <p className="line-alert is-warning">Ligações bloqueadas até {until}</p>;
 }
 
-const RETIRED_AFTER_LOSSES = 2;
-const YOUNG_LINE_DAILY_CALLS = 60;
-const LOSS_SUMMARY_DAYS = 30;
 const formatWhen = (value: string) => new Date(value).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
 
 // Quedas dos últimos 30 dias por causa, para a operação decidir com dados.

@@ -1510,3 +1510,23 @@ input, select { min-height: 35px; min-width: 0; padding: 8px 10px; border: 1px s
 .line-settings-body .resource-meta { gap: 8px; padding: 4px 2px; border-top: 0; font-size: 12px; }
 .line-settings-body .resource-meta strong { text-align: right; overflow-wrap: anywhere; }
 @media (prefers-reduced-motion: reduce) { .line-settings summary::before { transition: none; } }
+
+/* Monitor de linhas (features/line-monitor) */
+.line-monitor-page .metrics-tabs { margin-bottom: 14px; }
+.line-monitor-exits { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 10px; }
+.line-monitor-exits small { display: block; margin-top: 4px; color: var(--muted); font-size: 10px; }
+.line-monitor-exit-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.line-monitor-exports { margin-top: 12px; display: flex; flex-wrap: wrap; gap: 8px; }
+.line-monitor-filters { margin-bottom: 12px; display: flex; flex-wrap: wrap; align-items: center; gap: 10px; font-size: 11px; }
+.line-monitor-filters select { margin-left: 6px; }
+.line-monitor-note { margin-bottom: 12px; display: flex; gap: 8px; }
+.line-monitor-note input { flex: 1; min-width: 0; }
+.line-monitor-chart { width: 100%; height: auto; }
+.line-monitor-bar-calls { fill: var(--primary-soft); }
+.line-monitor-bar-answered { fill: var(--primary); }
+.line-monitor-dot-lost { fill: var(--error); }
+.line-monitor-mark-note { fill: var(--purple); }
+.line-monitor-groups { margin: 8px 0 0; padding: 0; list-style: none; display: grid; gap: 4px; }
+.line-monitor-groups li { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 6px; font-size: 10px; }
+.line-monitor-groups small { color: var(--muted); }
+@media (max-width: 640px) { .line-monitor-note { flex-direction: column; } }

@@ -19,6 +19,7 @@ export const tabPaths: Record<TabKey, string> = {
   access: '/app/acesso',
   admin: '/app/admin',
   operationHealth: '/app/saude-operacao',
+  lineMonitor: '/app/monitor-linhas',
   learning: '/app/aprendizado',
   experiments: '/app/experimentos',
   benchmarks: '/app/benchmarks',

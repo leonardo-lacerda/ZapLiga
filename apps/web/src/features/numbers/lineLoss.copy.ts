@@ -1,3 +1,8 @@
+// Regras da linha que a tela mostra (dialer.rules na API).
+export const RETIRED_AFTER_LOSSES = 2;
+export const YOUNG_LINE_DAILY_CALLS = 60;
+export const LOSS_SUMMARY_DAYS = 30;
+
 // Por que a linha caiu, nas palavras da operação (docs/line-loss-causes.md).
 export const LOSS_CAUSE_LABEL: Record<string, string> = {
   device_removed: 'Removida',

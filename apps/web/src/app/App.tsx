@@ -26,6 +26,7 @@ import { ProfilePage } from '../features/account/ProfilePage';
 import { CallbacksPage } from '../features/callbacks/CallbacksPage';
 import { PrivacyPage } from '../features/privacy/PrivacyPage';
 import { OperationHealthPage } from '../features/operation-health/OperationHealthPage';
+import { LineMonitorPage } from '../features/line-monitor/LineMonitorPage';
 import { AnalyticsLearningPage } from '../features/analytics-learning/AnalyticsLearningPage';
 import { ExperimentsPage } from '../features/experiments/ExperimentsPage';
 import { BenchmarksPage } from '../features/benchmarks/BenchmarksPage';
@@ -423,6 +424,7 @@ function AuthenticatedApp() {
     { key: 'calls', label: 'Histórico', icon: 'history', group: 'Operação' },
     { key: 'metrics', label: 'Métricas', icon: 'chart', group: 'Análises' },
     { key: 'operationHealth', label: 'Saúde da operação', icon: 'activity', group: 'Análises' },
+    { key: 'lineMonitor', label: 'Monitor de linhas', icon: 'phone', group: 'Análises' },
     { key: 'learning', label: 'Aprendizado', icon: 'sparkles', group: 'Análises' },
     { key: 'experiments', label: 'Experimentos', icon: 'flask', group: 'Análises' },
     { key: 'benchmarks', label: 'Benchmarks', icon: 'chart', group: 'Análises' },
@@ -471,6 +473,7 @@ function AuthenticatedApp() {
         {tab === 'callbacks' && <div className="page-content"><CallbacksPage sdrs={sdrs} isSdr={isSdr} featureEnabled={!featureFlags || Boolean(featureFlags.callbacks)} /></div>}
         {tab === 'privacy' && <div className="page-content"><PrivacyPage /></div>}
         {tab === 'operationHealth' && activeTenantId && <div className="page-content"><OperationHealthPage tenantId={activeTenantId} enabled={Boolean(featureFlags?.operation_health)} /></div>}
+        {tab === 'lineMonitor' && activeTenantId && <div className="page-content"><LineMonitorPage tenantId={activeTenantId} /></div>}
         {tab === 'learning' && activeTenantId && <div className="page-content"><AnalyticsLearningPage tenantId={activeTenantId} enabled={Boolean(featureFlags?.analytics_learning)} /></div>}
         {tab === 'experiments' && activeTenantId && <div className="page-content"><ExperimentsPage tenantId={activeTenantId} enabled={Boolean(featureFlags?.experiments)} /></div>}
         {tab === 'benchmarks' && activeTenantId && <div className="page-content"><BenchmarksPage tenantId={activeTenantId} enabled={Boolean(featureFlags?.benchmarks)} /></div>}
