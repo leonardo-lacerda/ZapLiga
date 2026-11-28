@@ -39,3 +39,43 @@ describe('EgressService PC exits', () => {
     ] });
   });
 });
+
+describe('EgressService PC history', () => {
+  const previous = process.env.WAXUM_EDGE_NODES;
+  beforeAll(() => { process.env.WAXUM_EDGE_NODES = 'edge-1=http://edge-1:3451'; });
+  afterAll(() => { process.env.WAXUM_EDGE_NODES = previous; });
+
+  const make = () => {
+    const db = { query: jest.fn(async (sql: string, _params?: unknown[]) => (sql.includes('UPDATE egress_pcs') ? { rows: [{ id: 'pc-1', name: 'PC do Leo', tailscale_ip: '100.64.0.2' }] } : { rows: [] })) };
+    const service = new EgressService(db as any, { record: jest.fn() } as any, {} as any);
+    jest.spyOn(service, 'syncPcs').mockResolvedValue(undefined);
+    jest.spyOn(service as any, 'edgeKey').mockResolvedValue('');
+    return { db, service };
+  };
+  const eventCall = (db: { query: jest.Mock }) => db.query.mock.calls.find(([sql]) => String(sql).includes('INSERT INTO egress_pc_events'));
+
+  it('records the PC going online only when its last event was not online', async () => {
+    const { db, service } = make();
+    await service.slotConfig('edge-1', 'pc', true);
+    const [sql, params] = eventCall(db)!;
+    expect(params).toEqual(['pc-1', 'edge-1', 'PC do Leo', 'online']);
+    expect(sql).toContain("COALESCE((SELECT kind FROM last), '') <> 'online'");
+  });
+
+  it('records the PC going offline only after it was online', async () => {
+    const { db, service } = make();
+    await service.slotConfig('edge-1', 'offline', true);
+    const [sql, params] = eventCall(db)!;
+    expect(params[3]).toBe('offline');
+    expect(sql).toContain("COALESCE((SELECT kind FROM last), 'online') = 'online'");
+  });
+
+  it('records a slot that stopped reporting once, as silent', async () => {
+    const { db, service } = make();
+    await service.recordSilentPcs();
+    const [sql, params] = db.query.mock.calls[0];
+    expect(sql).toContain("'silent'");
+    expect(sql).toContain("ORDER BY e.occurred_at DESC LIMIT 1) = 'online'");
+    expect(params).toEqual([REPORT_STALE_SECONDS]);
+  });
+});

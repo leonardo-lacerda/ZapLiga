@@ -15,6 +15,37 @@ interface LineRow {
   removal_count?: number;
 }
 
+/** Causes whose event keeps the line's situation at that moment (`detail.context`), for the learnings. */
+const CONTEXT_CAUSES: ReadonlySet<string> = new Set(['device_removed', 'account_locked', 'temp_banned', 'reachout_timelock', 'logged_out_other']);
+const CONNECTED_STATUSES_SQL = "('connected', 'online', 'ready', 'authenticated')";
+
+/**
+ * The line ($3) when WhatsApp took it: its exit, setup, age since pairing, calls, reconnects and PC
+ * moves, and its last 10 calls (docs/line-monitor.md). Read in the same statement that stores the
+ * event, so later changes to the line do not rewrite what it looked like when it fell.
+ */
+const LOSS_CONTEXT_SQL = `(SELECT jsonb_build_object(
+    'waxumNode', n.waxum_node,
+    'stealth', COALESCE(n.stealth_enabled, false),
+    'deviceProfile', COALESCE(n.device_profile_active, false),
+    'business', COALESCE((n.device_profile->'android'->>'business')::boolean, false),
+    'canaryStatus', n.canary_status,
+    'canaryManual', EXISTS (SELECT 1 FROM number_health_events h WHERE h.tenant_id = n.tenant_id AND h.number_id = n.id AND h.event_type = 'canary_passed'
+      AND h.actor_type = 'human' AND (n.last_paired_at IS NULL OR h.occurred_at >= n.last_paired_at)),
+    'ageHours', CASE WHEN n.last_paired_at IS NULL THEN NULL ELSE round((EXTRACT(EPOCH FROM now() - n.last_paired_at) / 3600.0)::numeric, 1) END,
+    'callsToday', (SELECT count(*) FROM calls c, tenants t WHERE t.id = n.tenant_id AND c.tenant_id = n.tenant_id AND c.number_id = n.id
+      AND c.created_at >= date_trunc('day', now() AT TIME ZONE COALESCE(t.timezone, 'America/Sao_Paulo')) AT TIME ZONE COALESCE(t.timezone, 'America/Sao_Paulo')),
+    'callsSincePairing', (SELECT count(*) FROM calls c WHERE c.tenant_id = n.tenant_id AND c.number_id = n.id AND (n.last_paired_at IS NULL OR c.created_at >= n.last_paired_at)),
+    'reconnects24h', (SELECT count(*) FROM number_status_history s WHERE s.tenant_id = n.tenant_id AND s.number_id = n.id
+      AND s.changed_at > now() - interval '24 hours' AND lower(s.to_status) IN ${CONNECTED_STATUSES_SQL}),
+    'nodeMoves24h', (SELECT count(*) FROM audit_logs a WHERE a.tenant_id = n.tenant_id AND a.entity_id = n.id
+      AND a.action = 'number.waxum_node_changed' AND a.created_at > now() - interval '24 hours'),
+    'lastCalls', COALESCE((SELECT jsonb_agg(jsonb_build_object('at', c.created_at, 'answered', c.connected_at IS NOT NULL,
+        'talkSeconds', c.connected_duration_seconds, 'outcome', c.outcome) ORDER BY c.created_at DESC)
+      FROM (SELECT created_at, connected_at, connected_duration_seconds, outcome FROM calls WHERE tenant_id = n.tenant_id AND number_id = n.id
+        ORDER BY created_at DESC LIMIT 10) c), '[]'::jsonb)
+  ) FROM whatsapp_numbers n WHERE n.id = $3)`;
+
 /** Causes the policy writes into number_health_events (migration 082). */
 const HEALTH_EVENT_CAUSES: ReadonlySet<string> = new Set(['temp_banned', 'reachout_timelock', 'media_failure']);
 
@@ -113,11 +144,12 @@ export class LineLossService implements OnModuleInit {
   /** Stores the signal once across both API instances; true for the instance that stored it. */
   async record(line: Pick<LineRow, 'id' | 'tenant_id'>, sessionId: string | null, type: string, payload: unknown, lossSignal: LineLossSignal): Promise<boolean> {
     const id = lineLossEventId(sessionId ?? line.id, type, payload, lossSignal.code);
+    const withContext = CONTEXT_CAUSES.has(lossSignal.cause);
     const inserted = await this.db.query<{ id: string }>(`
       INSERT INTO line_loss_events (id, tenant_id, number_id, waxum_session_id, cause, source_event, code, violation_type, violation_reason, expires_at, detail)
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb || CASE WHEN $12::boolean THEN jsonb_build_object('context', ${LOSS_CONTEXT_SQL}) ELSE '{}'::jsonb END)
       ON CONFLICT (id) DO NOTHING RETURNING id
-    `, [id, line.tenant_id, line.id, sessionId, lossSignal.cause, lossSignal.sourceEvent, lossSignal.code, lossSignal.violationType, lossSignal.violationReason, lossSignal.expiresAt, JSON.stringify(lossSignal.detail)]);
+    `, [id, line.tenant_id, line.id, sessionId, lossSignal.cause, lossSignal.sourceEvent, lossSignal.code, lossSignal.violationType, lossSignal.violationReason, lossSignal.expiresAt, JSON.stringify(lossSignal.detail), withContext]);
     return Boolean(inserted.rows[0]);
   }
 

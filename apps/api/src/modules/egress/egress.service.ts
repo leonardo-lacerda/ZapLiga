@@ -223,14 +223,45 @@ export class EgressService {
       UPDATE egress_pcs SET route = $2, route_reported_at = now(),
         offline_since = CASE WHEN $2 = 'pc' THEN NULL ELSE COALESCE(offline_since, now()) END,
         online_since = CASE WHEN $2 = 'pc' THEN COALESCE(online_since, now()) END
-      WHERE slot = $1 RETURNING tailscale_ip
+      WHERE slot = $1 RETURNING id, name, tailscale_ip
     `, [slot, route]);
     const pc = result.rows[0];
+    if (pc) await this.recordPcRoute(pc.id, slot, pc.name, route === 'pc' ? 'online' : 'offline')
+      .catch((error) => this.logger.warn(`PC event of ${slot} not recorded: ${String(error?.message ?? error).slice(0, 200)}`));
     // Not answering: the PC may have rejoined Tailscale with a new IP.
     if (pc && route !== 'pc') await this.syncPcs(false);
     if (!pc?.tailscale_ip) return 'exit_node=\nauth_key=\n';
     const authKey = loggedIn ? '' : await this.edgeKey(slot);
     return `exit_node=${pc.tailscale_ip}\nauth_key=${authKey}\n`;
+  }
+
+  /**
+   * History of each PC's internet (egress_pc_events, migration 085): one row when it starts going
+   * out through the PC and one when it stops, not one per 10 s report. A first report that is not
+   * `pc` is recorded too, so the history starts with the PC's real state.
+   */
+  private recordPcRoute(pcId: string, slot: string, name: string, kind: 'online' | 'offline') {
+    return this.db.query(`
+      WITH last AS (SELECT kind FROM egress_pc_events WHERE pc_id = $1 ORDER BY occurred_at DESC LIMIT 1)
+      INSERT INTO egress_pc_events (pc_id, slot, pc_name, kind)
+      SELECT $1, $2, $3, $4::text
+      WHERE CASE WHEN $4::text = 'online' THEN COALESCE((SELECT kind FROM last), '') <> 'online'
+        ELSE COALESCE((SELECT kind FROM last), 'online') = 'online' END
+    `, [pcId, slot, name, kind]);
+  }
+
+  /**
+   * A PC whose slot stopped reporting never gets to say it went offline: called by the egress
+   * pool's tick, this records it as `silent` once; its next report records it `online` again.
+   */
+  recordSilentPcs() {
+    return this.db.query(`
+      INSERT INTO egress_pc_events (pc_id, slot, pc_name, kind, detail)
+      SELECT p.id, p.slot, p.name, 'silent', jsonb_build_object('lastReportAt', p.route_reported_at)
+      FROM egress_pcs p
+      WHERE p.slot IS NOT NULL AND (p.route_reported_at IS NULL OR p.route_reported_at < now() - make_interval(secs => $1))
+        AND (SELECT e.kind FROM egress_pc_events e WHERE e.pc_id = p.id ORDER BY e.occurred_at DESC LIMIT 1) = 'online'
+    `, [REPORT_STALE_SECONDS]);
   }
 
   private async edgeKey(slot: string) {

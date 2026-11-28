@@ -30,6 +30,20 @@ describe('LineLossService', () => {
     expect(gateway.broadcastToOperations).toHaveBeenCalledWith(expect.objectContaining({ activity: expect.objectContaining({ kind: 'number_lost', retired: false }) }), 't1');
   });
 
+  it('keeps what the line looked like when it fell, only for real losses', async () => {
+    const { service, db } = make([{ id: 'n1', tenant_id: 't1', label: 'Previtas 7', removal_count: 1 }], []);
+    await service.handle('s1', 'logged_out', { data: { conflict: 'device_removed' } });
+    const [sql, params] = db.query.mock.calls.find(([text]) => String(text).includes('INSERT INTO line_loss_events')) as unknown as [string, unknown[]];
+    expect(sql).toContain("jsonb_build_object('context'");
+    expect(sql).toContain("'callsSincePairing'");
+    expect(sql).toContain('LIMIT 10');
+    expect(params[11]).toBe(true);
+
+    db.query.mockClear();
+    await service.record({ id: 'n1', tenant_id: 't1' }, 's1', 'connect_failure', {}, { cause: 'transient', sourceEvent: 'connect_failure', code: null, violationType: null, violationReason: null, expiresAt: null, detail: {} });
+    expect((db.query.mock.calls[0] as unknown[])[1]).toEqual(expect.arrayContaining([false]));
+  });
+
   it('keeps the cause a lock states with the loss', async () => {
     const { service, db } = make([{ id: 'n1', tenant_id: 't1', label: 'Previtas 7', removal_count: 1 }], []);
 

@@ -55,6 +55,7 @@ export class EgressPoolService implements OnModuleInit, OnModuleDestroy {
   async tick() {
     // One instance per tick; the lock simply expires.
     if (!await this.redis.acquireLock(LEADER_LOCK, randomUUID(), TICK_MS - 1000).catch(() => false)) return;
+    await this.egress.recordSilentPcs().catch((error) => this.logger.warn(`Silent PCs not recorded: ${String(error?.message ?? error).slice(0, 200)}`));
     const settings = (await this.db.query('SELECT pool_enabled, max_numbers_per_pc, offline_grace_seconds FROM egress_settings')).rows[0];
     if (!settings?.pool_enabled) return;
     await this.egress.syncPcs();

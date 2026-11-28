@@ -9,7 +9,7 @@ describe('EgressPoolService', () => {
         .mockResolvedValueOnce({ rows: lines }),
     };
     const redis = { acquireLock: jest.fn().mockResolvedValue(true) };
-    const egress = { syncPcs: jest.fn().mockResolvedValue(undefined) };
+    const egress = { syncPcs: jest.fn().mockResolvedValue(undefined), recordSilentPcs: jest.fn().mockResolvedValue(undefined) };
     const numbers = { moveToWaxumNode: jest.fn().mockResolvedValue({}) };
     return { service: new EgressPoolService(db as any, redis as any, egress as any, numbers as any), numbers, db };
   }
@@ -79,7 +79,7 @@ const build = (pcs: Pc[], lines: Line[]) => {
     }),
   };
   const redis = { acquireLock: jest.fn(async () => true) };
-  const egress = { syncPcs: jest.fn(async () => undefined) };
+  const egress = { syncPcs: jest.fn(async () => undefined), recordSilentPcs: jest.fn(async () => undefined) };
   const numbers = { moveToWaxumNode: jest.fn(async () => ({})) };
   const service = new EgressPoolService(db as any, redis as any, egress as any, numbers as any);
   return { service, numbers };
