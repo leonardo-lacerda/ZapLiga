@@ -125,7 +125,10 @@ export class LineMonitorService {
         SELECT 'pc', p.id, NULL, p.pc_name, p.kind, p.occurred_at, p.detail || jsonb_build_object('slot', p.slot)
         FROM egress_pc_events p
         WHERE $5::text IS NULL AND ${range('p.occurred_at')}
-          AND EXISTS (SELECT 1 FROM whatsapp_numbers n WHERE n.tenant_id = $1 AND n.waxum_node = p.slot)
+          -- PCs that hold this tenant's lines now, or held them when the PC changed (moves away from it are audited).
+          AND (EXISTS (SELECT 1 FROM whatsapp_numbers n WHERE n.tenant_id = $1 AND n.waxum_node = p.slot)
+            OR EXISTS (SELECT 1 FROM audit_logs a WHERE a.tenant_id = $1 AND a.action = 'number.waxum_node_changed'
+              AND a.metadata->>'from' = p.slot AND a.created_at >= p.occurred_at - interval '1 day'))
         UNION ALL
         SELECT 'note', o.id, o.number_id, n.label, 'note', o.occurred_at, jsonb_build_object('body', o.body, 'authorUserId', o.author_user_id, 'author', u.name)
         FROM line_notes o LEFT JOIN whatsapp_numbers n ON n.id = o.number_id LEFT JOIN users u ON u.id = o.author_user_id

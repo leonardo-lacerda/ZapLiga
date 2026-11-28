@@ -42,6 +42,9 @@ const weakest = (...levels: Confidence[]): Confidence => (levels.includes('insuf
 export const smoothedPer100 = (falls: number, calls: number) => Math.round(((falls + 1) / (calls + 2)) * 10000) / 100;
 const pct = (part: number, whole: number) => (whole ? Math.round((part / whole) * 1000) / 10 : 0);
 const fmt = (value: number) => value.toLocaleString('pt-BR', { maximumFractionDigits: 1 });
+const share = (what: string, rows: CanaryRow[]) => (rows.length
+  ? `das ${rows.length} linhas que ${what}, ${fmt(pct(rows.filter((row) => row.fell_after).length, rows.length))}% caíram em até 7 dias`
+  : `nenhuma linha ${what.replace('passaram', 'passou').replace('foram', 'foi')}`);
 
 export function quantile(values: number[], q: number): number | null {
   if (!values.length) return null;
@@ -130,7 +133,7 @@ export function computeFindings(input: LearningInput): { findings: Finding[]; th
   const canaryConfidence = weakest(confidenceFor(new Set(flowed.map((row) => row.number_id)).size), confidenceFor(new Set(manual.map((row) => row.number_id)).size));
   findings.push({
     key: 'canary', question: 'O canário funciona?', confidence: canaryConfidence,
-    answer: `Das linhas que passaram pelo canário, ${pct(flowed.filter((row) => row.fell_after).length, flowed.length)}% caíram em até 7 dias; das liberadas à mão, ${pct(manual.filter((row) => row.fell_after).length, manual.length)}%. ${firstCall} queda(s) aconteceram na 1ª ligação.`,
+    answer: `${share('passaram pelo canário', flowed)}; ${share('foram liberadas à mão', manual)}. ${firstCall} queda(s) aconteceram na 1ª ligação.`,
     action: 'Se as liberadas à mão caem mais, fazer sempre o canário antes de ligar para leads.',
     values: { canaryPassed: flowed.length, canaryFellAfter: flowed.filter((row) => row.fell_after).length, manualPassed: manual.length, manualFellAfter: manual.filter((row) => row.fell_after).length, fellOnFirstCall: firstCall },
   });
@@ -156,7 +159,10 @@ export function computeFindings(input: LearningInput): { findings: Finding[]; th
   const others = signals.find((row) => !row.before_fall);
   findings.push({
     key: 'signals', question: 'Os sinais da ligação avisam a queda?', confidence: precursorConfidence,
-    answer: before?.calls ? `Nas 24 h antes de uma queda, ${fmt(pct(before.ack_errors, before.calls))}% das ligações tiveram erro na oferta (demais: ${fmt(pct(others?.ack_errors ?? 0, others?.calls ?? 0))}%). O WhatsApp confirmou a oferta em ${fmt(before.receipt_ms ?? 0)} ms (demais: ${fmt(others?.receipt_ms ?? 0)} ms).` : 'Ainda não há ligações com sinais antes de uma queda.',
+    answer: before?.calls
+      ? `Nas 24 h antes de uma queda, ${fmt(pct(before.ack_errors, before.calls))}% das ligações tiveram erro na oferta (demais: ${fmt(pct(others?.ack_errors ?? 0, others?.calls ?? 0))}%).`
+        + (before.receipt_ms != null && others?.receipt_ms != null ? ` O WhatsApp confirmou a oferta em ${fmt(before.receipt_ms)} ms (demais: ${fmt(others.receipt_ms)} ms).` : '')
+      : 'Ainda não há ligações antes de uma queda para comparar.',
     action: 'Se a diferença se mantiver, usar o erro na oferta como alerta para pausar a linha.',
     values: { callsBeforeFall: before?.calls ?? 0, ackErrorsBeforeFall: before?.ack_errors ?? 0, receiptMsBeforeFall: before?.receipt_ms ?? null, callsOther: others?.calls ?? 0, ackErrorsOther: others?.ack_errors ?? 0, receiptMsOther: others?.receipt_ms ?? null },
   });
@@ -168,7 +174,8 @@ export function computeFindings(input: LearningInput): { findings: Finding[]; th
 
   // 10. Hour of the day.
   const totalCalls = hours.reduce((total, row) => total + row.calls, 0);
-  const byHour = hours.map((row) => ({ hour: row.hour, calls: row.calls, falls: falls.filter((fall) => fall.hour === row.hour).length }))
+  const hourList = [...new Set([...hours.map((row) => row.hour), ...falls.map((fall) => fall.hour)])].sort((a, b) => a - b);
+  const byHour = hourList.map((hour) => ({ hour, calls: hours.find((row) => row.hour === hour)?.calls ?? 0, falls: falls.filter((fall) => fall.hour === hour).length }))
     .map((row) => ({ ...row, fallShare: pct(row.falls, falls.length), callShare: pct(row.calls, totalCalls) }));
   const hot = [...byHour].filter((row) => row.falls > 0).sort((a, b) => (b.fallShare - b.callShare) - (a.fallShare - a.callShare))[0];
   findings.push({
