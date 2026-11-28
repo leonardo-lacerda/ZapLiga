@@ -66,7 +66,7 @@ describe('MCP do ZapLiga', () => {
     const readOnly = await connect({ ...KEY, scopes: ['mcp:read'] }, deps);
     const readTools = (await readOnly.client.listTools()).tools.map((tool) => tool.name);
     await readOnly.close();
-    expect(readTools).toEqual(expect.arrayContaining(['list_phones', 'screen_elements', 'view_screen', 'list_numbers']));
+    expect(readTools).toEqual(expect.arrayContaining(['list_phones', 'screen_elements', 'view_screen', 'list_numbers', 'line_monitor_now', 'line_period', 'line_learnings']));
     expect(readTools).not.toContain('tap');
 
     const operate = await connect(KEY, deps);
